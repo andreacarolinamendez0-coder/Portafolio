@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.pyo
+datos/precios/
+datos/logs/
+*.parquet

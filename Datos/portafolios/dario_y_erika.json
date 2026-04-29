@@ -1,0 +1,13 @@
+{
+  "nombre": "Darío y Erika",
+  "perfil": "conservador",
+  "propietario": "Darío ",
+  "fecha_inicio": "2026-04-29",
+  "inversion_inicial": 1000000.0,
+  "aporte_dca": 500000.0,
+  "frecuencia_meses": 1,
+  "activo": false,
+  "composicion": {},
+  "aportes": [],
+  "historial": []
+}

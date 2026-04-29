@@ -1,0 +1,133 @@
+{
+  "nombre": "Andrea LP",
+  "perfil": "agresivo",
+  "propietario": "Andrea",
+  "fecha_inicio": "2026-04-29",
+  "inversion_inicial": 1000000.0,
+  "aporte_dca": 500000.0,
+  "frecuencia_meses": 1,
+  "activo": true,
+  "composicion": {
+    "NVDA": 0.33034148785912915,
+    "LLY": 0.30566291209243807,
+    "BTC-USD": 0.1424926165901797,
+    "GOOGL": 0.1418098953652928,
+    "WMT": 0.07969308809296022
+  },
+  "aportes": [
+    {
+      "fecha": "2026-04-29",
+      "activo": "NVDA",
+      "monto_cop": 330341.0,
+      "precio_usd": 213.1699981689453,
+      "trm_dia": 3633.76,
+      "fracciones": 0.426462,
+      "tipo": "inicial"
+    },
+    {
+      "fecha": "2026-04-29",
+      "activo": "LLY",
+      "monto_cop": 305663.0,
+      "precio_usd": 874.0,
+      "trm_dia": 3633.76,
+      "fracciones": 0.096244,
+      "tipo": "inicial"
+    },
+    {
+      "fecha": "2026-04-29",
+      "activo": "BTC-USD",
+      "monto_cop": 142493.0,
+      "precio_usd": 76350.671875,
+      "trm_dia": 3633.76,
+      "fracciones": 0.000514,
+      "tipo": "inicial"
+    },
+    {
+      "fecha": "2026-04-29",
+      "activo": "GOOGL",
+      "monto_cop": 141810.0,
+      "precio_usd": 349.7799987792969,
+      "trm_dia": 3633.76,
+      "fracciones": 0.111572,
+      "tipo": "inicial"
+    },
+    {
+      "fecha": "2026-04-29",
+      "activo": "WMT",
+      "monto_cop": 79693.0,
+      "precio_usd": 127.58999633789062,
+      "trm_dia": 3633.76,
+      "fracciones": 0.171889,
+      "tipo": "inicial"
+    }
+  ],
+  "historial": [
+    {
+      "fecha": "2026-04-29",
+      "hora": "13:00",
+      "macro": {
+        "trm": 3633.76,
+        "trm_cambio": -1.13,
+        "inf_col": 4.9,
+        "inf_usa": 3.49,
+        "risk_free": 3.7,
+        "banrep": 11.25,
+        "cdt": 10.5
+      },
+      "posiciones": [
+        {
+          "activo": "NVDA",
+          "fracciones": 0.4265,
+          "precio_usd": 213.17,
+          "valor_cop": 330341.0,
+          "invertido": 330341.0,
+          "ganancia": 0.0,
+          "rentabilidad": 0.0
+        },
+        {
+          "activo": "LLY",
+          "fracciones": 0.0962,
+          "precio_usd": 874.0,
+          "valor_cop": 305662.0,
+          "invertido": 305663.0,
+          "ganancia": -1.0,
+          "rentabilidad": -0.0
+        },
+        {
+          "activo": "BTC-USD",
+          "fracciones": 0.0005,
+          "precio_usd": 76350.67,
+          "valor_cop": 142604.0,
+          "invertido": 142493.0,
+          "ganancia": 111.0,
+          "rentabilidad": 0.08
+        },
+        {
+          "activo": "GOOGL",
+          "fracciones": 0.1116,
+          "precio_usd": 349.78,
+          "valor_cop": 141810.0,
+          "invertido": 141810.0,
+          "ganancia": -0.0,
+          "rentabilidad": -0.0
+        },
+        {
+          "activo": "WMT",
+          "fracciones": 0.1719,
+          "precio_usd": 127.59,
+          "valor_cop": 79693.0,
+          "invertido": 79693.0,
+          "ganancia": 0.0,
+          "rentabilidad": 0.0
+        }
+      ],
+      "resumen": {
+        "total_invertido": 1000000.0,
+        "total_valor": 1000110.0,
+        "ganancia_total": 110.0,
+        "rentabilidad_total": 0.01
+      }
+    }
+  ],
+  "fecha_ultima_actualizacion": "2026-04-29 14:02"
+}

@@ -1,0 +1,17 @@
+{
+  "fecha_sugerencia": "2026-04-28 11:06:36",
+  "conservador": {
+    "WMT": 0.2941,
+    "JPM": 0.2941,
+    "LLY": 0.1918,
+    "GOOGL": 0.1612,
+    "AAPL": 0.0588
+  },
+  "agresivo": {
+    "NVDA": 0.3345,
+    "LLY": 0.3122,
+    "BTC-USD": 0.1442,
+    "GOOGL": 0.1339,
+    "WMT": 0.0753
+  }
+}

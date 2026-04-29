@@ -1,0 +1,12 @@
+flask
+pandas
+numpy
+plotly
+yfinance
+requests
+groq
+pyarrow
+scipy
+schedule
+python-telegram-bot
+plyer
