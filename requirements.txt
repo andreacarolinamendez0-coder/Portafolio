@@ -10,3 +10,4 @@ scipy
 schedule
 python-telegram-bot
 plyer
+gunicorn
