@@ -64,8 +64,9 @@ def cargar_macro():
             "trm_hist":   trm.tail(90)
         }
     except Exception as e:
-        return {"error": str(e)}
-
+        # Retornar None para que el dashboard sepa que no hay datos
+        return None
+    
 def cargar_portafolio(nombre_archivo=None):
     try:
         from gestor_portafolio import listar_portafolios, leer_portafolio
@@ -216,6 +217,10 @@ def buscar_noticias_relevantes(activos):
 
 
 def generar_analisis_economico(macro, portafolio):
+    # Validar que macro tiene los datos necesarios
+    if not macro or 'trm' not in macro:
+        return "Sistema iniciando — datos macro descargándose. Refresca en 2 minutos."
+ 
     try:
         from groq import Groq
 
@@ -606,10 +611,7 @@ TEMPLATE = """
         }
         .refresh-btn:hover { opacity: 0.9; transform: translateY(-1px); }
         .footer { text-align: center; color: #1e293b; margin-top: 20px; font-size: 0.78rem; }
-        .perfil-badge {
-            display: inline-block; padding: 2px 8px; border-radius: 6px;
-            font-size: 0.68rem; font-weight: 600; margin-left: 6px;
-        }
+        .perfil-badge { display: inline-block; padding: 2px 8px; border-radius: 6px; font-size: 0.68rem; font-weight: 600; margin-left: 6px; }
         .cons-badge { background: rgba(0,212,170,0.15); color: #00d4aa; }
         .agre-badge { background: rgba(245,158,11,0.15); color: #fcd34d; }
         .historico-row {
@@ -624,6 +626,12 @@ TEMPLATE = """
             border-bottom: 1px solid rgba(42,42,74,0.8);
         }
         .no-data { text-align: center; padding: 40px; color: #64748b; font-size: 0.9rem; }
+        .cargando {
+            text-align: center; padding: 60px 20px;
+            background: rgba(26,26,46,0.8); border-radius: 14px;
+            border: 1px solid rgba(42,42,74,0.8); margin-bottom: 20px;
+            color: #64748b; font-size: 0.95rem; line-height: 2;
+        }
         select option { background: #1a1a2e; }
     </style>
 </head>
@@ -638,8 +646,7 @@ TEMPLATE = """
                     style="background:#1a1a2e; color:white; border:1px solid rgba(0,212,170,0.3);
                            border-radius:8px; padding:8px 16px; font-size:0.9rem; cursor:pointer;">
                 {% for p in lista_portafolios %}
-                <option value="{{ p.archivo }}"
-                        {{ 'selected' if p.archivo == portafolio_archivo else '' }}>
+                <option value="{{ p.archivo }}" {{ 'selected' if p.archivo == portafolio_archivo else '' }}>
                     {{ '🟢' if p.activo else '⚪' }} {{ p.nombre }} — {{ p.propietario }}
                 </option>
                 {% endfor %}
@@ -667,30 +674,37 @@ TEMPLATE = """
     <!-- PESTAÑA HOY -->
     <div id="tab-hoy" class="tab-content active">
 
+        <!-- ANÁLISIS ECONÓMICO -->
         <div class="section-title">🧠 Análisis Económico — Contexto de Hoy</div>
         <div class="analisis-box">
-            {% set partes = analisis.split('---FUENTES---') %}
-            {% for parrafo in partes[0].split('\n') %}
-                {% if parrafo.strip() %}<p>{{ parrafo }}</p>{% endif %}
-            {% endfor %}
-            {% if partes|length > 1 %}
-            <div class="fuentes-box">
-                <p class="fuentes-titulo">📰 Fuentes consultadas</p>
-                {% for linea in partes[1].split('\n') %}
-                    {% if linea.strip() and 'http' in linea %}
-                        {% set pl = linea.split(' | ') %}
-                        {% if pl|length > 1 %}
-                        <div class="fuente-item">
-                            <span>{{ pl[0].replace('• ', '') }}</span>
-                            <a href="{{ pl[1] }}" target="_blank">🔗 ver noticia</a>
-                        </div>
-                        {% endif %}
-                    {% endif %}
+            {% if analisis %}
+                {% set partes = analisis.split('---FUENTES---') %}
+                {% for parrafo in partes[0].split('\n') %}
+                    {% if parrafo.strip() %}<p>{{ parrafo }}</p>{% endif %}
                 {% endfor %}
-            </div>
+                {% if partes|length > 1 %}
+                <div class="fuentes-box">
+                    <p class="fuentes-titulo">📰 Fuentes consultadas</p>
+                    {% for linea in partes[1].split('\n') %}
+                        {% if linea.strip() and 'http' in linea %}
+                            {% set pl = linea.split(' | ') %}
+                            {% if pl|length > 1 %}
+                            <div class="fuente-item">
+                                <span>{{ pl[0].replace('• ', '') }}</span>
+                                <a href="{{ pl[1] }}" target="_blank">🔗 ver noticia</a>
+                            </div>
+                            {% endif %}
+                        {% endif %}
+                    {% endfor %}
+                </div>
+                {% endif %}
+            {% else %}
+                <p>⏳ Cargando análisis económico... Refresca en unos segundos.</p>
             {% endif %}
         </div>
 
+        <!-- INDICADORES MACRO -->
+        {% if macro %}
         <div class="section-title">🌍 Indicadores Macro</div>
         <div class="grid-4">
             <div class="card">
@@ -724,9 +738,16 @@ TEMPLATE = """
                 <div class="metric-sub">Treasury Bills</div>
             </div>
         </div>
-
         <div class="card" style="margin-bottom:20px">{{ grafica_trm | safe }}</div>
+        {% else %}
+        <div class="cargando">
+            ⏳ <strong>Descargando datos del mercado...</strong><br>
+            El sistema está iniciando por primera vez.<br>
+            Refresca la página en 2-3 minutos.
+        </div>
+        {% endif %}
 
+        <!-- COMPOSICIÓN -->
         {% if portafolio and portafolio.composicion %}
         <div class="section-title">💼 Composición del Portafolio</div>
         <div class="card" style="margin-bottom:20px">{{ torta | safe }}</div>
@@ -735,6 +756,7 @@ TEMPLATE = """
         <div class="card" style="margin-bottom:20px">{{ grafica_historico | safe }}</div>
         {% endif %}
 
+        <!-- TIEMPO REAL -->
         {% if tiempo_real %}
         <div class="section-title">⚡ Portafolio en Tiempo Real</div>
         <div class="resumen-hero">
@@ -854,8 +876,7 @@ TEMPLATE = """
         <div class="card">
             <div class="no-data">
                 📭 Aún no hay registros históricos.<br><br>
-                El registrador guarda un snapshot diario a las 4:05pm.<br>
-                También puedes correr <strong>python registrador.py</strong> manualmente.
+                El registrador guarda un snapshot diario a las 4:05pm.
             </div>
         </div>
         {% endif %}
@@ -875,7 +896,6 @@ TEMPLATE = """
 </body>
 </html>
 """
-
 # ============================================================
 # RUTA PRINCIPAL
 # ============================================================
@@ -888,7 +908,7 @@ def dashboard():
     tiempo_real = calcular_portafolio_tiempo_real(portafolio)
     macro       = cargar_macro()
 
-    g_trm = grafica_trm(macro['trm_hist']) if 'trm_hist' in macro else ""
+    g_trm = grafica_trm(macro['trm_hist']) if macro and 'trm_hist' in macro else ""
 
     colores = ['#00d4aa','#3b82f6','#8b5cf6','#f59e0b','#ef4444']
     g_torta = ""
