@@ -10,6 +10,27 @@ import yfinance as yf
 import warnings
 warnings.filterwarnings('ignore')
 
+def inicializar_datos():
+    """Si no existen los datos macro, los descarga automáticamente."""
+    import subprocess
+    archivos_necesarios = [
+        "datos/macro/trm.parquet",
+        "datos/macro/inflacion_col.parquet",
+        "datos/macro/inflacion_usa.parquet",
+        "datos/macro/risk_free.parquet",
+        "datos/macro/tasa_banrep.parquet"
+    ]
+    
+    faltan = any(not os.path.exists(f) for f in archivos_necesarios)
+    
+    if faltan:
+        print("⚠️ Datos macro no encontrados — descargando...")
+        os.makedirs("datos/macro", exist_ok=True)
+        os.makedirs("datos/precios", exist_ok=True)
+        os.makedirs("datos/portafolios", exist_ok=True)
+        subprocess.run(["python", "recolector.py"], check=False)
+        print("✅ Datos inicializados.")
+
 app = Flask(__name__)
 
 GROQ_API_KEY = "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"
@@ -916,4 +937,11 @@ if __name__ == "__main__":
     print("   Abre tu navegador en: http://localhost:5000")
     print("   Presiona Ctrl+C para detener")
     print("=" * 55)
+    
+    if __name__ == "__main__":
+        inicializar_datos()
+    print("=" * 55)
+    print("🌐 DASHBOARD INICIANDO...")
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
