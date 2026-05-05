@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login — Inversión Pro</title>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root { --bg:#0a0c10;--surface:#1d2235;--border:#2a3050;--accent:#4f8aff;--text:#e8eaf2;--text2:#8892b0;--text3:#4a5578;--red:#ff5a5a; }
+        *{box-sizing:border-box;margin:0;padding:0;}
+        body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;background:radial-gradient(ellipse at 50% 0%,rgba(79,138,255,0.1) 0%,transparent 60%);}
+        .card{background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:40px;width:100%;max-width:420px;}
+        .logo{font-family:'DM Serif Display',serif;font-size:1.8rem;text-align:center;margin-bottom:8px;}
+        .logo span{color:var(--accent);}
+        .subtitle{text-align:center;color:var(--text2);font-size:14px;margin-bottom:32px;}
+        .form-group{margin-bottom:16px;}
+        label{display:block;font-size:12px;font-weight:600;color:var(--text2);margin-bottom:6px;letter-spacing:0.03em;}
+        input{width:100%;background:#111420;border:1px solid var(--border);border-radius:8px;padding:11px 14px;color:var(--text);font-size:14px;font-family:'DM Sans',sans-serif;outline:none;transition:border-color .15s;}
+        input:focus{border-color:var(--accent);}
+        .btn{width:100%;padding:12px;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;margin-top:8px;transition:all .15s;}
+        .btn-primary{background:var(--accent);color:#fff;}
+        .btn-primary:hover{background:#3a75f0;}
+        .btn-primary:disabled{opacity:0.6;cursor:not-allowed;}
+        .error-msg{background:rgba(255,90,90,0.1);border:1px solid rgba(255,90,90,0.3);border-radius:8px;padding:10px 14px;color:var(--red);font-size:13px;margin-bottom:16px;display:none;}
+        .link{text-align:center;font-size:13px;color:var(--text2);margin-top:20px;}
+        .link a{color:var(--accent);}
+        .divider{text-align:center;color:var(--text3);font-size:12px;margin:16px 0;position:relative;}
+        .divider::before,.divider::after{content:'';position:absolute;top:50%;width:42%;height:1px;background:var(--border);}
+        .divider::before{left:0;} .divider::after{right:0;}
+        .remember{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text2);}
+        .remember input{width:auto;}
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="logo">Inversión<span>Pro</span></div>
+    <div class="subtitle">Bienvenido de vuelta</div>
+    <div class="error-msg" id="error-msg"></div>
+    <div class="form-group">
+        <label>Email</label>
+        <input type="email" id="email" placeholder="tu@email.com" autocomplete="email">
+    </div>
+    <div class="form-group">
+        <label>Contraseña</label>
+        <input type="password" id="password" placeholder="••••••••" autocomplete="current-password">
+    </div>
+    <div class="remember" style="margin-bottom:16px;">
+        <input type="checkbox" id="remember">
+        <label for="remember" style="margin-bottom:0;font-size:13px;font-weight:400;">Mantenerme conectado</label>
+    </div>
+    <button class="btn btn-primary" id="login-btn" onclick="doLogin()">Iniciar sesión</button>
+    <div class="link">¿No tienes cuenta? <a href="/register">Regístrate gratis</a></div>
+</div>
+<script>
+async function doLogin() {
+    const btn = document.getElementById("login-btn");
+    const errEl = document.getElementById("error-msg");
+    const email = document.getElementById("email").value.trim();
+    const password = document.getElementById("password").value;
+    const remember = document.getElementById("remember").checked;
+    errEl.style.display = "none";
+    if (!email || !password) { showErr("Por favor completa todos los campos."); return; }
+    btn.disabled = true; btn.textContent = "Iniciando...";
+    try {
+        const res = await fetch("/login", {
+            method: "POST",
+            headers: {"Content-Type":"application/json"},
+            body: JSON.stringify({email, password, remember})
+        });
+        const data = await res.json();
+        if (data.success) { window.location.href = data.redirect; }
+        else { showErr(data.error || "Error al iniciar sesión."); }
+    } catch { showErr("Error de conexión. Intenta de nuevo."); }
+    btn.disabled = false; btn.textContent = "Iniciar sesión";
+}
+function showErr(msg) {
+    const el = document.getElementById("error-msg");
+    el.textContent = msg; el.style.display = "block";
+}
+document.addEventListener("keydown", e => { if (e.key === "Enter") doLogin(); });
+</script>
+</body>
+</html>

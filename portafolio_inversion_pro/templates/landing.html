@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Inversión Pro — Sistema de Portafolios</title>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0a0c10; --surface: #1d2235; --border: #2a3050;
+            --accent: #4f8aff; --accent2: #7c5cfc; --green: #22d98b;
+            --text: #e8eaf2; --text2: #8892b0; --text3: #4a5578;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { background: var(--bg); color: var(--text); font-family: 'DM Sans', sans-serif; }
+        .hero {
+            min-height: 100vh;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            text-align: center; padding: 40px 20px;
+            background: radial-gradient(ellipse at 50% 0%, rgba(79,138,255,0.12) 0%, transparent 70%);
+        }
+        .logo { font-family: 'DM Serif Display', serif; font-size: 3.5rem; line-height: 1.1; margin-bottom: 16px; }
+        .logo span { color: var(--accent); }
+        .tagline { font-size: 1.2rem; color: var(--text2); max-width: 500px; margin: 0 auto 40px; }
+        .cta-group { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; }
+        .btn-cta {
+            padding: 14px 32px; border-radius: 10px; font-size: 15px; font-weight: 600;
+            border: none; cursor: pointer; text-decoration: none;
+        }
+        .btn-primary { background: var(--accent); color: #fff; }
+        .btn-primary:hover { background: #3a75f0; }
+        .btn-outline { background: transparent; color: var(--text); border: 1px solid var(--border); }
+        .btn-outline:hover { background: var(--surface); }
+        .features {
+            display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px;
+            max-width: 900px; margin: 60px auto 0; padding: 0 20px;
+        }
+        .feat {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 16px; padding: 24px; text-align: left;
+        }
+        .feat-icon { font-size: 2rem; margin-bottom: 12px; }
+        .feat h3 { font-size: 1rem; font-weight: 600; margin-bottom: 6px; }
+        .feat p { font-size: 13px; color: var(--text2); line-height: 1.5; }
+        @media (max-width: 600px) { .features { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+<div class="hero">
+    <div class="logo">Inversión<span>Pro</span></div>
+    <p class="tagline">Sistema profesional de portafolios de inversión con monitoreo en tiempo real, alertas y análisis con IA.</p>
+    <div class="cta-group">
+        <a href="/register" class="btn-cta btn-primary">Comenzar gratis</a>
+        <a href="/login" class="btn-cta btn-outline">Iniciar sesión</a>
+    </div>
+    <div class="features">
+        <div class="feat"><div class="feat-icon">📊</div><h3>Portafolios múltiples</h3><p>Gestiona varios portafolios independientes con seguimiento en tiempo real via yfinance.</p></div>
+        <div class="feat"><div class="feat-icon">🤖</div><h3>Analista IA</h3><p>Chat conversacional con Andrea, tu analista financiera powered by Groq LLaMA 3.3.</p></div>
+        <div class="feat"><div class="feat-icon">🔔</div><h3>Alertas Inteligentes</h3><p>Notificaciones por Telegram cuando tus activos alcancen los umbrales que definas.</p></div>
+        <div class="feat"><div class="feat-icon">⚡</div><h3>Monitor Paralelo</h3><p>Un hilo de monitoreo por portafolio para actualizaciones de precios simultáneas.</p></div>
+        <div class="feat"><div class="feat-icon">🔒</div><h3>Multi-usuario</h3><p>Registro y login seguro. Cada usuario ve únicamente sus portafolios.</p></div>
+        <div class="feat"><div class="feat-icon">🛡</div><h3>Panel Admin</h3><p>Gestión completa de usuarios, logs y métricas del sistema.</p></div>
+    </div>
+</div>
+</body>
+</html>

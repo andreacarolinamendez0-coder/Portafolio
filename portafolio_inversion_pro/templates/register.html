@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Registro — Inversión Pro</title>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root{--bg:#0a0c10;--surface:#1d2235;--border:#2a3050;--accent:#4f8aff;--text:#e8eaf2;--text2:#8892b0;--red:#ff5a5a;}
+        *{box-sizing:border-box;margin:0;padding:0;}
+        body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;background:radial-gradient(ellipse at 50% 0%,rgba(79,138,255,0.1) 0%,transparent 60%);}
+        .card{background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:40px;width:100%;max-width:440px;}
+        .logo{font-family:'DM Serif Display',serif;font-size:1.8rem;text-align:center;margin-bottom:8px;}
+        .logo span{color:var(--accent);}
+        .subtitle{text-align:center;color:var(--text2);font-size:14px;margin-bottom:32px;}
+        .form-group{margin-bottom:14px;}
+        label{display:block;font-size:12px;font-weight:600;color:var(--text2);margin-bottom:6px;}
+        input{width:100%;background:#111420;border:1px solid var(--border);border-radius:8px;padding:11px 14px;color:var(--text);font-size:14px;font-family:'DM Sans',sans-serif;outline:none;transition:border-color .15s;}
+        input:focus{border-color:var(--accent);}
+        .hint{font-size:11px;color:var(--text2);margin-top:4px;}
+        .btn{width:100%;padding:12px;border:none;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;margin-top:8px;transition:all .15s;}
+        .btn-primary{background:var(--accent);color:#fff;}
+        .btn-primary:hover{background:#3a75f0;}
+        .btn-primary:disabled{opacity:0.6;cursor:not-allowed;}
+        .error-msg{background:rgba(255,90,90,0.1);border:1px solid rgba(255,90,90,0.3);border-radius:8px;padding:10px 14px;color:var(--red);font-size:13px;margin-bottom:16px;display:none;}
+        .link{text-align:center;font-size:13px;color:var(--text2);margin-top:20px;}
+        .link a{color:var(--accent);}
+    </style>
+</head>
+<body>
+<div class="card">
+    <div class="logo">Inversión<span>Pro</span></div>
+    <div class="subtitle">Crea tu cuenta gratuita</div>
+    <div class="error-msg" id="error-msg"></div>
+    <div class="form-group">
+        <label>Nombre de usuario</label>
+        <input type="text" id="username" placeholder="Tu nombre o alias">
+    </div>
+    <div class="form-group">
+        <label>Email</label>
+        <input type="email" id="email" placeholder="tu@email.com">
+    </div>
+    <div class="form-group">
+        <label>Contraseña</label>
+        <input type="password" id="password" placeholder="Mínimo 6 caracteres">
+    </div>
+    <div class="form-group">
+        <label>Chat ID de Telegram <span style="font-weight:400;color:var(--text2)">(opcional)</span></label>
+        <input type="text" id="telegram_chat_id" placeholder="Ej: 123456789">
+        <div class="hint">Para recibir alertas por Telegram. Obtén tu ID enviando /start a @userinfobot</div>
+    </div>
+    <button class="btn btn-primary" id="reg-btn" onclick="doRegister()">Crear cuenta</button>
+    <div class="link">¿Ya tienes cuenta? <a href="/login">Iniciar sesión</a></div>
+</div>
+<script>
+async function doRegister() {
+    const btn = document.getElementById("reg-btn");
+    const errEl = document.getElementById("error-msg");
+    errEl.style.display = "none";
+    const data = {
+        username: document.getElementById("username").value.trim(),
+        email: document.getElementById("email").value.trim(),
+        password: document.getElementById("password").value,
+        telegram_chat_id: document.getElementById("telegram_chat_id").value.trim()
+    };
+    if (!data.username || !data.email || !data.password) { showErr("Completa los campos requeridos."); return; }
+    btn.disabled = true; btn.textContent = "Creando cuenta...";
+    try {
+        const res = await fetch("/register", {
+            method: "POST",
+            headers: {"Content-Type":"application/json"},
+            body: JSON.stringify(data)
+        });
+        const resp = await res.json();
+        if (resp.success) { window.location.href = resp.redirect; }
+        else { showErr(resp.error || "Error al registrar."); }
+    } catch { showErr("Error de conexión."); }
+    btn.disabled = false; btn.textContent = "Crear cuenta";
+}
+function showErr(msg) {
+    const el = document.getElementById("error-msg");
+    el.textContent = msg; el.style.display = "block";
+}
+</script>
+</body>
+</html>

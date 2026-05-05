@@ -1,4 +1,5 @@
 {
+  "owner": "admin",
   "nombre": "Andrea LP",
   "perfil": "agresivo",
   "propietario": "Andrea",
@@ -8,11 +9,11 @@
   "frecuencia_meses": 1,
   "activo": true,
   "composicion": {
-    "NVDA": 0.33034148785912915,
-    "LLY": 0.30566291209243807,
-    "BTC-USD": 0.1424926165901797,
-    "GOOGL": 0.1418098953652928,
-    "WMT": 0.07969308809296022
+    "NVDA": 0.3308647357596635,
+    "LLY": 0.3048327366461389,
+    "GOOGL": 0.14274112397150496,
+    "BTC-USD": 0.14261311668663795,
+    "WMT": 0.07894828693605457
   },
   "aportes": [
     {
@@ -127,7 +128,163 @@
         "ganancia_total": 110.0,
         "rentabilidad_total": 0.01
       }
+    },
+    {
+      "fecha": "2026-05-01",
+      "hora": "16:00",
+      "macro": {
+        "trm": 3637.51,
+        "trm_cambio": -0.88,
+        "inf_col": 4.9,
+        "inf_usa": 3.49,
+        "risk_free": 3.7,
+        "banrep": 9.75,
+        "cdt": 9.0
+      },
+      "posiciones": [
+        {
+          "activo": "NVDA",
+          "fracciones": 0.4265,
+          "precio_usd": 199.57,
+          "valor_cop": 309585.0,
+          "invertido": 330254.0,
+          "ganancia": -20670.0,
+          "rentabilidad": -6.26
+        },
+        {
+          "activo": "LLY",
+          "fracciones": 0.0962,
+          "precio_usd": 934.6,
+          "valor_cop": 327193.0,
+          "invertido": 305583.0,
+          "ganancia": 21610.0,
+          "rentabilidad": 7.07
+        },
+        {
+          "activo": "BTC-USD",
+          "fracciones": 0.0005,
+          "precio_usd": 76304.32,
+          "valor_cop": 142665.0,
+          "invertido": 142456.0,
+          "ganancia": 209.0,
+          "rentabilidad": 0.15
+        },
+        {
+          "activo": "GOOGL",
+          "fracciones": 0.1116,
+          "precio_usd": 384.8,
+          "valor_cop": 156169.0,
+          "invertido": 141773.0,
+          "ganancia": 14396.0,
+          "rentabilidad": 10.15
+        },
+        {
+          "activo": "WMT",
+          "fracciones": 0.1719,
+          "precio_usd": 131.93,
+          "valor_cop": 82489.0,
+          "invertido": 79672.0,
+          "ganancia": 2817.0,
+          "rentabilidad": 3.54
+        }
+      ],
+      "resumen": {
+        "total_invertido": 999738.0,
+        "total_valor": 1018100.0,
+        "ganancia_total": 18362.0,
+        "rentabilidad_total": 1.84
+      }
+    },
+    {
+      "fecha": "2026-05-03",
+      "hora": "15:26",
+      "macro": {
+        "trm": 3637.51,
+        "trm_cambio": -0.88,
+        "inf_col": 4.9,
+        "inf_usa": 3.49,
+        "risk_free": 3.7,
+        "banrep": 11.25,
+        "cdt": 10.5
+      },
+      "posiciones": [],
+      "resumen": {
+        "total_invertido": 0,
+        "total_valor": 0,
+        "ganancia_total": 0,
+        "rentabilidad_total": 0
+      }
+    },
+    {
+      "fecha": "2026-05-04",
+      "hora": "16:03",
+      "macro": {
+        "trm": 3637.51,
+        "trm_cambio": -0.88,
+        "inf_col": 4.9,
+        "inf_usa": 3.49,
+        "risk_free": 3.7,
+        "banrep": 11.25,
+        "cdt": 10.5
+      },
+      "posiciones": [
+        {
+          "activo": "NVDA",
+          "fracciones": 0.4265,
+          "precio_usd": 198.45,
+          "valor_cop": 307848.0,
+          "invertido": 330125.0,
+          "ganancia": -22277.0,
+          "rentabilidad": -6.75
+        },
+        {
+          "activo": "LLY",
+          "fracciones": 0.0962,
+          "precio_usd": 963.33,
+          "valor_cop": 337251.0,
+          "invertido": 305463.0,
+          "ganancia": 31788.0,
+          "rentabilidad": 10.41
+        },
+        {
+          "activo": "BTC-USD",
+          "fracciones": 0.0005,
+          "precio_usd": 78538.23,
+          "valor_cop": 146841.0,
+          "invertido": 142400.0,
+          "ganancia": 4442.0,
+          "rentabilidad": 3.12
+        },
+        {
+          "activo": "GOOGL",
+          "fracciones": 0.1116,
+          "precio_usd": 385.69,
+          "valor_cop": 156530.0,
+          "invertido": 141717.0,
+          "ganancia": 14813.0,
+          "rentabilidad": 10.45
+        },
+        {
+          "activo": "WMT",
+          "fracciones": 0.1719,
+          "precio_usd": 131.6,
+          "valor_cop": 82283.0,
+          "invertido": 79641.0,
+          "ganancia": 2642.0,
+          "rentabilidad": 3.32
+        }
+      ],
+      "resumen": {
+        "total_invertido": 999345.0,
+        "total_valor": 1030752.0,
+        "ganancia_total": 31407.0,
+        "rentabilidad_total": 3.14
+      }
     }
   ],
-  "fecha_ultima_actualizacion": "2026-04-29 14:02"
+  "fecha_ultima_actualizacion": "2026-04-30 15:32",
+  "password_hash": "03ac674216f3e15c761ee1a5e255f067953623c8b388b4459e13f978d7c846f4",
+  "email": "andreacarolinamendez0@gmail.com",
+  "telegram_chat_id": "",
+  "monitoreo_activo": true
 }

@@ -212,6 +212,19 @@ def recolectar_tasa_libre_riesgo():
 def recolectar_tasa_banrep():
     registrar("Iniciando descarga de tasa Banrep...")
     archivo = f"{CARPETA_MACRO}/tasa_banrep.parquet"
+    tasa = None
+
+    
+    # Si ya descargamos hoy, usar ese dato directamente
+    if os.path.exists(archivo):
+        try:
+            df_prev = pd.read_parquet(archivo)
+            ultima  = df_prev.index.max()
+            if ultima.date() == datetime.now().date():
+                tasa_hoy = float(df_prev['Tasa_Banrep'].iloc[-1])
+                registrar(f"✅ Tasa Banrep ya descargada hoy: {tasa_hoy:.2f}%")
+                return  # No volver a descargar
+        except: pass
 
     try:
         # Intentamos con la API de series estadísticas del Banrep
@@ -233,8 +246,8 @@ def recolectar_tasa_banrep():
 
     except Exception:
         # Backup con tasa actual conocida — actualizar manualmente si cambia
-        # Última tasa Banrep: 9.75% (vigente desde febrero 2024)
-        tasa = 9.75
+        # Última tasa Banrep: 11.25% (vigente desde febrero 2024)
+        tasa = 11.25
         registrar(f"⚠️ Usando tasa Banrep de respaldo: {tasa}%", "AVISO")
 
     # Guardamos el dato

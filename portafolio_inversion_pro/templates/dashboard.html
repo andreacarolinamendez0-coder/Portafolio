@@ -1,0 +1,272 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+
+{% block extra_head %}
+<style>
+.stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 20px 24px;
+}
+.stat-label { font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text3); margin-bottom: 8px; }
+.stat-value { font-size: 1.8rem; font-weight: 700; font-family: var(--font-display); }
+.stat-sub { font-size: 12px; color: var(--text2); margin-top: 4px; }
+.portfolio-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 20px;
+    cursor: pointer;
+    transition: border-color 0.15s, transform 0.15s;
+    text-decoration: none;
+    color: var(--text);
+    display: block;
+}
+.portfolio-card:hover { border-color: var(--accent); transform: translateY(-2px); }
+.portfolio-name { font-size: 1rem; font-weight: 700; margin-bottom: 4px; }
+.portfolio-desc { font-size: 12px; color: var(--text3); margin-bottom: 16px; }
+.portfolio-value { font-size: 1.4rem; font-weight: 700; font-family: var(--font-display); margin-bottom: 4px; }
+.donut-container { width: 80px; height: 80px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="flex-between mb-4">
+    <div>
+        <h2 style="font-family:var(--font-display);font-size:1.5rem;">Buenos días, {{ current_user.username }} 👋</h2>
+        <p class="text-muted text-sm mt-1">Aquí tienes el resumen de tus inversiones</p>
+    </div>
+    <button class="btn btn-primary" onclick="openModal('new-portfolio-modal')">
+        + Nuevo Portafolio
+    </button>
+</div>
+
+<!-- Stats globales -->
+<div class="grid-4 mb-4" id="global-stats">
+    <div class="stat-card"><div class="stat-label">Valor Total</div><div class="stat-value" id="total-value">—</div><div class="stat-sub">en todos los portafolios</div></div>
+    <div class="stat-card"><div class="stat-label">Invertido</div><div class="stat-value" id="total-invested">—</div><div class="stat-sub">capital total</div></div>
+    <div class="stat-card"><div class="stat-label">Ganancia/Pérdida</div><div class="stat-value" id="total-gl">—</div><div class="stat-sub" id="total-gl-pct">—</div></div>
+    <div class="stat-card"><div class="stat-label">Portafolios</div><div class="stat-value" id="port-count">—</div><div class="stat-sub">activos</div></div>
+</div>
+
+<!-- Portafolios -->
+<div class="flex-between mb-4">
+    <div style="font-size:14px;font-weight:600;color:var(--text2);">MIS PORTAFOLIOS</div>
+</div>
+<div class="grid-3" id="portfolios-grid">
+    <div style="text-align:center;padding:40px;color:var(--text3)"><div class="spinner"></div></div>
+</div>
+
+<!-- AI Quick Access -->
+<div class="card mt-6">
+    <div class="flex-between mb-4">
+        <div>
+            <div class="card-title">🤖 Analista IA — Andrea</div>
+            <p class="text-sm text-muted">Pregúntame sobre tus inversiones, estrategias o el mercado</p>
+        </div>
+        <select id="ai-portfolio-select" style="width:200px;padding:8px 12px;font-size:13px;">
+            <option value="">Sin contexto de portafolio</option>
+        </select>
+    </div>
+    <div id="chat-messages" style="height:240px;overflow-y:auto;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:16px;margin-bottom:12px;display:flex;flex-direction:column;gap:12px;">
+        <div style="align-self:flex-start;max-width:80%;">
+            <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:12px 16px;font-size:13px;">
+                ¡Hola! Soy Andrea, tu analista financiera IA. Puedo ayudarte a analizar tus portafolios, evaluar acciones o responder preguntas sobre inversiones. ¿En qué te puedo ayudar?
+            </div>
+        </div>
+    </div>
+    <div style="display:flex;gap:8px;">
+        <input type="text" id="chat-input" placeholder="Escribe tu pregunta..." style="flex:1;" onkeydown="if(event.key==='Enter')sendChat()">
+        <button class="btn btn-primary" onclick="sendChat()" id="chat-btn">Enviar</button>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;">
+        <button class="btn btn-secondary btn-sm" onclick="quickChat('¿Cómo está diversificado mi portafolio?')">📊 Diversificación</button>
+        <button class="btn btn-secondary btn-sm" onclick="quickChat('¿Cuáles son mis mejores y peores acciones?')">📈 Rendimiento</button>
+        <button class="btn btn-secondary btn-sm" onclick="quickChat('Analiza el riesgo de mi portafolio')">⚠️ Riesgo</button>
+        <button class="btn btn-secondary btn-sm" onclick="quickChat('Dame recomendaciones de inversión')">💡 Recomendaciones</button>
+    </div>
+</div>
+
+<!-- Modal nuevo portafolio -->
+<div class="modal-overlay" id="new-portfolio-modal">
+    <div class="modal">
+        <div class="modal-header">
+            <div class="modal-title">Nuevo Portafolio</div>
+            <button class="modal-close" onclick="closeModal('new-portfolio-modal')">×</button>
+        </div>
+        <div class="form-group">
+            <label>Nombre *</label>
+            <input type="text" id="np-name" placeholder="Ej: Acciones Tech">
+        </div>
+        <div class="form-group">
+            <label>Descripción</label>
+            <input type="text" id="np-desc" placeholder="Descripción opcional">
+        </div>
+        <div class="form-group">
+            <label>Moneda</label>
+            <select id="np-currency">
+                <option value="USD">USD — Dólar Americano</option>
+                <option value="EUR">EUR — Euro</option>
+                <option value="COP">COP — Peso Colombiano</option>
+            </select>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:20px;">
+            <button class="btn btn-secondary" style="flex:1" onclick="closeModal('new-portfolio-modal')">Cancelar</button>
+            <button class="btn btn-primary" style="flex:1" onclick="createPortfolio()">Crear Portafolio</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let chatHistory = [];
+
+async function loadDashboard() {
+    try {
+        const portfolios = await api("/api/portfolios");
+        renderPortfolios(portfolios);
+        updateGlobalStats(portfolios);
+        populateAISelect(portfolios);
+    } catch(e) {
+        document.getElementById("portfolios-grid").innerHTML = `<div style="color:var(--red)">Error cargando portafolios: ${e.message}</div>`;
+    }
+}
+
+function renderPortfolios(portfolios) {
+    const grid = document.getElementById("portfolios-grid");
+    if (!portfolios.length) {
+        grid.innerHTML = `
+            <div style="grid-column:1/-1;text-align:center;padding:60px;color:var(--text3);">
+                <div style="font-size:3rem;margin-bottom:12px;">📁</div>
+                <div style="font-size:16px;margin-bottom:8px;">Sin portafolios aún</div>
+                <div style="font-size:13px;">Crea tu primer portafolio para comenzar</div>
+            </div>`;
+        return;
+    }
+    grid.innerHTML = portfolios.map(p => {
+        const s = p.summary || {};
+        const gl = s.gain_loss || 0;
+        const glPct = s.gain_loss_pct || 0;
+        const sign = gl >= 0 ? "+" : "";
+        const cls = gl >= 0 ? "positive" : "negative";
+        return `
+        <a href="/portfolio/${p.id}" class="portfolio-card">
+            <div class="flex-between mb-4">
+                <div>
+                    <div class="portfolio-name">${p.name}</div>
+                    <div class="portfolio-desc">${p.description || '—'}</div>
+                </div>
+                <div style="font-size:10px;color:var(--text3);font-weight:600">${p.currency}</div>
+            </div>
+            <div class="portfolio-value">$${(s.current_value || 0).toLocaleString("es", {minimumFractionDigits:2, maximumFractionDigits:2})}</div>
+            <div style="display:flex;justify-content:space-between;margin-top:8px;">
+                <span class="text-sm text-muted">${s.stock_count || 0} acciones</span>
+                <span class="text-sm ${cls} fw-600">${sign}${glPct.toFixed(2)}%</span>
+            </div>
+            <div style="margin-top:10px;height:4px;background:var(--border);border-radius:4px;overflow:hidden;">
+                <div style="height:100%;width:${Math.min(100,Math.abs(glPct))}%;background:${gl>=0?'var(--green)':'var(--red)'};border-radius:4px;"></div>
+            </div>
+        </a>`;
+    }).join("");
+}
+
+function updateGlobalStats(portfolios) {
+    let totalValue = 0, totalInvested = 0;
+    portfolios.forEach(p => {
+        const s = p.summary || {};
+        totalValue += s.current_value || 0;
+        totalInvested += s.total_invested || 0;
+    });
+    const gl = totalValue - totalInvested;
+    const glPct = totalInvested > 0 ? (gl / totalInvested * 100) : 0;
+    const fmt = v => "$" + v.toLocaleString("es", {minimumFractionDigits:2, maximumFractionDigits:2});
+    document.getElementById("total-value").textContent = fmt(totalValue);
+    document.getElementById("total-invested").textContent = fmt(totalInvested);
+    const glEl = document.getElementById("total-gl");
+    glEl.textContent = (gl >= 0 ? "+" : "") + fmt(gl);
+    glEl.className = "stat-value " + (gl >= 0 ? "positive" : "negative");
+    document.getElementById("total-gl-pct").textContent = (gl >= 0 ? "+" : "") + glPct.toFixed(2) + "%";
+    document.getElementById("port-count").textContent = portfolios.length;
+}
+
+function populateAISelect(portfolios) {
+    const sel = document.getElementById("ai-portfolio-select");
+    portfolios.forEach(p => {
+        const opt = document.createElement("option");
+        opt.value = p.id;
+        opt.textContent = p.name;
+        sel.appendChild(opt);
+    });
+}
+
+async function createPortfolio() {
+    const name = document.getElementById("np-name").value.trim();
+    if (!name) { toast("El nombre es requerido", "error"); return; }
+    try {
+        await api("/api/portfolios", {
+            method: "POST",
+            body: JSON.stringify({
+                name,
+                description: document.getElementById("np-desc").value,
+                currency: document.getElementById("np-currency").value
+            })
+        });
+        closeModal("new-portfolio-modal");
+        toast("Portafolio creado", "success");
+        loadDashboard();
+    } catch(e) { toast(e.message, "error"); }
+}
+
+// ── AI Chat ──────────────────────────────────────────────────────────────
+async function sendChat() {
+    const input = document.getElementById("chat-input");
+    const msg = input.value.trim();
+    if (!msg) return;
+    input.value = "";
+    appendMessage("user", msg);
+    chatHistory.push({role:"user", content: msg});
+
+    const btn = document.getElementById("chat-btn");
+    btn.disabled = true; btn.textContent = "...";
+
+    try {
+        const portfolioId = document.getElementById("ai-portfolio-select").value;
+        const data = await api("/api/ai/chat", {
+            method: "POST",
+            body: JSON.stringify({message:msg, history:chatHistory.slice(-8), portfolio_id:portfolioId||null})
+        });
+        appendMessage("assistant", data.response);
+        chatHistory.push({role:"assistant", content:data.response});
+    } catch(e) { appendMessage("assistant", "Error: " + e.message); }
+    btn.disabled = false; btn.textContent = "Enviar";
+}
+
+function appendMessage(role, text) {
+    const container = document.getElementById("chat-messages");
+    const div = document.createElement("div");
+    div.style.cssText = `align-self:${role==="user"?"flex-end":"flex-start"};max-width:80%;`;
+    div.innerHTML = `<div style="background:${role==="user"?"var(--accent)":"var(--surface)"};border:1px solid ${role==="user"?"var(--accent)":"var(--border)"};border-radius:12px;padding:12px 16px;font-size:13px;line-height:1.5;white-space:pre-wrap;">${text}</div>`;
+    container.appendChild(div);
+    container.scrollTop = container.scrollHeight;
+}
+
+function quickChat(msg) {
+    document.getElementById("chat-input").value = msg;
+    sendChat();
+}
+
+// ── Modal helpers ────────────────────────────────────────────────────────
+function openModal(id) { document.getElementById(id).classList.add("open"); }
+function closeModal(id) { document.getElementById(id).classList.remove("open"); }
+
+// Click fuera cierra modal
+document.querySelectorAll(".modal-overlay").forEach(el => {
+    el.addEventListener("click", e => { if(e.target === el) closeModal(el.id); });
+});
+
+loadDashboard();
+</script>
+{% endblock %}

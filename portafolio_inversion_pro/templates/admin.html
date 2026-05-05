@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Administración{% endblock %}
+{% block page_title %}Panel de Administración{% endblock %}
+{% block content %}
+<div class="grid-4 mb-4" id="admin-stats-grid">
+    <div class="card"><div class="card-title">Usuarios Totales</div><div style="font-size:2rem;font-weight:700;font-family:var(--font-display)" id="as-total">—</div></div>
+    <div class="card"><div class="card-title">Usuarios Activos</div><div style="font-size:2rem;font-weight:700;font-family:var(--font-display)" id="as-active">—</div></div>
+    <div class="card"><div class="card-title">Portafolios</div><div style="font-size:2rem;font-weight:700;font-family:var(--font-display)" id="as-ports">—</div></div>
+    <div class="card"><div class="card-title">Hilos Monitor</div><div style="font-size:2rem;font-weight:700;font-family:var(--font-display)" id="as-threads">—</div></div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-title">Gestión de Usuarios</div>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr><th>ID</th><th>Usuario</th><th>Email</th><th>Admin</th><th>Activo</th><th>Portafolios</th><th>Último Login</th><th>Acciones</th></tr>
+            </thead>
+            <tbody id="users-table">
+                <tr><td colspan="8" style="text-align:center;padding:20px"><div class="spinner"></div></td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-title">Logs de Administración</div>
+    <div id="logs-list" style="font-family:var(--font-mono);font-size:12px;max-height:300px;overflow-y:auto;"></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+async function loadAdmin() {
+    const [stats, users, logs] = await Promise.all([
+        api("/api/admin/stats"),
+        api("/api/admin/users"),
+        api("/api/admin/logs")
+    ]);
+
+    document.getElementById("as-total").textContent = stats.total_users;
+    document.getElementById("as-active").textContent = stats.active_users;
+    document.getElementById("as-ports").textContent = stats.total_portfolios;
+    document.getElementById("as-threads").textContent = stats.monitor_threads;
+
+    const tbody = document.getElementById("users-table");
+    tbody.innerHTML = users.map(u => `
+        <tr>
+            <td class="mono">${u.id}</td>
+            <td><strong>${u.username}</strong></td>
+            <td>${u.email}</td>
+            <td>${u.is_admin ? '<span class="badge badge-yellow">Admin</span>' : '—'}</td>
+            <td>${u.is_active ? '<span class="badge badge-green">Activo</span>' : '<span class="badge badge-red">Inactivo</span>'}</td>
+            <td>${u.portfolio_count}</td>
+            <td style="font-size:12px;color:var(--text2)">${u.last_login ? new Date(u.last_login).toLocaleString("es") : 'Nunca'}</td>
+            <td>
+                <button class="btn btn-sm ${u.is_active ? 'btn-danger' : 'btn-secondary'}" onclick="toggleUser(${u.id}, ${!u.is_active})">
+                    ${u.is_active ? 'Desactivar' : 'Activar'}
+                </button>
+            </td>
+        </tr>
+    `).join("");
+
+    const logsEl = document.getElementById("logs-list");
+    if (!logs.length) { logsEl.innerHTML = '<div style="color:var(--text3);padding:12px;">Sin registros.</div>'; return; }
+    logsEl.innerHTML = logs.map(l => `
+        <div style="padding:6px 0;border-bottom:1px solid var(--border);color:var(--text2)">
+            <span style="color:var(--text3)">${new Date(l.created_at).toLocaleString("es")}</span>
+            <span style="margin-left:12px;">${l.action}</span>
+        </div>
+    `).join("");
+}
+
+async function toggleUser(uid, activate) {
+    try {
+        await api(`/api/admin/users/${uid}`, {
+            method: "PUT",
+            body: JSON.stringify({is_active: activate})
+        });
+        toast(activate ? "Usuario activado" : "Usuario desactivado", "success");
+        loadAdmin();
+    } catch(e) { toast(e.message, "error"); }
+}
+
+loadAdmin();
+</script>
+{% endblock %}

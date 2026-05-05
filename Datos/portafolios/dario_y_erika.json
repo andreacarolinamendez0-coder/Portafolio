@@ -1,13 +1,25 @@
 {
-  "nombre": "Darío y Erika",
+  "owner": "admin",
+  "nombre": "Dario y Erika",
   "perfil": "conservador",
-  "propietario": "Darío ",
+  "propietario": "Dario",
   "fecha_inicio": "2026-04-29",
-  "inversion_inicial": 1000000.0,
-  "aporte_dca": 500000.0,
+  "inversion_inicial": 1500000,
+  "aporte_dca": 200000,
   "frecuencia_meses": 1,
-  "activo": false,
-  "composicion": {},
+  "activo": true,
+  "composicion": {
+    "GOOGL": 0.17255313293731672,
+    "LLY": 0.24937238225889585,
+    "MSFT": 0.10748624950966973,
+    "WMT": 0.2941176470588236,
+    "XLK": 0.17647058823529418
+  },
   "aportes": [],
-  "historial": []
+  "historial": [],
+  "password_hash": "fe2592b42a727e977f055947385b709cc82b16b9a87f88c6abf3900d65d0cdc3",
+  "email": "andreacarolinamendez0@gmail.com",
+  "telegram_chat_id": "",
+  "fecha_ultima_actualizacion": "2026-05-03 16:24",
+  "monitoreo_activo": true
 }

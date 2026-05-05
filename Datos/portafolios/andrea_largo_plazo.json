@@ -1,0 +1,25 @@
+{
+  "owner": "admin",
+  "nombre": "Andrea Largo Plazo",
+  "perfil": "agresivo",
+  "propietario": "Andrea",
+  "password_hash": "b028e7b30ae6629575651e0369e15c482a1b97a7d437334f1b1cf00f5c06a78f",
+  "email": "andreacarolinamendez0@gmail.com",
+  "telegram_chat_id": "3002443898",
+  "fecha_inicio": "2026-05-04",
+  "inversion_inicial": 1000000,
+  "aporte_dca": 200000,
+  "frecuencia_meses": 1,
+  "activo": true,
+  "monitoreo_activo": true,
+  "composicion": {
+    "BTC-USD": 0.13935891909940065,
+    "GOOGL": 0.1506227810739648,
+    "LLY": 0.3529411764705879,
+    "NVDA": 0.2846084311066934,
+    "WMT": 0.07246869224935323
+  },
+  "aportes": [],
+  "historial": [],
+  "fecha_ultima_actualizacion": "2026-05-04 20:41"
+}

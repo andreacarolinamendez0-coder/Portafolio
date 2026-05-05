@@ -1,0 +1,87 @@
+{% extends "base.html" %}
+{% block title %}Configuración{% endblock %}
+{% block page_title %}Configuración{% endblock %}
+{% block content %}
+<div style="max-width:600px;">
+    <h2 style="font-family:var(--font-display);font-size:1.3rem;margin-bottom:24px;">Perfil y Preferencias</h2>
+
+    <div class="card mb-4">
+        <div class="card-title">Información Personal</div>
+        <div class="form-group">
+            <label>Nombre de usuario</label>
+            <input type="text" id="p-username" value="{{ current_user.username }}" readonly style="opacity:0.6">
+        </div>
+        <div class="form-group">
+            <label>Email</label>
+            <input type="email" id="p-email" value="{{ current_user.email }}">
+        </div>
+        <div class="form-group">
+            <label>Chat ID de Telegram</label>
+            <input type="text" id="p-telegram" value="{{ current_user.telegram_chat_id or '' }}" placeholder="Ej: 123456789">
+            <div style="font-size:11px;color:var(--text3);margin-top:4px;">Envía /start a @userinfobot para obtener tu ID</div>
+        </div>
+        <button class="btn btn-primary mt-4" onclick="saveProfile()">Guardar cambios</button>
+    </div>
+
+    <div class="card mb-4">
+        <div class="card-title">Cambiar Contraseña</div>
+        <div class="form-group">
+            <label>Contraseña actual</label>
+            <input type="password" id="p-current-pw" placeholder="••••••••">
+        </div>
+        <div class="form-group">
+            <label>Nueva contraseña</label>
+            <input type="password" id="p-new-pw" placeholder="Mínimo 6 caracteres">
+        </div>
+        <button class="btn btn-secondary mt-4" onclick="changePassword()">Cambiar contraseña</button>
+    </div>
+
+    <div class="card">
+        <div class="card-title">Notificaciones</div>
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 0;">
+            <input type="checkbox" id="p-email-notif" {% if current_user.email_notifications %}checked{% endif %} style="width:auto">
+            <label for="p-email-notif" style="margin-bottom:0;font-weight:400;">Recibir notificaciones por email</label>
+        </div>
+        <button class="btn btn-secondary mt-4" onclick="saveNotifSettings()">Guardar preferencias</button>
+    </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+async function saveProfile() {
+    try {
+        await api("/api/profile", {
+            method: "PUT",
+            body: JSON.stringify({
+                email: document.getElementById("p-email").value,
+                telegram_chat_id: document.getElementById("p-telegram").value
+            })
+        });
+        toast("Perfil actualizado", "success");
+    } catch(e) { toast(e.message, "error"); }
+}
+async function changePassword() {
+    const cur = document.getElementById("p-current-pw").value;
+    const nw = document.getElementById("p-new-pw").value;
+    if (!cur || !nw) { toast("Completa ambos campos", "error"); return; }
+    try {
+        await api("/api/profile", {
+            method: "PUT",
+            body: JSON.stringify({current_password: cur, new_password: nw})
+        });
+        toast("Contraseña cambiada", "success");
+        document.getElementById("p-current-pw").value = "";
+        document.getElementById("p-new-pw").value = "";
+    } catch(e) { toast(e.message, "error"); }
+}
+async function saveNotifSettings() {
+    try {
+        await api("/api/profile", {
+            method: "PUT",
+            body: JSON.stringify({email_notifications: document.getElementById("p-email-notif").checked})
+        });
+        toast("Preferencias guardadas", "success");
+    } catch(e) { toast(e.message, "error"); }
+}
+</script>
+{% endblock %}

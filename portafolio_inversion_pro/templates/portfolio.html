@@ -1,0 +1,415 @@
+{% extends "base.html" %}
+{% block title %}{{ portfolio.name }}{% endblock %}
+{% block page_title %}{{ portfolio.name }}{% endblock %}
+
+{% block extra_head %}
+<style>
+.metric-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: var(--radius-lg); padding: 18px 20px;
+}
+.metric-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text3); margin-bottom: 6px; }
+.metric-value { font-size: 1.5rem; font-weight: 700; font-family: var(--font-display); }
+.metric-sub { font-size: 12px; color: var(--text2); margin-top: 3px; }
+.ticker-badge {
+    display: inline-block; padding: 3px 8px; background: rgba(79,138,255,0.1);
+    color: var(--accent); border-radius: 6px; font-family: var(--font-mono);
+    font-size: 13px; font-weight: 600;
+}
+.chart-container { position: relative; height: 260px; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="flex-between mb-4">
+    <div>
+        <a href="/dashboard" style="font-size:13px;color:var(--text2);">← Dashboard</a>
+        <h2 style="font-family:var(--font-display);font-size:1.4rem;margin-top:4px;">{{ portfolio.name }}</h2>
+        {% if portfolio.description %}
+        <p class="text-muted text-sm">{{ portfolio.description }}</p>
+        {% endif %}
+    </div>
+    <div style="display:flex;gap:8px;">
+        <button class="btn btn-secondary" onclick="analyzeWithAI()">🤖 Analizar con IA</button>
+        <button class="btn btn-primary" onclick="openModal('add-stock-modal')">+ Agregar Acción</button>
+    </div>
+</div>
+
+<!-- Métricas -->
+<div class="grid-4 mb-4">
+    <div class="metric-card">
+        <div class="metric-label">Valor Actual</div>
+        <div class="metric-value" id="m-current">—</div>
+        <div class="metric-sub">{{ portfolio.currency }}</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Invertido</div>
+        <div class="metric-value" id="m-invested">—</div>
+        <div class="metric-sub">capital original</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Ganancia / Pérdida</div>
+        <div class="metric-value" id="m-gl">—</div>
+        <div class="metric-sub" id="m-gl-pct">—</div>
+    </div>
+    <div class="metric-card">
+        <div class="metric-label">Acciones</div>
+        <div class="metric-value" id="m-count">—</div>
+        <div class="metric-sub">en portafolio</div>
+    </div>
+</div>
+
+<div class="grid-2 mb-4">
+    <!-- Gráfico distribución -->
+    <div class="card">
+        <div class="card-title">Distribución del Portafolio</div>
+        <div class="chart-container">
+            <canvas id="dist-chart"></canvas>
+        </div>
+    </div>
+    <!-- Rendimiento por acción -->
+    <div class="card">
+        <div class="card-title">Rendimiento por Acción</div>
+        <div class="chart-container">
+            <canvas id="perf-chart"></canvas>
+        </div>
+    </div>
+</div>
+
+<!-- Tabla de acciones -->
+<div class="card mb-4">
+    <div class="flex-between mb-4">
+        <div class="card-title">Posiciones</div>
+        <button class="btn btn-secondary btn-sm" onclick="refreshPrices()">⟳ Actualizar Precios</button>
+    </div>
+    <div class="table-wrap">
+        <table>
+            <thead>
+                <tr>
+                    <th>Ticker</th>
+                    <th>Empresa</th>
+                    <th>Acciones</th>
+                    <th>Costo Promedio</th>
+                    <th>Precio Actual</th>
+                    <th>Valor</th>
+                    <th>G/P</th>
+                    <th>%</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody id="stocks-table">
+                <tr><td colspan="9" style="text-align:center;color:var(--text3);padding:30px"><div class="spinner"></div></td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- Alertas -->
+<div class="card mb-4">
+    <div class="flex-between mb-4">
+        <div class="card-title">🔔 Alertas de Precio</div>
+        <button class="btn btn-secondary btn-sm" onclick="openModal('alert-modal')">+ Nueva Alerta</button>
+    </div>
+    <div id="alerts-list">Cargando alertas...</div>
+</div>
+
+<!-- IA Panel -->
+<div class="card" id="ai-panel" style="display:none;">
+    <div class="flex-between mb-4">
+        <div class="card-title">🤖 Análisis IA — Andrea</div>
+        <button class="btn btn-secondary btn-sm" onclick="document.getElementById('ai-panel').style.display='none'">Cerrar</button>
+    </div>
+    <div id="ai-result" style="font-size:14px;line-height:1.8;white-space:pre-wrap;color:var(--text2);"></div>
+</div>
+
+<!-- Modal agregar acción -->
+<div class="modal-overlay" id="add-stock-modal">
+    <div class="modal">
+        <div class="modal-header">
+            <div class="modal-title">Agregar Acción</div>
+            <button class="modal-close" onclick="closeModal('add-stock-modal')">×</button>
+        </div>
+        <div class="form-group">
+            <label>Ticker (símbolo) *</label>
+            <div style="display:flex;gap:8px;">
+                <input type="text" id="s-ticker" placeholder="AAPL, MSFT, BTC-USD..." style="text-transform:uppercase;flex:1">
+                <button class="btn btn-secondary" onclick="verifyTicker()">Verificar</button>
+            </div>
+            <div id="ticker-info" style="margin-top:8px;font-size:13px;color:var(--text2);"></div>
+        </div>
+        <div class="form-group">
+            <label>Número de acciones *</label>
+            <input type="number" id="s-shares" placeholder="0.00" step="0.001" min="0">
+        </div>
+        <div class="form-group">
+            <label>Precio de compra (por acción) *</label>
+            <input type="number" id="s-price" placeholder="0.00" step="0.01" min="0">
+        </div>
+        <div class="form-group">
+            <label>Fecha de compra</label>
+            <input type="date" id="s-date">
+        </div>
+        <div style="display:flex;gap:8px;margin-top:20px;">
+            <button class="btn btn-secondary" style="flex:1" onclick="closeModal('add-stock-modal')">Cancelar</button>
+            <button class="btn btn-primary" style="flex:1" onclick="addStock()">Agregar</button>
+        </div>
+    </div>
+</div>
+
+<!-- Modal alerta -->
+<div class="modal-overlay" id="alert-modal">
+    <div class="modal">
+        <div class="modal-header">
+            <div class="modal-title">Nueva Alerta</div>
+            <button class="modal-close" onclick="closeModal('alert-modal')">×</button>
+        </div>
+        <div class="form-group">
+            <label>Ticker *</label>
+            <input type="text" id="al-ticker" placeholder="AAPL" style="text-transform:uppercase">
+        </div>
+        <div class="form-group">
+            <label>Tipo de alerta *</label>
+            <select id="al-type">
+                <option value="price_above">Precio supera un valor</option>
+                <option value="price_below">Precio cae bajo un valor</option>
+                <option value="change_pct_up">Sube X% en el día</option>
+                <option value="change_pct_down">Baja X% en el día</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label>Umbral (precio $ o %)</label>
+            <input type="number" id="al-threshold" placeholder="0.00" step="0.01">
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;">
+            <input type="checkbox" id="al-telegram" checked style="width:auto">
+            <label for="al-telegram" style="margin-bottom:0;font-weight:400">Notificar por Telegram</label>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:8px;">
+            <button class="btn btn-secondary" style="flex:1" onclick="closeModal('alert-modal')">Cancelar</button>
+            <button class="btn btn-primary" style="flex:1" onclick="createAlert()">Crear Alerta</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const PORTFOLIO_ID = {{ portfolio.id }};
+let distChart = null, perfChart = null;
+
+// Set today's date
+document.getElementById("s-date").valueAsDate = new Date();
+
+async function loadPortfolio() {
+    try {
+        const data = await api(`/api/portfolios/${PORTFOLIO_ID}`);
+        renderMetrics(data.summary || {});
+        renderStocks(data.stocks || []);
+        renderCharts(data.chart_data || {});
+        loadAlerts();
+    } catch(e) { toast("Error cargando portafolio: " + e.message, "error"); }
+}
+
+function renderMetrics(s) {
+    const fmt = v => "$" + v.toLocaleString("es", {minimumFractionDigits:2, maximumFractionDigits:2});
+    document.getElementById("m-current").textContent = fmt(s.current_value || 0);
+    document.getElementById("m-invested").textContent = fmt(s.total_invested || 0);
+    const gl = s.gain_loss || 0;
+    const glEl = document.getElementById("m-gl");
+    glEl.textContent = (gl >= 0 ? "+" : "") + fmt(gl);
+    glEl.className = "metric-value " + (gl >= 0 ? "positive" : "negative");
+    document.getElementById("m-gl-pct").textContent = (gl >= 0 ? "+" : "") + (s.gain_loss_pct || 0).toFixed(2) + "%";
+    document.getElementById("m-count").textContent = s.stock_count || 0;
+}
+
+function renderStocks(stocks) {
+    const tbody = document.getElementById("stocks-table");
+    if (!stocks.length) {
+        tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--text3);padding:30px;">Sin acciones. Agrega tu primera posición.</td></tr>`;
+        return;
+    }
+    const fmt = v => "$" + Number(v).toLocaleString("es", {minimumFractionDigits:2, maximumFractionDigits:2});
+    tbody.innerHTML = stocks.map(s => {
+        const gl = s.gain_loss || 0;
+        const cls = gl >= 0 ? "positive" : "negative";
+        return `
+        <tr>
+            <td><span class="ticker-badge">${s.ticker}</span></td>
+            <td>${s.company_name || '—'}</td>
+            <td class="mono">${Number(s.shares).toLocaleString("es", {maximumFractionDigits:4})}</td>
+            <td class="mono">${fmt(s.buy_price)}</td>
+            <td class="mono">${fmt(s.current_price)}</td>
+            <td class="mono fw-600">${fmt(s.current_value)}</td>
+            <td class="mono ${cls}">${(gl >= 0 ? "+" : "") + fmt(gl)}</td>
+            <td class="${cls} fw-600">${(gl >= 0 ? "+" : "") + s.gain_loss_pct.toFixed(2)}%</td>
+            <td>
+                <button class="btn btn-danger btn-sm btn-icon" onclick="deleteStock(${s.id})" title="Eliminar">🗑</button>
+            </td>
+        </tr>`;
+    }).join("");
+}
+
+function renderCharts(data) {
+    const colors = ["#4f8aff","#7c5cfc","#22d98b","#f5c842","#ff5a5a","#ff9f43","#00d2d3","#54a0ff"];
+    if (distChart) distChart.destroy();
+    if (perfChart) perfChart.destroy();
+
+    const ctx1 = document.getElementById("dist-chart").getContext("2d");
+    distChart = new Chart(ctx1, {
+        type: "doughnut",
+        data: {
+            labels: data.labels || [],
+            datasets: [{ data: data.values || [], backgroundColor: colors, borderWidth: 0 }]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { position: "right", labels: { color: "#8892b0", font: { size: 12 } } } },
+            cutout: "60%"
+        }
+    });
+
+    const ctx2 = document.getElementById("perf-chart").getContext("2d");
+    const barColors = (data.gains || []).map(g => g >= 0 ? "rgba(34,217,139,0.7)" : "rgba(255,90,90,0.7)");
+    perfChart = new Chart(ctx2, {
+        type: "bar",
+        data: {
+            labels: data.labels || [],
+            datasets: [{ label: "Rendimiento %", data: data.gains || [], backgroundColor: barColors, borderRadius: 4 }]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { grid: { color: "#2a3050" }, ticks: { color: "#8892b0" } },
+                y: { grid: { color: "#2a3050" }, ticks: { color: "#8892b0", callback: v => v + "%" } }
+            }
+        }
+    });
+}
+
+async function verifyTicker() {
+    const ticker = document.getElementById("s-ticker").value.trim().toUpperCase();
+    if (!ticker) return;
+    const info = document.getElementById("ticker-info");
+    info.textContent = "Verificando...";
+    try {
+        const data = await api(`/api/price/${ticker}`);
+        info.innerHTML = `✅ <strong>${data.name}</strong> — Precio: $${data.price} <span class="${data.change_pct >= 0 ? 'positive' : 'negative'}">(${data.change_pct >= 0 ? '+' : ''}${data.change_pct}%)</span>`;
+        document.getElementById("s-price").value = data.price;
+    } catch(e) {
+        info.innerHTML = `<span style="color:var(--red)">❌ Ticker no encontrado</span>`;
+    }
+}
+
+async function addStock() {
+    const ticker = document.getElementById("s-ticker").value.trim().toUpperCase();
+    const shares = parseFloat(document.getElementById("s-shares").value);
+    const price = parseFloat(document.getElementById("s-price").value);
+    const date = document.getElementById("s-date").value;
+
+    if (!ticker || !shares || !price) { toast("Completa todos los campos requeridos", "error"); return; }
+    try {
+        await api(`/api/portfolios/${PORTFOLIO_ID}/stocks`, {
+            method: "POST",
+            body: JSON.stringify({ticker, shares, buy_price: price, buy_date: date})
+        });
+        closeModal("add-stock-modal");
+        toast("Acción agregada", "success");
+        loadPortfolio();
+    } catch(e) { toast(e.message, "error"); }
+}
+
+async function deleteStock(sid) {
+    if (!confirm("¿Eliminar esta posición?")) return;
+    try {
+        await api(`/api/stocks/${sid}`, {method:"DELETE"});
+        toast("Posición eliminada", "success");
+        loadPortfolio();
+    } catch(e) { toast(e.message, "error"); }
+}
+
+async function refreshPrices() {
+    toast("Actualizando precios...", "info");
+    await loadPortfolio();
+    toast("Precios actualizados", "success");
+}
+
+async function loadAlerts() {
+    try {
+        const alerts = await api("/api/alerts");
+        const portAlerts = alerts.filter(a => a.portfolio_id == PORTFOLIO_ID);
+        const el = document.getElementById("alerts-list");
+        if (!portAlerts.length) {
+            el.innerHTML = `<div style="color:var(--text3);font-size:13px;">Sin alertas configuradas para este portafolio.</div>`;
+            return;
+        }
+        const typeLabels = {
+            price_above: "Precio ≥",
+            price_below: "Precio ≤",
+            change_pct_up: "Sube ≥",
+            change_pct_down: "Baja ≥"
+        };
+        el.innerHTML = portAlerts.map(a => `
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);">
+                <div>
+                    <span class="ticker-badge">${a.ticker}</span>
+                    <span style="margin-left:8px;font-size:13px;">${typeLabels[a.alert_type] || a.alert_type} <strong>$${a.threshold}</strong></span>
+                    ${a.notify_telegram ? '<span class="badge badge-blue" style="margin-left:6px">📱 TG</span>' : ''}
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;">
+                    ${a.last_triggered ? `<span style="font-size:11px;color:var(--text3)">Disparada: ${a.triggered_count}x</span>` : ''}
+                    <button class="btn btn-danger btn-sm btn-icon" onclick="deleteAlert(${a.id})">🗑</button>
+                </div>
+            </div>
+        `).join("");
+    } catch {}
+}
+
+async function createAlert() {
+    const ticker = document.getElementById("al-ticker").value.trim().toUpperCase();
+    const alertType = document.getElementById("al-type").value;
+    const threshold = parseFloat(document.getElementById("al-threshold").value);
+    const notifyTelegram = document.getElementById("al-telegram").checked;
+
+    if (!ticker || !threshold) { toast("Completa todos los campos", "error"); return; }
+    try {
+        await api("/api/alerts", {
+            method: "POST",
+            body: JSON.stringify({portfolio_id: PORTFOLIO_ID, ticker, alert_type: alertType, threshold, notify_telegram: notifyTelegram})
+        });
+        closeModal("alert-modal");
+        toast("Alerta creada", "success");
+        loadAlerts();
+    } catch(e) { toast(e.message, "error"); }
+}
+
+async function deleteAlert(aid) {
+    if (!confirm("¿Eliminar alerta?")) return;
+    await api(`/api/alerts/${aid}`, {method:"DELETE"});
+    toast("Alerta eliminada", "success");
+    loadAlerts();
+}
+
+async function analyzeWithAI() {
+    const panel = document.getElementById("ai-panel");
+    const result = document.getElementById("ai-result");
+    panel.style.display = "block";
+    result.textContent = "Analizando tu portafolio con IA...";
+    panel.scrollIntoView({behavior:"smooth"});
+    try {
+        const data = await api(`/api/ai/analyze/${PORTFOLIO_ID}`);
+        result.textContent = data.analysis;
+    } catch(e) { result.textContent = "Error: " + e.message; }
+}
+
+function openModal(id) { document.getElementById(id).classList.add("open"); }
+function closeModal(id) { document.getElementById(id).classList.remove("open"); }
+document.querySelectorAll(".modal-overlay").forEach(el => {
+    el.addEventListener("click", e => { if(e.target === el) closeModal(el.id); });
+});
+
+loadPortfolio();
+// Auto-refresh cada 90 segundos
+setInterval(loadPortfolio, 90000);
+</script>
+{% endblock %}
