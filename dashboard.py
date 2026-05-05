@@ -1517,7 +1517,11 @@ def admin_panel():
             f'<td><button onclick="toggleAdmin(\'{u["username"]}\',{str(u.get("es_admin",False)).lower()})" '
             f'style="padding:4px 12px;border-radius:980px;font-size:11px;font-family:DM Sans,sans-serif;cursor:pointer;'
             f'background:rgba(255,255,255,0.05);color:#6e6e73;border:1px solid rgba(255,255,255,0.1)">'
-            f'{"Quitar admin" if u.get("es_admin") else "Hacer admin"}</button></td>'
+            f'{"Quitar admin" if u.get("es_admin") else "Hacer admin"}</button>'
+            f'<button onclick="resetPassword(\'{u["username"]}\')" '
+            f'style="padding:4px 12px;border-radius:980px;font-size:11px;font-family:DM Sans,sans-serif;cursor:pointer;'
+            f'background:rgba(255,69,58,0.08);color:#ff453a;border:1px solid rgba(255,69,58,0.2)">'
+            f'Reset contraseña</button></td>'
             f'</tr>'
         )
     filas_ports = ''
@@ -1553,6 +1557,17 @@ def admin_panel():
         '<thead><tr><th>Nombre</th><th>Dueño</th><th>Perfil</th><th>Fecha inicio</th><th>Monitor</th></tr></thead>'
         f'<tbody>{filas_ports}</tbody></table></div></div>'
         '<script>'
+        'async function resetPassword(username) {'
+'  if (!confirm(`¿Resetear contraseña de ${username} a "cambiar123"?`)) return;'
+'  const r = await fetch("/api/admin/reset-password", {'
+'    method: "POST",'
+'    headers: {"Content-Type": "application/json"},'
+'    body: JSON.stringify({username})'
+'  });'
+'  const d = await r.json();'
+'  if (d.ok) alert(d.mensaje);'
+'  else alert("Error: " + d.error);'
+'}'
         'async function toggleAdmin(username, esAdmin) {'
         '  if (!confirm(`¿${esAdmin?"quitar":"dar"} permisos de admin a ${username}?`)) return;'
         '  const r = await fetch("/api/admin/toggle-admin", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username,es_admin:!esAdmin})});'
@@ -1562,6 +1577,16 @@ def admin_panel():
         '</script>'
     )
     return pagina('Administración', contenido)
+
+@app.route('/api/admin/reset-password', methods=['POST'])
+def api_reset_password():
+    if not session.get('es_admin'):
+        return jsonify({'ok': False, 'error': 'No autorizado'})
+    from gestor_portafolio import resetear_password
+    data     = request.get_json()
+    username = data.get('username')
+    ok = resetear_password(username)
+    return jsonify({'ok': ok, 'mensaje': f'Contraseña de {username} reseteada a: cambiar123'})
 
 @app.route('/api/admin/toggle-admin', methods=['POST'])
 def api_toggle_admin():

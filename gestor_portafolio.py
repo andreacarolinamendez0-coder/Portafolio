@@ -329,6 +329,14 @@ def get_usuario(username):
     usuarios = _leer_usuarios()
     return usuarios.get(username)
 
+def resetear_password(username, nueva_password="cambiar123"):
+    usuarios = _leer_usuarios()
+    if username not in usuarios:
+        return False
+    usuarios[username]["password_hash"] = hash_password(nueva_password)
+    _escribir_usuarios(usuarios)
+    return True
+
 def actualizar_usuario(username, campos):
     """Actualiza campos del usuario (email, telegram_chat_id, password_hash)."""
     usuarios = _leer_usuarios()
