@@ -24,9 +24,8 @@ def notificar_url_ngrok():
 threading.Thread(target=notificar_url_ngrok, daemon=True).start()
 
 app = Flask(__name__)
-app.secret_key = "portafolio_andrea_2026_secreto"
-GROQ_API_KEY   = "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"
-
+app.secret_key = os.environ.get("SECRET_KEY", "portafolio_andrea_2026_secreto")
+GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "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")
 # ── SVG logo átomo ──────────────────────────────────────────
 LOGO = (
     '<svg width="18" height="18" viewBox="0 0 30 30" fill="none">'

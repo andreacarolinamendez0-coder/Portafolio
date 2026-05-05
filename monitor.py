@@ -11,9 +11,8 @@ import warnings
 warnings.filterwarnings('ignore')
 
 CARPETA    = "datos/portafolios"
-TELEGRAM_TOKEN = "8332465511:AAH-PlentkDhWWNenLGOdvJCLC6OXNEnrA8"
-GROQ_API_KEY   = "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"
-
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8332465511:AAH-PlentkDhWWNenLGOdvJCLC6OXNEnrA8")
+GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "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")
 # ── Horario NYSE en hora Colombia (EST+1) ──
 def mercado_abierto():
     ahora = datetime.now()

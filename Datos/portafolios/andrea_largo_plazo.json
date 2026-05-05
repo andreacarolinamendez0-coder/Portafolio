@@ -19,7 +19,53 @@
     "NVDA": 0.2846084311066934,
     "WMT": 0.07246869224935323
   },
-  "aportes": [],
+  "aportes": [
+    {
+      "fecha": "2026-05-05",
+      "activo": "BTC-USD",
+      "monto_cop": 139359.0,
+      "precio_usd": 79827.90625,
+      "trm_dia": 3707.58,
+      "fracciones": 0.000471,
+      "tipo": "inicial"
+    },
+    {
+      "fecha": "2026-05-05",
+      "activo": "GOOGL",
+      "monto_cop": 150623.0,
+      "precio_usd": 383.25,
+      "trm_dia": 3707.58,
+      "fracciones": 0.106003,
+      "tipo": "inicial"
+    },
+    {
+      "fecha": "2026-05-05",
+      "activo": "LLY",
+      "monto_cop": 352941.0,
+      "precio_usd": 967.9299926757812,
+      "trm_dia": 3707.58,
+      "fracciones": 0.098349,
+      "tipo": "inicial"
+    },
+    {
+      "fecha": "2026-05-05",
+      "activo": "NVDA",
+      "monto_cop": 284608.0,
+      "precio_usd": 198.47999572753906,
+      "trm_dia": 3707.58,
+      "fracciones": 0.386759,
+      "tipo": "inicial"
+    },
+    {
+      "fecha": "2026-05-05",
+      "activo": "WMT",
+      "monto_cop": 72469.0,
+      "precio_usd": 130.3300018310547,
+      "trm_dia": 3707.58,
+      "fracciones": 0.149974,
+      "tipo": "inicial"
+    }
+  ],
   "historial": [],
   "fecha_ultima_actualizacion": "2026-05-04 20:41"
 }

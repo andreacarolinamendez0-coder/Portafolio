@@ -280,6 +280,72 @@
         "ganancia_total": 31407.0,
         "rentabilidad_total": 3.14
       }
+    },
+    {
+      "fecha": "2026-05-05",
+      "hora": "16:00",
+      "macro": {
+        "trm": 3707.58,
+        "trm_cambio": 1.3,
+        "inf_col": 4.9,
+        "inf_usa": 3.49,
+        "risk_free": 3.7,
+        "banrep": 11.25,
+        "cdt": 10.5
+      },
+      "posiciones": [
+        {
+          "activo": "NVDA",
+          "fracciones": 0.4265,
+          "precio_usd": 198.48,
+          "valor_cop": 313825.0,
+          "invertido": 330082.0,
+          "ganancia": -16256.0,
+          "rentabilidad": -4.92
+        },
+        {
+          "activo": "LLY",
+          "fracciones": 0.0962,
+          "precio_usd": 967.93,
+          "valor_cop": 345389.0,
+          "invertido": 305423.0,
+          "ganancia": 39966.0,
+          "rentabilidad": 13.09
+        },
+        {
+          "activo": "BTC-USD",
+          "fracciones": 0.0005,
+          "precio_usd": 79827.91,
+          "valor_cop": 152128.0,
+          "invertido": 142381.0,
+          "ganancia": 9747.0,
+          "rentabilidad": 6.85
+        },
+        {
+          "activo": "GOOGL",
+          "fracciones": 0.1116,
+          "precio_usd": 383.25,
+          "valor_cop": 158536.0,
+          "invertido": 141699.0,
+          "ganancia": 16837.0,
+          "rentabilidad": 11.88
+        },
+        {
+          "activo": "WMT",
+          "fracciones": 0.1719,
+          "precio_usd": 130.33,
+          "valor_cop": 83058.0,
+          "invertido": 79630.0,
+          "ganancia": 3428.0,
+          "rentabilidad": 4.3
+        }
+      ],
+      "resumen": {
+        "total_invertido": 999214.0,
+        "total_valor": 1052936.0,
+        "ganancia_total": 53721.0,
+        "rentabilidad_total": 5.38
+      }
     }
   ],
   "fecha_ultima_actualizacion": "2026-04-30 15:32",
