@@ -1082,18 +1082,162 @@ def api_generar_propuesta(archivo):
                 f'<button onclick="accionPropuesta(\'reemplazar\')" style="padding:10px 20px;border-radius:10px;font-size:13px;font-family:DM Sans,sans-serif;cursor:pointer;background:rgba(0,113,227,0.15);color:#4da3ff;border:1px solid rgba(0,113,227,0.3)">Aplicar a este portafolio</button>'
                 f'<button onclick="accionPropuesta(\'nuevo\')" style="padding:10px 20px;border-radius:10px;font-size:13px;font-family:DM Sans,sans-serif;cursor:pointer;background:rgba(255,255,255,0.05);color:#6e6e73;border:1px solid rgba(255,255,255,0.08)">Crear portafolio adicional</button></div>')
         dca_html = f'<span>DCA: <strong style="color:#f5f5f7">${aporte_dca:,.0f} COP</strong></span>' if aporte_dca > 0 else ''
+
+        # Construir filas editables
+        pesos_dict = pesos.to_dict()
+        filas_editables = ''
+        for a, v in sorted(pesos_dict.items(), key=lambda x: x[1], reverse=True):
+            pct = round(v * 100, 1)
+            filas_editables += (
+                f'<div class="fila-activo" data-ticker="{a}" style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.06)">'
+                f'<span style="color:#f5f5f7;font-weight:500;width:80px;font-family:monospace">{a}</span>'
+                f'<div style="flex:1;background:rgba(0,113,227,0.15);border-radius:980px;height:6px;overflow:hidden">'
+                f'<div class="barra-peso" style="background:#0071e3;height:100%;width:{pct}%;transition:width 0.3s"></div></div>'
+                f'<input type="number" class="input-peso" value="{pct}" min="0" max="100" step="0.1" '
+                f'style="width:65px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);'
+                f'border-radius:6px;padding:4px 8px;color:#f5f5f7;font-size:12px;font-family:monospace;text-align:right" '
+                f'oninput="actualizarPesos()">'
+                f'<span style="color:#6e6e73;font-size:11px">%</span>'
+                f'<button onclick="quitarActivo(this)" style="background:rgba(255,69,58,0.1);border:1px solid rgba(255,69,58,0.2);'
+                f'border-radius:6px;padding:3px 8px;cursor:pointer;color:#ff453a;font-size:11px">✕</button>'
+                f'</div>'
+            )
+
         html = (
-            f'<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.07);border-radius:14px;padding:16px;margin-top:8px">'
-            f'<p style="color:#6e6e73;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;margin:0 0 12px">Propuesta optimizada · {perfil.upper()}</p>'
-            f'{filas}{reporte_html}'
+            f'<div id="editor-composicion" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.07);border-radius:14px;padding:16px;margin-top:8px">'
+            f'<p style="color:#6e6e73;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;margin:0 0 4px">Propuesta optimizada · {perfil.upper()}</p>'
+            f'<p style="color:#4a5578;font-size:11px;margin:0 0 14px">Puedes editar los pesos, quitar activos o agregar nuevos antes de aplicar</p>'
+
+            # Filas editables
+            f'<div id="lista-activos">{filas_editables}</div>'
+
+            # Agregar activo nuevo
+            f'<div style="margin-top:14px;padding:12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:10px">'
+            f'<p style="color:#6e6e73;font-size:11px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.05em">+ Agregar activo</p>'
+            f'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+            f'<input type="text" id="nuevo-ticker" placeholder="Ticker (ej: SCHD, BRK-B)" '
+            f'style="width:160px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);'
+            f'border-radius:6px;padding:6px 10px;color:#f5f5f7;font-size:12px;font-family:monospace" '
+            f'oninput="this.value=this.value.toUpperCase()">'
+            f'<input type="number" id="nuevo-peso" placeholder="%" min="0" max="100" step="0.1" '
+            f'style="width:70px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);'
+            f'border-radius:6px;padding:6px 10px;color:#f5f5f7;font-size:12px;text-align:right">'
+            f'<button onclick="agregarActivo()" '
+            f'style="padding:6px 14px;border-radius:6px;background:rgba(0,113,227,0.15);color:#4da3ff;'
+            f'border:1px solid rgba(0,113,227,0.3);cursor:pointer;font-size:12px;font-family:DM Sans,sans-serif">'
+            f'Agregar</button>'
+            f'<span id="ticker-status" style="font-size:11px;color:#6e6e73"></span>'
+            f'</div></div>'
+
+            # Total y validación
+            f'<div style="margin-top:12px;display:flex;align-items:center;justify-content:space-between">'
+            f'<span style="font-size:13px;color:#6e6e73">Total: <strong id="total-pesos" style="color:#f5f5f7">100.0%</strong></span>'
+            f'<span id="alerta-total" style="font-size:11px;color:#ff453a;display:none">⚠️ Debe sumar 100%</span>'
+            f'</div>'
+
+            f'{reporte_html}'
             f'<div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.06);display:flex;gap:16px;font-size:12px;color:#6e6e73">'
             f'<span>Inversión: <strong style="color:#f5f5f7">${inversion:,.0f} COP</strong></span>'
             f'{dca_html}'
             f'<span>Horizonte: <strong style="color:#f5f5f7">{horizonte} años</strong></span>'
-            f'</div>{botones}</div>'
+            f'</div>'
+
+            # Botones
+            f'<div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap" id="botones-propuesta">'
+            + (f'<button onclick="aplicarComposicion(\'nuevo\')" style="padding:10px 20px;border-radius:10px;font-size:13px;font-family:DM Sans,sans-serif;cursor:pointer;background:rgba(0,113,227,0.15);color:#4da3ff;border:1px solid rgba(0,113,227,0.3)">Crear como portafolio adicional</button>' if tiene_inv else
+               f'<button onclick="aplicarComposicion(\'reemplazar\')" style="padding:10px 20px;border-radius:10px;font-size:13px;font-family:DM Sans,sans-serif;cursor:pointer;background:rgba(0,113,227,0.15);color:#4da3ff;border:1px solid rgba(0,113,227,0.3)">Aplicar a este portafolio</button>'
+               f'<button onclick="aplicarComposicion(\'nuevo\')" style="padding:10px 20px;border-radius:10px;font-size:13px;font-family:DM Sans,sans-serif;cursor:pointer;background:rgba(255,255,255,0.05);color:#6e6e73;border:1px solid rgba(255,255,255,0.08)">Crear portafolio adicional</button>')
+            + f'</div>'
+            f'</div>'
+
+            # JavaScript del editor
+            f'<script>'
+            f'function actualizarPesos(){{'
+            f'  const inputs=document.querySelectorAll(".input-peso");'
+            f'  let total=0;'
+            f'  inputs.forEach(i=>{{total+=parseFloat(i.value)||0;}});'
+            f'  total=Math.round(total*10)/10;'
+            f'  const el=document.getElementById("total-pesos");'
+            f'  el.textContent=total+"%";'
+            f'  el.style.color=Math.abs(total-100)<0.5?"#30d158":"#ff453a";'
+            f'  document.getElementById("alerta-total").style.display=Math.abs(total-100)<0.5?"none":"inline";'
+            f'  // Actualizar barras'
+            f'  document.querySelectorAll(".fila-activo").forEach(fila=>{{'
+            f'    const input=fila.querySelector(".input-peso");'
+            f'    const barra=fila.querySelector(".barra-peso");'
+            f'    if(barra)barra.style.width=(parseFloat(input.value)||0)+"%";'
+            f'  }});'
+            f'}}'
+
+            f'function quitarActivo(btn){{'
+            f'  btn.closest(".fila-activo").remove();'
+            f'  actualizarPesos();'
+            f'}}'
+
+            f'async function agregarActivo(){{'
+            f'  const ticker=document.getElementById("nuevo-ticker").value.trim().toUpperCase();'
+            f'  const peso=parseFloat(document.getElementById("nuevo-peso").value)||0;'
+            f'  const status=document.getElementById("ticker-status");'
+            f'  if(!ticker||peso<=0){{status.textContent="Completa ticker y peso";status.style.color="#ff453a";return;}}'
+            f'  // Verificar que no exista ya'
+            f'  const existentes=[...document.querySelectorAll(".fila-activo")].map(f=>f.dataset.ticker);'
+            f'  if(existentes.includes(ticker)){{status.textContent="Ya está en la lista";status.style.color="#ffd60a";return;}}'
+            f'  status.textContent="Verificando ticker...";status.style.color="#6e6e73";'
+            f'  try{{'
+            f'    const r=await fetch("/api/verificar-ticker/"+ticker);'
+            f'    const d=await r.json();'
+            f'    if(!d.valido){{status.textContent="❌ Ticker no encontrado";status.style.color="#ff453a";return;}}'
+            f'    status.textContent="✅ "+d.nombre+" — $"+d.precio;status.style.color="#30d158";'
+            f'    // Agregar fila'
+            f'    const lista=document.getElementById("lista-activos");'
+            f'    const div=document.createElement("div");'
+            f'    div.className="fila-activo"; div.dataset.ticker=ticker;'
+            f'    div.style.cssText="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.06)";'
+            f'    div.innerHTML=`<span style="color:#f5f5f7;font-weight:500;width:80px;font-family:monospace">${{ticker}}</span>`'
+            f'      +`<div style="flex:1;background:rgba(0,113,227,0.15);border-radius:980px;height:6px;overflow:hidden"><div class="barra-peso" style="background:#0071e3;height:100%;width:${{peso}}%;transition:width 0.3s"></div></div>`'
+            f'      +`<input type="number" class="input-peso" value="${{peso}}" min="0" max="100" step="0.1" oninput="actualizarPesos()" style="width:65px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:4px 8px;color:#f5f5f7;font-size:12px;font-family:monospace;text-align:right">`'
+            f'      +`<span style="color:#6e6e73;font-size:11px">%</span>`'
+            f'      +`<button onclick="quitarActivo(this)" style="background:rgba(255,69,58,0.1);border:1px solid rgba(255,69,58,0.2);border-radius:6px;padding:3px 8px;cursor:pointer;color:#ff453a;font-size:11px">✕</button>`'
+            f'      +(d.nuevo?`<span style="font-size:10px;color:#ffd60a;padding:2px 6px;border-radius:4px;background:rgba(255,214,10,0.1);border:1px solid rgba(255,214,10,0.2)">Nuevo</span>`:"");'
+            f'    lista.appendChild(div);'
+            f'    actualizarPesos();'
+            f'    document.getElementById("nuevo-ticker").value="";'
+            f'    document.getElementById("nuevo-peso").value="";'
+            f'  }}catch(e){{status.textContent="Error verificando";status.style.color="#ff453a";}}'
+            f'}}'
+
+            f'function obtenerPesosActuales(){{'
+            f'  const pesos={{}};'
+            f'  document.querySelectorAll(".fila-activo").forEach(fila=>{{'
+            f'    const ticker=fila.dataset.ticker;'
+            f'    const peso=parseFloat(fila.querySelector(".input-peso").value)||0;'
+            f'    if(ticker&&peso>0)pesos[ticker]=Math.round(peso*10)/10;'
+            f'  }});'
+            f'  return pesos;'
+            f'}}'
+
+            f'async function aplicarComposicion(tipo){{'
+            f'  const total=parseFloat(document.getElementById("total-pesos").textContent);'
+            f'  if(Math.abs(total-100)>0.5){{alert("Los pesos deben sumar 100%. Actualmente suman "+total+"%");return;}}'
+            f'  const pesosActuales=obtenerPesosActuales();'
+            f'  const pesosNormalizados={{}};'
+            f'  Object.entries(pesosActuales).forEach(([k,v])=>pesosNormalizados[k]=v/100);'
+            f'  const btns=document.querySelectorAll("#botones-propuesta button");'
+            f'  btns.forEach(b=>{{b.disabled=true;b.textContent="Guardando..."}});'
+            f'  try{{'
+            f'    const r=await fetch("/api/aplicar-propuesta/{archivo}",{{method:"POST",'
+            f'      headers:{{"Content-Type":"application/json"}},'
+            f'      body:JSON.stringify({{...window.propuestaActual,tipo,pesos:pesosNormalizados}})}});'
+            f'    const d=await r.json();'
+            f'    if(d.ok){{msgBot("✅ "+d.mensaje+" Redirigiendo...");if(d.redirigir)setTimeout(()=>window.location.href=d.redirigir,1800);}}'
+            f'    else{{msgBot("❌ "+d.error);btns.forEach(b=>b.disabled=false);}}'
+            f'  }}catch(e){{msgBot("Error de conexión.");btns.forEach(b=>b.disabled=false);}}'
+            f'}}'
+            f'</script>'
         )
+
         return jsonify({'ok': True, 'html': html, 'propuesta': {
-            'pesos': pesos.to_dict(), 'perfil': perfil, 'inversion': inversion,
+            'pesos': pesos_dict, 'perfil': perfil, 'inversion': inversion,
             'aporte_dca': aporte_dca, 'frecuencia_meses': freq, 'horizonte': horizonte, 'archivo': archivo
         }})
     except Exception as e: return jsonify({'ok':False,'error':str(e)})
@@ -1844,6 +1988,66 @@ def fix_banrep():
         os.remove(ruta)
         return jsonify({'ok': True, 'mensaje': 'Archivo borrado. Ahora haz clic en Actualizar datos.'})
     return jsonify({'ok': False, 'mensaje': 'Archivo no encontrado'})
+
+@app.route('/api/verificar-ticker/<ticker>')
+@login_required if False else lambda f: f
+def api_verificar_ticker(ticker):
+    if not session.get('username'):
+        return jsonify({'valido': False})
+    try:
+        import yfinance as yf
+        from datetime import datetime, timedelta
+        hoy = datetime.now()
+        df  = yf.download(ticker, start=(hoy-timedelta(days=5)).strftime("%Y-%m-%d"),
+                          end=hoy.strftime("%Y-%m-%d"), interval="1d",
+                          auto_adjust=True, progress=False)
+        if df.empty:
+            return jsonify({'valido': False})
+        if hasattr(df.columns, 'get_level_values'):
+            df.columns = df.columns.get_level_values(0)
+        precio = round(float(df['Close'].iloc[-1]), 2)
+        # Intentar obtener nombre
+        try:
+            info   = yf.Ticker(ticker).info
+            nombre = info.get('shortName', ticker)
+        except:
+            nombre = ticker
+        # Verificar si ya está en el recolector
+        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+        precios_path = os.path.join(BASE_DIR, "datos", "precios", "precios.parquet")
+        es_nuevo = True
+        if os.path.exists(precios_path):
+            import pandas as pd
+            cols = pd.read_parquet(precios_path).columns.tolist()
+            es_nuevo = ticker not in cols
+        # Si es nuevo, agregarlo al parquet en background
+        if es_nuevo:
+            def descargar_historico(tk):
+                try:
+                    import pandas as pd
+                    hoy2   = datetime.now()
+                    inicio = (hoy2 - timedelta(days=365*10)).strftime("%Y-%m-%d")
+                    df2    = yf.download(tk, start=inicio, end=hoy2.strftime("%Y-%m-%d"),
+                                        interval="1d", auto_adjust=True, progress=False)
+                    if df2.empty:
+                        return
+                    if hasattr(df2.columns, 'get_level_values'):
+                        df2.columns = df2.columns.get_level_values(0)
+                    close = df2[['Close']].rename(columns={'Close': tk})
+                    if os.path.exists(precios_path):
+                        existente = pd.read_parquet(precios_path)
+                        if tk not in existente.columns:
+                            nuevo = existente.join(close, how='outer')
+                            nuevo.to_parquet(precios_path)
+                            print(f"✅ Histórico de {tk} agregado al recolector")
+                    else:
+                        close.to_parquet(precios_path)
+                except Exception as e:
+                    print(f"❌ Error descargando histórico de {tk}: {e}")
+            threading.Thread(target=descargar_historico, args=(ticker,), daemon=True).start()
+        return jsonify({'valido': True, 'precio': precio, 'nombre': nombre, 'nuevo': es_nuevo})
+    except Exception as e:
+        return jsonify({'valido': False, 'error': str(e)})
 
 @app.route('/api/recolector', methods=['POST'])
 def api_recolector():
