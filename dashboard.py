@@ -1540,13 +1540,28 @@ def config_view(archivo):
         f'<div class="card"><h3>Estado</h3><div style="margin:12px 0;color:#a1a1a6">Estado actual: {est}</div>{btn_act}</div>'
         '<div class="card" style="border-color:rgba(255,69,58,0.2)">'
         '<h3 style="color:#ff453a">Zona de peligro</h3>'
-        '<p style="color:#6e6e73;font-size:13px;margin-bottom:16px">Esta acción es permanente y no se puede deshacer.</p>'
+        '<p style="color:#6e6e73;font-size:13px;margin-bottom:16px">Estas acciones son permanentes y no se pueden deshacer.</p>'
         f'<button onclick="confirmarEliminar()" '
         'style="padding:8px 20px;border-radius:980px;font-size:12px;font-family:DM Sans,sans-serif;'
         'cursor:pointer;background:rgba(255,69,58,0.1);color:#ff453a;'
-        'border:1px solid rgba(255,69,58,0.3)">Eliminar portafolio</button>'
+        'border:1px solid rgba(255,69,58,0.3);margin-right:10px">Eliminar portafolio</button>'
+        '<button onclick="eliminarCuenta()" '
+        'style="padding:8px 20px;border-radius:980px;font-size:12px;font-family:DM Sans,sans-serif;'
+        'cursor:pointer;background:rgba(255,69,58,0.15);color:#ff453a;'
+        'border:1px solid rgba(255,69,58,0.4)">🗑 Eliminar mi cuenta</button>'
         '</div></div>'
         '<script>'
+        f'async function eliminarCuenta(){{'
+        f'  if(!confirm("¿Eliminar tu cuenta y TODOS tus portafolios? Esta acción no se puede deshacer.")){{'
+        f'    return;'
+        f'  }}'
+        f'  if(!confirm("Segunda confirmación: ¿realmente quieres eliminar tu cuenta?"))'
+        f'    return;'
+        f'  const r = await fetch("/api/eliminar-cuenta", {{method:"POST"}});'
+        f'  const d = await r.json();'
+        f'  if(d.ok) window.location.href = "/login";'
+        f'  else alert("Error: " + d.error);'
+        f'}}'
         f'function confirmarEliminar(){{'
         f'  if(confirm("¿Estás seguro? Esta acción eliminará el portafolio {portafolio["nombre"]} permanentemente.")){{'
         f'    if(confirm("Segunda confirmación: ¿realmente quieres eliminar {portafolio["nombre"]}?")){{'
@@ -1606,6 +1621,10 @@ def admin_panel():
             f'🔓 Desbloquear</button>'
             if u.get("bloqueado_hasta") else ''
             ) +
+            f'<button onclick="eliminarUsuario(\'{u["username"]}\')" '
+            f'style="padding:4px 12px;border-radius:980px;font-size:11px;font-family:DM Sans,sans-serif;cursor:pointer;'
+            f'background:rgba(255,69,58,0.06);color:#ff453a;border:1px solid rgba(255,69,58,0.15)">'
+            f'🗑 Eliminar</button>'
             f'</td>'
             f'</tr>'
         )
@@ -1704,6 +1723,18 @@ def admin_panel():
 '  if (d.ok) alert(d.mensaje);'
 '  else alert("Error: " + d.error);'
 '}'
+        'async function eliminarUsuario(username) {'
+        '  if (!confirm(`¿Eliminar la cuenta de ${username} y todos sus portafolios? Esta acción no se puede deshacer.`)) return;'
+        '  if (!confirm(`Segunda confirmación: ¿realmente quieres eliminar a ${username}?`)) return;'
+        '  const r = await fetch("/api/admin/eliminar-usuario", {'
+        '    method: "POST",'
+        '    headers: {"Content-Type": "application/json"},'
+        '    body: JSON.stringify({username})'
+        '  });'
+        '  const d = await r.json();'
+        '  if (d.ok) { alert(`✅ Usuario ${username} eliminado`); location.reload(); }'
+        '  else alert("Error: " + d.error);'
+        '}'
         'async function desbloquear(username) {'
         '  if (!confirm(`¿Desbloquear la cuenta de ${username}?`)) return;'
         '  const r = await fetch("/api/admin/desbloquear", {'
@@ -1756,6 +1787,36 @@ def api_toggle_admin():
 # ============================================================
 # APIs
 # ============================================================
+
+@app.route('/api/eliminar-cuenta', methods=['POST'])
+def api_eliminar_cuenta():
+    if not session.get('username'):
+        return jsonify({'ok': False, 'error': 'No autorizado'})
+    from gestor_portafolio import eliminar_usuario
+    username = session.get('username')
+    # El admin no puede eliminarse a sí mismo
+    if session.get('es_admin'):
+        return jsonify({'ok': False, 'error': 'El admin no puede eliminarse desde aquí. Hazlo desde el panel.'})
+    ok = eliminar_usuario(username)
+    if ok:
+        session.clear()
+    return jsonify({'ok': ok})
+
+@app.route('/api/admin/eliminar-usuario', methods=['POST'])
+def api_admin_eliminar_usuario():
+    if not session.get('es_admin'):
+        return jsonify({'ok': False, 'error': 'No autorizado'})
+    from gestor_portafolio import eliminar_usuario, registrar_actividad
+    data     = request.get_json()
+    username = data.get('username')
+    if username == session.get('username'):
+        return jsonify({'ok': False, 'error': 'No puedes eliminarte a ti mismo'})
+    ok = eliminar_usuario(username)
+    if ok:
+        registrar_actividad('eliminacion', username, detalle='Cuenta eliminada por admin',
+            ip=request.headers.get('X-Forwarded-For', request.remote_addr or '—').split(',')[0].strip(),
+            dispositivo=request.headers.get('User-Agent','—')[:120])
+    return jsonify({'ok': ok})
 
 @app.route('/api/eliminar-portafolio/<archivo>', methods=['POST'])
 def api_eliminar_portafolio(archivo):

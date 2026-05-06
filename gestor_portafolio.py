@@ -509,3 +509,27 @@ def registrar_actividad(tipo, username, email="", detalle="", ip="", dispositivo
     if len(logs) > 500:
         logs = logs[-500:]
     _escribir(ARCHIVO_LOGS_ACTIVIDAD, logs)
+
+def eliminar_usuario(username):
+    """Elimina el usuario y todos sus portafolios."""
+    usuarios = _leer_usuarios()
+    if username not in usuarios:
+        return False
+    # Eliminar portafolios del usuario
+    if os.path.exists(CARPETA_PORTAFOLIOS):
+        for archivo in os.listdir(CARPETA_PORTAFOLIOS):
+            if archivo.endswith('.json') and not archivo.startswith('monitor_'):
+                try:
+                    data = _leer(f"{CARPETA_PORTAFOLIOS}/{archivo}")
+                    if data.get('owner') == username:
+                        os.remove(f"{CARPETA_PORTAFOLIOS}/{archivo}")
+                        # Eliminar monitor si existe
+                        monitor = f"{CARPETA_PORTAFOLIOS}/monitor_{archivo}"
+                        if os.path.exists(monitor):
+                            os.remove(monitor)
+                except:
+                    continue
+    # Eliminar usuario
+    del usuarios[username]
+    _escribir_usuarios(usuarios)
+    return True
