@@ -996,7 +996,7 @@ def analista_view(archivo):
         f'    const d=await r.json();'
         f'    if(d.ok){{'
         f'      document.getElementById(tid).innerHTML=d.html;'
-        f'      if(d.propuesta)window.propuestaActual=d.propuesta;'
+        f'      if(d.propuesta){{window.propuestaActual=d.propuesta;iniciarEditor();}}'
         f'    }}'
         f'    else document.getElementById(tid).innerHTML="❌ "+d.error;'
         f'  }}catch(e){{document.getElementById(tid).innerHTML="Error al generar."}}'
@@ -1012,6 +1012,99 @@ def analista_view(archivo):
         f'  }}catch(e){{msgBot("Error de conexión.");btns.forEach(b=>b.disabled=false);}}'
         f'}};'
         f'</script></div>'
+        '<script>'
+        'function actualizarPesos(){'
+        '  var inputs=document.querySelectorAll("#lista-activos .input-peso");'
+        '  var total=0;'
+        '  inputs.forEach(function(i){total+=parseFloat(i.value)||0;});'
+        '  total=Math.round(total*10)/10;'
+        '  var el=document.getElementById("total-pesos");'
+        '  if(!el)return;'
+        '  el.textContent=total+"%";'
+        '  el.style.color=Math.abs(total-100)<0.5?"#30d158":"#ff453a";'
+        '  var alerta=document.getElementById("alerta-total");'
+        '  if(alerta)alerta.style.display=Math.abs(total-100)<0.5?"none":"inline";'
+        '  document.querySelectorAll("#lista-activos .fila-activo").forEach(function(fila){'
+        '    var inp=fila.querySelector(".input-peso");'
+        '    var barra=fila.querySelector(".barra-peso");'
+        '    if(barra)barra.style.width=(parseFloat(inp.value)||0)+"%";'
+        '  });'
+        '}'
+        'function quitarActivo(btn){'
+        '  btn.closest(".fila-activo").remove();'
+        '  actualizarPesos();'
+        '}'
+        'function obtenerPesosActuales(){'
+        '  var pesos={};'
+        '  document.querySelectorAll("#lista-activos .fila-activo").forEach(function(fila){'
+        '    var ticker=fila.dataset.ticker;'
+        '    var peso=parseFloat(fila.querySelector(".input-peso").value)||0;'
+        '    if(ticker&&peso>0)pesos[ticker]=Math.round(peso*10)/10;'
+        '  });'
+        '  return pesos;'
+        '}'
+        'async function agregarActivo(){'
+        '  var ticker=document.getElementById("nuevo-ticker").value.trim().toUpperCase();'
+        '  var peso=parseFloat(document.getElementById("nuevo-peso").value)||0;'
+        '  var status=document.getElementById("ticker-status");'
+        '  if(!ticker||peso<=0){status.textContent="Completa ticker y peso";status.style.color="#ff453a";return;}'
+        '  var existentes=[...document.querySelectorAll("#lista-activos .fila-activo")].map(function(f){return f.dataset.ticker;});'
+        '  if(existentes.includes(ticker)){status.textContent="Ya está en la lista";status.style.color="#ffd60a";return;}'
+        '  status.textContent="Verificando...";status.style.color="#6e6e73";'
+        '  try{'
+        '    var r=await fetch("/api/verificar-ticker/"+ticker);'
+        '    var d=await r.json();'
+        '    if(!d.valido){status.textContent="❌ Ticker no encontrado";status.style.color="#ff453a";return;}'
+        '    status.textContent="✅ "+d.nombre+" — $"+d.precio;status.style.color="#30d158";'
+        '    var lista=document.getElementById("lista-activos");'
+        '    var div=document.createElement("div");'
+        '    div.className="fila-activo";div.dataset.ticker=ticker;'
+        '    div.style.cssText="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.06)";'
+        '    div.innerHTML="<span style=\'color:#f5f5f7;font-weight:500;width:80px;font-family:monospace;font-size:13px\'>"+ticker+"</span>"'
+        '      +"<div style=\'flex:1;background:rgba(0,113,227,0.15);border-radius:980px;height:6px;overflow:hidden\'><div class=\'barra-peso\' style=\'background:#0071e3;height:100%;width:"+peso+"%;transition:width 0.3s\'></div></div>"'
+        '      +"<input type=\'number\' class=\'input-peso\' value=\'"+peso+"\' min=\'0\' max=\'100\' step=\'0.1\' oninput=\'actualizarPesos()\' style=\'width:65px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:4px 8px;color:#f5f5f7;font-size:12px;font-family:monospace;text-align:right\'>"'
+        '      +"<span style=\'color:#6e6e73;font-size:11px\'>%</span>"'
+        '      +"<button onclick=\'quitarActivo(this)\' style=\'background:rgba(255,69,58,0.1);border:1px solid rgba(255,69,58,0.2);border-radius:6px;padding:3px 8px;cursor:pointer;color:#ff453a;font-size:11px\'>✕</button>"'
+        '      +(d.nuevo?"<span style=\'font-size:10px;color:#ffd60a;padding:2px 6px;border-radius:4px;background:rgba(255,214,10,0.1);border:1px solid rgba(255,214,10,0.2)\'>Nuevo ⏳</span>":"");'
+        '    lista.appendChild(div);'
+        '    actualizarPesos();'
+        '    document.getElementById("nuevo-ticker").value="";'
+        '    document.getElementById("nuevo-peso").value="";'
+        '  }catch(e){status.textContent="Error verificando";status.style.color="#ff453a";}'
+        '}'
+        'async function aplicarComposicion(tipo){'
+        '  var total=parseFloat(document.getElementById("total-pesos").textContent);'
+        '  if(Math.abs(total-100)>0.5){alert("Los pesos deben sumar 100%. Ahora suman "+total+"%");return;}'
+        '  var pesosActuales=obtenerPesosActuales();'
+        '  var pesosNorm={};'
+        '  Object.entries(pesosActuales).forEach(function(kv){pesosNorm[kv[0]]=kv[1]/100;});'
+        '  var btns=document.querySelectorAll("#botones-propuesta button");'
+        '  btns.forEach(function(b){b.disabled=true;b.textContent="Guardando...";});'
+        '  try{'
+        '    var payload=Object.assign({},window.propuestaActual,{tipo:tipo,pesos:pesosNorm});'
+        '    var r=await fetch("/api/aplicar-propuesta/"+window.propuestaActual.archivo,{'
+        '      method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});'
+        '    var d=await r.json();'
+        '    if(d.ok){msgBot("✅ "+d.mensaje+" Redirigiendo...");if(d.redirigir)setTimeout(function(){window.location.href=d.redirigir;},1800);}'
+        '    else{msgBot("❌ "+d.error);btns.forEach(function(b){b.disabled=false;});}'
+        '  }catch(e){msgBot("Error de conexión.");btns.forEach(function(b){b.disabled=false;});}'
+        '}'
+        'function iniciarEditor(){'
+        '  document.querySelectorAll("#lista-activos .input-peso").forEach(function(i){'
+        '    i.addEventListener("input",actualizarPesos);'
+        '  });'
+        '  document.querySelectorAll("#lista-activos .btn-quitar").forEach(function(b){'
+        '    b.addEventListener("click",function(){quitarActivo(this);});'
+        '  });'
+        '  var btnA=document.getElementById("btn-agregar");'
+        '  if(btnA)btnA.addEventListener("click",agregarActivo);'
+        '  var btnR=document.getElementById("btn-reemplazar");'
+        '  var btnN=document.getElementById("btn-nuevo");'
+        '  if(btnR)btnR.addEventListener("click",function(){aplicarComposicion("reemplazar");});'
+        '  if(btnN)btnN.addEventListener("click",function(){aplicarComposicion("nuevo");});'
+        '  actualizarPesos();'
+        '}'
+        '</script>'
     )
     return pagina(f'Analista — {portafolio["nombre"]}', contenido)
 
@@ -1131,119 +1224,7 @@ def api_generar_propuesta(archivo):
             'aporte_dca': aporte_dca, 'frecuencia_meses': freq,
             'horizonte': horizonte, 'archivo': archivo
         })
-
-        # JavaScript separado y limpio
-        js = """
-<script>
-(function() {
-  // Guardar propuesta base
-  var propuestaBase = """ + propuesta_json + """;
-  window.propuestaActual = propuestaBase;
-
-  function actualizarPesos() {
-    var inputs = document.querySelectorAll('#lista-activos .input-peso');
-    var total = 0;
-    inputs.forEach(function(i) { total += parseFloat(i.value) || 0; });
-    total = Math.round(total * 10) / 10;
-    var el = document.getElementById('total-pesos');
-    el.textContent = total + '%';
-    el.style.color = Math.abs(total - 100) < 0.5 ? '#30d158' : '#ff453a';
-    document.getElementById('alerta-total').style.display = Math.abs(total - 100) < 0.5 ? 'none' : 'inline';
-    document.querySelectorAll('#lista-activos .fila-activo').forEach(function(fila) {
-      var inp = fila.querySelector('.input-peso');
-      var barra = fila.querySelector('.barra-peso');
-      if (barra) barra.style.width = (parseFloat(inp.value) || 0) + '%';
-    });
-  }
-
-  function quitarActivo(btn) {
-    btn.closest('.fila-activo').remove();
-    actualizarPesos();
-  }
-
-  function obtenerPesosActuales() {
-    var pesos = {};
-    document.querySelectorAll('#lista-activos .fila-activo').forEach(function(fila) {
-      var ticker = fila.dataset.ticker;
-      var peso = parseFloat(fila.querySelector('.input-peso').value) || 0;
-      if (ticker && peso > 0) pesos[ticker] = Math.round(peso * 10) / 10;
-    });
-    return pesos;
-  }
-
-  async function agregarActivo() {
-    var ticker = document.getElementById('nuevo-ticker').value.trim().toUpperCase();
-    var peso = parseFloat(document.getElementById('nuevo-peso').value) || 0;
-    var status = document.getElementById('ticker-status');
-    if (!ticker || peso <= 0) { status.textContent = 'Completa ticker y peso'; status.style.color = '#ff453a'; return; }
-    var existentes = [...document.querySelectorAll('#lista-activos .fila-activo')].map(function(f) { return f.dataset.ticker; });
-    if (existentes.includes(ticker)) { status.textContent = 'Ya está en la lista'; status.style.color = '#ffd60a'; return; }
-    status.textContent = 'Verificando...'; status.style.color = '#6e6e73';
-    try {
-      var r = await fetch('/api/verificar-ticker/' + ticker);
-      var d = await r.json();
-      if (!d.valido) { status.textContent = '❌ Ticker no encontrado'; status.style.color = '#ff453a'; return; }
-      status.textContent = '✅ ' + d.nombre + ' — $' + d.precio; status.style.color = '#30d158';
-      var lista = document.getElementById('lista-activos');
-      var div = document.createElement('div');
-      div.className = 'fila-activo';
-      div.dataset.ticker = ticker;
-      div.style.cssText = 'display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.06)';
-      div.innerHTML = '<span style="color:#f5f5f7;font-weight:500;width:80px;font-family:monospace;font-size:13px">' + ticker + '</span>'
-        + '<div style="flex:1;background:rgba(0,113,227,0.15);border-radius:980px;height:6px;overflow:hidden"><div class="barra-peso" style="background:#0071e3;height:100%;width:' + peso + '%;transition:width 0.3s"></div></div>'
-        + '<input type="number" class="input-peso" value="' + peso + '" min="0" max="100" step="0.1" style="width:65px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:4px 8px;color:#f5f5f7;font-size:12px;font-family:monospace;text-align:right">'
-        + '<span style="color:#6e6e73;font-size:11px">%</span>'
-        + '<button class="btn-quitar" style="background:rgba(255,69,58,0.1);border:1px solid rgba(255,69,58,0.2);border-radius:6px;padding:3px 8px;cursor:pointer;color:#ff453a;font-size:11px">✕</button>'
-        + (d.nuevo ? '<span style="font-size:10px;color:#ffd60a;padding:2px 6px;border-radius:4px;background:rgba(255,214,10,0.1);border:1px solid rgba(255,214,10,0.2)">Nuevo ⏳</span>' : '');
-      lista.appendChild(div);
-      div.querySelector('.input-peso').addEventListener('input', actualizarPesos);
-      div.querySelector('.btn-quitar').addEventListener('click', function() { quitarActivo(this); });
-      actualizarPesos();
-      document.getElementById('nuevo-ticker').value = '';
-      document.getElementById('nuevo-peso').value = '';
-    } catch(e) { status.textContent = 'Error verificando'; status.style.color = '#ff453a'; }
-  }
-
-  async function aplicarComposicion(tipo) {
-    var total = parseFloat(document.getElementById('total-pesos').textContent);
-    if (Math.abs(total - 100) > 0.5) { alert('Los pesos deben sumar 100%. Ahora suman ' + total + '%'); return; }
-    var pesosActuales = obtenerPesosActuales();
-    var pesosNorm = {};
-    Object.entries(pesosActuales).forEach(function(kv) { pesosNorm[kv[0]] = Math.round(kv[1]) / 100; });
-    var btns = document.querySelectorAll('#botones-propuesta button');
-    btns.forEach(function(b) { b.disabled = true; b.textContent = 'Guardando...'; });
-    try {
-      var payload = Object.assign({}, window.propuestaActual, { tipo: tipo, pesos: pesosNorm });
-      var r = await fetch('/api/aplicar-propuesta/' + propuestaBase.archivo, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      var d = await r.json();
-      if (d.ok) { msgBot('✅ ' + d.mensaje + ' Redirigiendo...'); if (d.redirigir) setTimeout(function() { window.location.href = d.redirigir; }, 1800); }
-      else { msgBot('❌ ' + d.error); btns.forEach(function(b) { b.disabled = false; }); }
-    } catch(e) { msgBot('Error de conexión.'); btns.forEach(function(b) { b.disabled = false; }); }
-  }
-
-  // Eventos iniciales
-  document.querySelectorAll('#lista-activos .input-peso').forEach(function(i) {
-    i.addEventListener('input', actualizarPesos);
-  });
-  document.querySelectorAll('#lista-activos .btn-quitar').forEach(function(b) {
-    b.addEventListener('click', function() { quitarActivo(this); });
-  });
-  document.getElementById('btn-agregar').addEventListener('click', agregarActivo);
-
-  var btnR = document.getElementById('btn-reemplazar');
-  var btnN = document.getElementById('btn-nuevo');
-  if (btnR) btnR.addEventListener('click', function() { aplicarComposicion('reemplazar'); });
-  if (btnN) btnN.addEventListener('click', function() { aplicarComposicion('nuevo'); });
-
-  actualizarPesos();
-})();
-</script>
-"""
-        return jsonify({'ok': True, 'html': html + js, 'propuesta': {
+        return jsonify({'ok': True, 'html': html, 'propuesta': {
             'pesos': pesos_dict, 'perfil': perfil, 'inversion': inversion,
             'aporte_dca': aporte_dca, 'frecuencia_meses': freq,
             'horizonte': horizonte, 'archivo': archivo
