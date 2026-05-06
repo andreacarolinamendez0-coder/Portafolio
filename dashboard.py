@@ -13,7 +13,9 @@ import subprocess, requests, time, threading
 def arrancar_monitor():
     time.sleep(15)
     from monitor import iniciar_monitor
+    from scheduler import iniciar_scheduler
     iniciar_monitor()
+    iniciar_scheduler()
 
 threading.Thread(target=arrancar_monitor, daemon=True).start()
 
@@ -618,7 +620,8 @@ def register():
         '<input type="text" name="telegram" class="form-input" placeholder="ej: 6999614895">'
         '<p style="color:#3d3d3f;font-size:11px;margin-top:6px">Envía /start a @userinfobot para obtener tu ID</p>'
         '</div>'
-        '<button type="submit" class="btn btn-primary" style="border-radius:12px;font-size:0.9rem;padding:12px">Crear cuenta</button>'
+        '<button type="submit" id="btn-registro" class="btn btn-primary" style="border-radius:12px;font-size:0.9rem;padding:12px" '
+        'onclick="this.disabled=true;this.textContent=\'Creando cuenta...\';this.form.submit()">Crear cuenta</button>'
         '</form></div>'
         '<div style="text-align:center;margin-top:18px">'
         '<a href="/login" style="color:#6e6e73;font-size:0.78rem;text-decoration:none">¿Ya tienes cuenta? Inicia sesión</a>'
