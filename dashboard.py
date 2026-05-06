@@ -948,8 +948,11 @@ def analista_view(archivo):
         f'  Ejemplo: "Quieres reducir el horizonte de 10 a 2 años — eso limita mucho el potencial. ¿Estás seguro?"\n'
         f'- Si el cambio tiene sentido, confirma brevemente lo que vas a recalcular\n'
         f'- Luego responde SOLO el JSON con los valores finales (mezcla de actuales + cambios):\n'
-        f'{{"accion":"analizar","perfil":"agresivo","inversion":1000000,"aporte_dca":500000,"frecuencia_meses":1,"horizonte":10,"es_nuevo":false}}\n\n'
-
+        f'IMPORTANTE: En actualizaciones SIEMPRE incluye el campo "activos" con los pesos finales de TODOS los activos.\n'
+        f'IMPORTANTE: Nunca pongas horizonte:0. Si no cambia, usa el valor actual: {portafolio.get("inversion_inicial", 1000000)}.\n'
+        f'Ejemplo JSON de actualización:\n'
+        f'{{"accion":"analizar","perfil":"conservador","inversion":1000000,"aporte_dca":200000,"frecuencia_meses":1,"horizonte":10,"es_nuevo":false,'
+        f'"activos":{{"WMT":0.294,"LLY":0.236,"XLK":0.176,"GOOGL":0.121,"MSFT":0.082,"VTI":0.091}}}}\n\n'
         f'REGLAS SIEMPRE:\n'
         f'- Una pregunta por mensaje máximo\n'
         f'- Respuestas cortas y directas\n'
@@ -957,6 +960,7 @@ def analista_view(archivo):
         f'- Tienes criterio propio: si algo no te parece bien, dilo antes de ejecutar\n'
         f'- NUNCA pidas información que ya tienes en los datos actuales del portafolio\n'
         f'- El JSON va al final, solo cuando tengas TODOS los datos listos'
+        f'IMPORTANTE: Nunca pongas horizonte:0. El horizonte actual del portafolio es desconocido si no está en los datos — pregúntalo si es necesario, pero nunca pongas 0.\n'
     )
 
     contenido = (
