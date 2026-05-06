@@ -8,6 +8,7 @@ import warnings
 warnings.filterwarnings('ignore')
 from styles import CSS
 import subprocess, requests, time, threading
+import resend
 
 def arrancar_monitor():
     time.sleep(15)
@@ -548,6 +549,34 @@ def register():
                 dispositivo = request.headers.get('User-Agent', '—')[:120]
                 registrar_actividad('registro_nuevo', username, email=email,
                     detalle='Nuevo usuario registrado', ip=ip, dispositivo=dispositivo)
+                # Email de bienvenida
+                try:
+                    resend.api_key = os.environ.get('RESEND_API_KEY', '')
+                    if resend.api_key and email:
+                        resend.Emails.send({
+                            "from": "onboarding@resend.dev",
+                            "to": email,
+                            "subject": "¡Bienvenido al Sistema de Portafolio!",
+                            "html": f"""
+                            <div style="font-family:sans-serif;max-width:500px;margin:0 auto;padding:32px;background:#0a0c10;color:#e8eaf2;border-radius:16px">
+                                <h1 style="font-size:1.5rem;margin-bottom:8px">👋 Hola, {username}</h1>
+                                <p style="color:#8892b0;margin-bottom:24px">Tu cuenta ha sido creada exitosamente.</p>
+                                <div style="background:#1d2235;border-radius:12px;padding:20px;margin-bottom:24px">
+                                    <p style="margin:0 0 8px"><strong>Usuario:</strong> {username}</p>
+                                    <p style="margin:0"><strong>Email:</strong> {email}</p>
+                                </div>
+                                <p style="color:#8892b0;font-size:13px">
+                                    Ya puedes crear tus portafolios, activar el monitor de mercado 
+                                    y usar el analista IA para optimizar tus inversiones.
+                                </p>
+                                <p style="color:#4a5578;font-size:11px;margin-top:24px">
+                                    Sistema de Portafolio de Inversión
+                                </p>
+                            </div>
+                            """
+                        })
+                except Exception as e:
+                    print(f"Error enviando email bienvenida: {e}")
                 return redirect(url_for('mis_portafolios'))
             else:
                 error = resultado
