@@ -232,8 +232,10 @@ def loop_scheduler():
 
     while True:
         try:
-            ahora = datetime.now()
-            # 8:00 AM hora Colombia
+            from datetime import timezone, timedelta
+            utc_minus5 = timezone(timedelta(hours=-5))
+            ahora = datetime.now(utc_minus5)
+            # 8:00 AM hora Colombia (UTC-5)
             if ahora.hour == 8 and ahora.minute == 0:
                 hoy = ahora.date()
                 if enviado_hoy != hoy:

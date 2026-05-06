@@ -2259,6 +2259,28 @@ def api_ticker_listo(ticker):
         except: pass
     return jsonify({'listo': listo})
 
+@app.route('/api/test-telegram')
+def api_test_telegram():
+    if not session.get('es_admin'):
+        return jsonify({'error': 'No autorizado'})
+    from gestor_portafolio import _leer_usuarios
+    from scheduler import enviar_resumenes_diarios
+    usuarios = _leer_usuarios()
+    info = []
+    for username, u in usuarios.items():
+        chat_id = u.get('telegram_chat_id', '').strip()
+        info.append({
+            'username': username,
+            'chat_id': chat_id if chat_id else '— sin configurar —'
+        })
+    # Intentar enviar
+    enviar_resumenes_diarios()
+    return jsonify({
+        'ok': True,
+        'mensaje': 'Resúmenes enviados. Revisa Telegram.',
+        'usuarios': info
+    })
+
 @app.route('/api/recolector', methods=['POST'])
 def api_recolector():
     try: subprocess.run(["python","recolector.py"],check=False,timeout=120); return jsonify({'ok':True})
