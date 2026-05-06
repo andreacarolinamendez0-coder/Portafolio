@@ -960,7 +960,7 @@ def analista_view(archivo):
         f'- Tienes criterio propio: si algo no te parece bien, dilo antes de ejecutar\n'
         f'- NUNCA pidas información que ya tienes en los datos actuales del portafolio\n'
         f'- El JSON va al final, solo cuando tengas TODOS los datos listos'
-        f'IMPORTANTE: Nunca pongas horizonte:0. El horizonte actual del portafolio es desconocido si no está en los datos — pregúntalo si es necesario, pero nunca pongas 0.\n'
+        f'IMPORTANTE: El horizonte debe ser un número razonable de años entre 1 y 30. Si no lo sabes, usa 10. Nunca pongas 0 ni números absurdos.\n'
         f'- Cuando generes el JSON FINAL, escríbelo SOLO, sin ningún texto antes ni después. Solo el JSON puro.\n'
     )
 
@@ -1295,6 +1295,9 @@ def api_generar_propuesta(archivo):
         aporte_dca = float(data.get('aporte_dca', 0))
         freq       = int(data.get('frecuencia_meses', 1))
         horizonte  = int(data.get('horizonte', 10))
+        # Sanity check — el analista a veces manda valores absurdos
+        if horizonte <= 0 or horizonte > 50:
+            horizonte = 10
         portafolio = leer_portafolio(archivo)
         tiene_inv  = len(portafolio.get('aportes',[])) > 0
         precios, trm, inf_usa, inf_col, risk_free, tasa_cdt = cargar_datos()
