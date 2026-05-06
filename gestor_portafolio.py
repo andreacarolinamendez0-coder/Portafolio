@@ -340,13 +340,66 @@ def registrar_usuario(username, email, password, telegram_chat_id=""):
     return True
 
 def login_usuario(email, password):
-    """Retorna el dict del usuario si las credenciales son válidas, None si no."""
+    from datetime import datetime, timedelta
     usuarios = _leer_usuarios()
     ph = hash_password(password)
-    for u in usuarios.values():
-        if u["email"] == email and u["password_hash"] == ph:
-            return u
+
+    # Buscar usuario por email
+    usuario_key = None
+    for key, u in usuarios.items():
+        if u["email"] == email:
+            usuario_key = key
+            break
+
+    if not usuario_key:
+        return None
+
+    u = usuarios[usuario_key]
+
+    # Verificar si está bloqueado
+    bloqueado_hasta = u.get("bloqueado_hasta")
+    if bloqueado_hasta:
+        hasta = datetime.strptime(bloqueado_hasta, "%Y-%m-%d %H:%M:%S")
+        if datetime.now() < hasta:
+            minutos = int((hasta - datetime.now()).total_seconds() / 60) + 1
+            return {"bloqueado": True, "minutos": minutos, "username": u["username"]}
+        else:
+            # Desbloquear automáticamente si ya pasó el tiempo
+            usuarios[usuario_key]["bloqueado_hasta"] = None
+            usuarios[usuario_key]["intentos_fallidos"] = 0
+            _escribir_usuarios(usuarios)
+
+    # Verificar contraseña
+    if u["password_hash"] == ph:
+        # Login exitoso — resetear intentos
+        usuarios[usuario_key]["intentos_fallidos"] = 0
+        usuarios[usuario_key]["bloqueado_hasta"]   = None
+        usuarios[usuario_key]["ultimo_login"]       = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        _escribir_usuarios(usuarios)
+        return u
+
+    # Contraseña incorrecta — sumar intento
+    intentos = u.get("intentos_fallidos", 0) + 1
+    usuarios[usuario_key]["intentos_fallidos"] = intentos
+
+    if intentos >= 5:
+        hasta = datetime.now() + timedelta(minutes=15)
+        usuarios[usuario_key]["bloqueado_hasta"] = hasta.strftime("%Y-%m-%d %H:%M:%S")
+        _escribir_usuarios(usuarios)
+        return {"bloqueado": True, "minutos": 15, "username": u["username"]}
+
+    _escribir_usuarios(usuarios)
     return None
+
+
+def desbloquear_usuario(username):
+    usuarios = _leer_usuarios()
+    if username not in usuarios:
+        return False
+    usuarios[username]["intentos_fallidos"] = 0
+    usuarios[username]["bloqueado_hasta"]   = None
+    _escribir_usuarios(usuarios)
+    return True
 
 def get_usuario(username):
     usuarios = _leer_usuarios()

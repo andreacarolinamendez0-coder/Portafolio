@@ -600,7 +600,7 @@ def login():
         usuario  = login_usuario(email, password)
         ip          = request.headers.get('X-Forwarded-For', request.remote_addr or '—').split(',')[0].strip()
         dispositivo = request.headers.get('User-Agent', '—')[:120]
-        if usuario:
+        if usuario and not usuario.get('bloqueado'):
             session['username'] = usuario['username']
             session['es_admin'] = usuario.get('es_admin', False)
             session.permanent   = True
@@ -616,9 +616,15 @@ def login():
             except: pass
             return redirect(url_for('mis_portafolios'))
         from gestor_portafolio import registrar_actividad
-        registrar_actividad('login_fail', email, email=email,
-            detalle='Contraseña incorrecta', ip=ip, dispositivo=dispositivo)
-        error = 'Email o contraseña incorrectos.'
+        if usuario and usuario.get('bloqueado'):
+            minutos = usuario.get('minutos', 15)
+            registrar_actividad('login_fail', usuario.get('username', email), email=email,
+                detalle=f'Cuenta bloqueada — {minutos} min restantes', ip=ip, dispositivo=dispositivo)
+            error = f'Cuenta bloqueada por demasiados intentos. Intenta en {minutos} minuto{"s" if minutos != 1 else ""}.'
+        else:
+            registrar_actividad('login_fail', email, email=email,
+                detalle='Contraseña incorrecta', ip=ip, dispositivo=dispositivo)
+            error = 'Email o contraseña incorrectos.'
     err_html = f'<div class="alert alert-error">{error}</div>' if error else ''
     contenido = (
         '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px">'
@@ -1547,14 +1553,23 @@ def admin_panel():
             f'<td>{n_ports}</td>'
             f'<td>{u.get("fecha_registro","—")}</td>'
             f'<td>{admin_badge}</td>'
-            f'<td><button onclick="toggleAdmin(\'{u["username"]}\',{str(u.get("es_admin",False)).lower()})" '
+            f'<td style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">'
+            f'<button onclick="toggleAdmin(\'{u["username"]}\',{str(u.get("es_admin",False)).lower()})" '
             f'style="padding:4px 12px;border-radius:980px;font-size:11px;font-family:DM Sans,sans-serif;cursor:pointer;'
             f'background:rgba(255,255,255,0.05);color:#6e6e73;border:1px solid rgba(255,255,255,0.1)">'
             f'{"Quitar admin" if u.get("es_admin") else "Hacer admin"}</button>'
             f'<button onclick="resetPassword(\'{u["username"]}\')" '
             f'style="padding:4px 12px;border-radius:980px;font-size:11px;font-family:DM Sans,sans-serif;cursor:pointer;'
             f'background:rgba(255,69,58,0.08);color:#ff453a;border:1px solid rgba(255,69,58,0.2)">'
-            f'Reset contraseña</button></td>'
+            f'Reset contraseña</button>'
+            + (
+            f'<button onclick="desbloquear(\'{u["username"]}\')" '
+            f'style="padding:4px 12px;border-radius:980px;font-size:11px;font-family:DM Sans,sans-serif;cursor:pointer;'
+            f'background:rgba(255,214,10,0.08);color:#ffd60a;border:1px solid rgba(255,214,10,0.2)">'
+            f'🔓 Desbloquear</button>'
+            if u.get("bloqueado_hasta") else ''
+            ) +
+            f'</td>'
             f'</tr>'
         )
     filas_ports = ''
@@ -1652,6 +1667,17 @@ def admin_panel():
 '  if (d.ok) alert(d.mensaje);'
 '  else alert("Error: " + d.error);'
 '}'
+        'async function desbloquear(username) {'
+        '  if (!confirm(`¿Desbloquear la cuenta de ${username}?`)) return;'
+        '  const r = await fetch("/api/admin/desbloquear", {'
+        '    method: "POST",'
+        '    headers: {"Content-Type": "application/json"},'
+        '    body: JSON.stringify({username})'
+        '  });'
+        '  const d = await r.json();'
+        '  if (d.ok) { alert(`✅ ${username} desbloqueado`); location.reload(); }'
+        '  else alert("Error: " + d.error);'
+        '}'
         'async function toggleAdmin(username, esAdmin) {'
         '  if (!confirm(`¿${esAdmin?"quitar":"dar"} permisos de admin a ${username}?`)) return;'
         '  const r = await fetch("/api/admin/toggle-admin", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username,es_admin:!esAdmin})});'
@@ -1671,6 +1697,15 @@ def api_reset_password():
     username = data.get('username')
     ok = resetear_password(username)
     return jsonify({'ok': ok, 'mensaje': f'Contraseña de {username} reseteada a: cambiar123'})
+
+@app.route('/api/admin/desbloquear', methods=['POST'])
+def api_desbloquear():
+    if not session.get('es_admin'):
+        return jsonify({'ok': False, 'error': 'No autorizado'})
+    from gestor_portafolio import desbloquear_usuario
+    data = request.get_json()
+    ok = desbloquear_usuario(data.get('username'))
+    return jsonify({'ok': ok})
 
 @app.route('/api/admin/toggle-admin', methods=['POST'])
 def api_toggle_admin():
