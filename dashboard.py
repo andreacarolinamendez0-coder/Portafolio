@@ -946,10 +946,13 @@ def analista_view(archivo):
         'style="flex:1;padding:10px 16px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);border-radius:980px;color:#f5f5f7;font-size:13px;font-family:DM Sans,sans-serif;outline:none">'
         '<button onclick="enviar()" style="padding:10px 20px;background:#0071e3;color:white;border:none;border-radius:980px;font-size:13px;font-family:DM Sans,sans-serif;cursor:pointer;font-weight:500">Enviar</button>'
         '</div></div>'
+
+        # ── Script principal del chat ──────────────────────────────
         f'<script>'
         f'let historial=[], propuestaActual=null;'
         f'const sistema=`{sistema.replace("`","'")}`; '
         f'const tieneInv={str(tiene_inv).lower()};'
+
         f'function msgBot(txt,id){{'
         f'  const chat=document.getElementById("chat-analista");'
         f'  const w=document.createElement("div"); w.style.cssText="display:flex;gap:10px;align-items:flex-start";'
@@ -959,6 +962,7 @@ def analista_view(archivo):
         f'  d.style.cssText="background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.08);border-radius:4px 14px 14px 14px;padding:12px 16px;max-width:85%;color:#a1a1a6;font-size:13px;line-height:1.6;margin:0";'
         f'  d.innerHTML=txt; w.appendChild(logo); w.appendChild(d); chat.appendChild(w); chat.scrollTop=chat.scrollHeight; return d;'
         f'}}'
+
         f'function msgUser(txt){{'
         f'  const chat=document.getElementById("chat-analista");'
         f'  const w=document.createElement("div"); w.style.cssText="display:flex;justify-content:flex-end";'
@@ -966,7 +970,9 @@ def analista_view(archivo):
         f'  d.style.cssText="background:#0071e3;border-radius:14px 4px 14px 14px;padding:12px 16px;max-width:85%;color:white;font-size:13px;line-height:1.6";'
         f'  d.textContent=txt; w.appendChild(d); chat.appendChild(w); chat.scrollTop=chat.scrollHeight;'
         f'}}'
+
         f'function enviarOpc(t){{document.getElementById("opc1").style.display="none";document.getElementById("opc2").style.display="none";enviar(t);}}'
+
         f'async function enviar(forzado){{'
         f'  const input=document.getElementById("analista-input");'
         f'  const txt=forzado||input.value.trim(); if(!txt)return;'
@@ -989,6 +995,7 @@ def analista_view(archivo):
         f'    if(!esJSON)document.getElementById(tid).innerHTML=resp;'
         f'  }}catch(e){{document.getElementById(tid).innerHTML="Error de conexión.";}}'
         f'}}'
+
         f'async function generarPropuesta(p){{'
         f'  const tid="prop"+Date.now(); msgBot("⏳ Optimizando portafolio... 1-2 minutos.",tid);'
         f'  try{{'
@@ -1001,110 +1008,228 @@ def analista_view(archivo):
         f'    else document.getElementById(tid).innerHTML="❌ "+d.error;'
         f'  }}catch(e){{document.getElementById(tid).innerHTML="Error al generar."}}'
         f'}}'
-        f'window.accionPropuesta=async function(tipo){{'
-        f'  const btns=document.querySelectorAll("[onclick^=\'accionPropuesta\']");'
-        f'  btns.forEach(b=>{{b.disabled=true;b.textContent="Guardando...";}});'
-        f'  try{{'
-        f'    const r=await fetch("/api/aplicar-propuesta/{archivo}",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{...window.propuestaActual,tipo}})}});'
-        f'    const d=await r.json();'
-        f'    if(d.ok){{msgBot("✅ "+d.mensaje+" Redirigiendo...");if(d.redirigir)setTimeout(()=>window.location.href=d.redirigir,1800);}}'
-        f'    else{{msgBot("❌ "+d.error);btns.forEach(b=>b.disabled=false);}}'
-        f'  }}catch(e){{msgBot("Error de conexión.");btns.forEach(b=>b.disabled=false);}}'
-        f'}};'
-        f'</script></div>'
+        f'</script>'
+
+        # ── Script del editor de composición ──────────────────────
         '<script>'
-        'function actualizarPesos(){'
-        '  var inputs=document.querySelectorAll("#lista-activos .input-peso");'
-        '  var total=0;'
-        '  inputs.forEach(function(i){total+=parseFloat(i.value)||0;});'
-        '  total=Math.round(total*10)/10;'
-        '  var el=document.getElementById("total-pesos");'
-        '  if(!el)return;'
-        '  el.textContent=total+"%";'
-        '  el.style.color=Math.abs(total-100)<0.5?"#30d158":"#ff453a";'
-        '  var alerta=document.getElementById("alerta-total");'
-        '  if(alerta)alerta.style.display=Math.abs(total-100)<0.5?"none":"inline";'
-        '  document.querySelectorAll("#lista-activos .fila-activo").forEach(function(fila){'
-        '    var inp=fila.querySelector(".input-peso");'
-        '    var barra=fila.querySelector(".barra-peso");'
-        '    if(barra)barra.style.width=(parseFloat(inp.value)||0)+"%";'
-        '  });'
+
+        # Estado global de tickers nuevos pendientes
+        'var tickersNuevosPendientes = new Set();'
+
+        # Bloquear botones de aplicar
+        'function bloquearAplicar(){'
+        '  var btns = document.querySelectorAll("#botones-propuesta button");'
+        '  btns.forEach(function(b){ b.disabled=true; b.style.opacity="0.4"; b.title="Recalcula las proyecciones antes de aplicar"; });'
+        '  var aviso = document.getElementById("aviso-recalcular");'
+        '  if(aviso) aviso.style.display="block";'
         '}'
+
+        # Desbloquear botones de aplicar
+        'function desbloquearAplicar(){'
+        '  var btns = document.querySelectorAll("#botones-propuesta button");'
+        '  btns.forEach(function(b){ b.disabled=false; b.style.opacity="1"; b.title=""; });'
+        '  var aviso = document.getElementById("aviso-recalcular");'
+        '  if(aviso) aviso.style.display="none";'
+        '}'
+
+        # Actualizar barras y total de pesos
+        'function actualizarPesos(){'
+        '  var inputs = document.querySelectorAll("#lista-activos .input-peso");'
+        '  var total = 0;'
+        '  inputs.forEach(function(i){ total += parseFloat(i.value)||0; });'
+        '  total = Math.round(total*10)/10;'
+        '  var el = document.getElementById("total-pesos");'
+        '  if(!el) return;'
+        '  el.textContent = total+"%";'
+        '  el.style.color = Math.abs(total-100)<0.5 ? "#30d158" : "#ff453a";'
+        '  var alerta = document.getElementById("alerta-total");'
+        '  if(alerta) alerta.style.display = Math.abs(total-100)<0.5 ? "none" : "inline";'
+        '  document.querySelectorAll("#lista-activos .fila-activo").forEach(function(fila){'
+        '    var inp = fila.querySelector(".input-peso");'
+        '    var barra = fila.querySelector(".barra-peso");'
+        '    if(barra) barra.style.width = (parseFloat(inp.value)||0)+"%";'
+        '  });'
+        '  bloquearAplicar();'
+        '}'
+
+        # Quitar activo de la lista
         'function quitarActivo(btn){'
-        '  btn.closest(".fila-activo").remove();'
+        '  var fila = btn.closest(".fila-activo");'
+        '  var ticker = fila.dataset.ticker;'
+        '  tickersNuevosPendientes.delete(ticker);'
+        '  fila.remove();'
         '  actualizarPesos();'
         '}'
+
+        # Obtener pesos actuales del DOM
         'function obtenerPesosActuales(){'
-        '  var pesos={};'
+        '  var pesos = {};'
         '  document.querySelectorAll("#lista-activos .fila-activo").forEach(function(fila){'
-        '    var ticker=fila.dataset.ticker;'
-        '    var peso=parseFloat(fila.querySelector(".input-peso").value)||0;'
-        '    if(ticker&&peso>0)pesos[ticker]=Math.round(peso*10)/10;'
+        '    var ticker = fila.dataset.ticker;'
+        '    var peso = parseFloat(fila.querySelector(".input-peso").value)||0;'
+        '    if(ticker && peso>0) pesos[ticker] = Math.round(peso*10)/10;'
         '  });'
         '  return pesos;'
         '}'
+
+        # Esperar a que el histórico de un ticker nuevo esté listo
+        'async function esperarHistorico(ticker){'
+        '  var status = document.getElementById("ticker-status");'
+        '  var intentos = 0;'
+        '  while(intentos < 30){'
+        '    await new Promise(function(r){ setTimeout(r, 2000); });'
+        '    try{'
+        '      var r = await fetch("/api/ticker-listo/"+ticker);'
+        '      var d = await r.json();'
+        '      if(d.listo){'
+        '        tickersNuevosPendientes.delete(ticker);'
+        '        var badge = document.getElementById("badge-"+ticker);'
+        '        if(badge) badge.textContent = "✅ Histórico listo";'
+        '        if(tickersNuevosPendientes.size === 0){'
+        '          status.textContent = "✅ Histórico descargado. Ahora recalcula las proyecciones.";'
+        '          status.style.color = "#30d158";'
+        '          var btnRC = document.getElementById("btn-recalcular");'
+        '          if(btnRC){ btnRC.disabled=false; btnRC.style.opacity="1"; }'
+        '        }'
+        '        return;'
+        '      }'
+        '      intentos++;'
+        '      status.textContent = "⏳ Descargando histórico de "+ticker+"... "+(intentos*2)+"s";'
+        '    }catch(e){ intentos++; }'
+        '  }'
+        '  status.textContent = "⚠️ Timeout descargando "+ticker+". Intenta recalcular igual.";'
+        '  status.style.color = "#ff453a";'
+        '  tickersNuevosPendientes.delete(ticker);'
+        '  var btnRC = document.getElementById("btn-recalcular");'
+        '  if(btnRC && tickersNuevosPendientes.size===0){ btnRC.disabled=false; btnRC.style.opacity="1"; }'
+        '}'
+
+        # Agregar activo nuevo
         'async function agregarActivo(){'
-        '  var ticker=document.getElementById("nuevo-ticker").value.trim().toUpperCase();'
-        '  var peso=parseFloat(document.getElementById("nuevo-peso").value)||0;'
-        '  var status=document.getElementById("ticker-status");'
-        '  if(!ticker||peso<=0){status.textContent="Completa ticker y peso";status.style.color="#ff453a";return;}'
-        '  var existentes=[...document.querySelectorAll("#lista-activos .fila-activo")].map(function(f){return f.dataset.ticker;});'
-        '  if(existentes.includes(ticker)){status.textContent="Ya está en la lista";status.style.color="#ffd60a";return;}'
-        '  status.textContent="Verificando...";status.style.color="#6e6e73";'
+        '  var ticker = document.getElementById("nuevo-ticker").value.trim().toUpperCase();'
+        '  var peso = parseFloat(document.getElementById("nuevo-peso").value)||0;'
+        '  var status = document.getElementById("ticker-status");'
+        '  if(!ticker||peso<=0){ status.textContent="Completa ticker y peso"; status.style.color="#ff453a"; return; }'
+        '  var existentes = [...document.querySelectorAll("#lista-activos .fila-activo")].map(function(f){ return f.dataset.ticker; });'
+        '  if(existentes.includes(ticker)){ status.textContent="Ya está en la lista"; status.style.color="#ffd60a"; return; }'
+        '  status.textContent="Verificando..."; status.style.color="#6e6e73";'
         '  try{'
-        '    var r=await fetch("/api/verificar-ticker/"+ticker);'
-        '    var d=await r.json();'
-        '    if(!d.valido){status.textContent="❌ Ticker no encontrado";status.style.color="#ff453a";return;}'
-        '    status.textContent="✅ "+d.nombre+" — $"+d.precio;status.style.color="#30d158";'
-        '    var lista=document.getElementById("lista-activos");'
-        '    var div=document.createElement("div");'
-        '    div.className="fila-activo";div.dataset.ticker=ticker;'
-        '    div.style.cssText="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.06)";'
-        '    div.innerHTML="<span style=\'color:#f5f5f7;font-weight:500;width:80px;font-family:monospace;font-size:13px\'>"+ticker+"</span>"'
+        '    var r = await fetch("/api/verificar-ticker/"+ticker);'
+        '    var d = await r.json();'
+        '    if(!d.valido){ status.textContent="❌ Ticker no encontrado"; status.style.color="#ff453a"; return; }'
+        '    var lista = document.getElementById("lista-activos");'
+        '    var div = document.createElement("div");'
+        '    div.className = "fila-activo"; div.dataset.ticker = ticker;'
+        '    div.style.cssText = "display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.06)";'
+        '    var badgeHtml = d.es_nuevo'
+        '      ? "<span id=\'badge-"+ticker+"\' style=\'font-size:10px;color:#ffd60a;padding:2px 6px;border-radius:4px;background:rgba(255,214,10,0.1);border:1px solid rgba(255,214,10,0.2)\'>⏳ Descargando histórico...</span>"'
+        '      : "";'
+        '    div.innerHTML = "<span style=\'color:#f5f5f7;font-weight:500;width:80px;font-family:monospace;font-size:13px\'>"+ticker+"</span>"'
         '      +"<div style=\'flex:1;background:rgba(0,113,227,0.15);border-radius:980px;height:6px;overflow:hidden\'><div class=\'barra-peso\' style=\'background:#0071e3;height:100%;width:"+peso+"%;transition:width 0.3s\'></div></div>"'
         '      +"<input type=\'number\' class=\'input-peso\' value=\'"+peso+"\' min=\'0\' max=\'100\' step=\'0.1\' oninput=\'actualizarPesos()\' style=\'width:65px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:4px 8px;color:#f5f5f7;font-size:12px;font-family:monospace;text-align:right\'>"'
         '      +"<span style=\'color:#6e6e73;font-size:11px\'>%</span>"'
         '      +"<button onclick=\'quitarActivo(this)\' style=\'background:rgba(255,69,58,0.1);border:1px solid rgba(255,69,58,0.2);border-radius:6px;padding:3px 8px;cursor:pointer;color:#ff453a;font-size:11px\'>✕</button>"'
-        '      +(d.nuevo?"<span style=\'font-size:10px;color:#ffd60a;padding:2px 6px;border-radius:4px;background:rgba(255,214,10,0.1);border:1px solid rgba(255,214,10,0.2)\'>Nuevo ⏳</span>":"");'
+        '      +badgeHtml;'
         '    lista.appendChild(div);'
+        '    div.querySelector(".input-peso").addEventListener("input", actualizarPesos);'
+        '    div.querySelector("[onclick]").addEventListener("click", function(){ quitarActivo(this); });'
         '    actualizarPesos();'
-        '    document.getElementById("nuevo-ticker").value="";'
-        '    document.getElementById("nuevo-peso").value="";'
-        '  }catch(e){status.textContent="Error verificando";status.style.color="#ff453a";}'
+        '    document.getElementById("nuevo-ticker").value = "";'
+        '    document.getElementById("nuevo-peso").value = "";'
+        '    if(d.es_nuevo){'
+        '      tickersNuevosPendientes.add(ticker);'
+        '      var btnRC = document.getElementById("btn-recalcular");'
+        '      if(btnRC){ btnRC.disabled=true; btnRC.style.opacity="0.4"; }'
+        '      status.textContent = "⏳ Descargando 10 años de histórico de "+ticker+"...";'
+        '      status.style.color = "#ffd60a";'
+        '      esperarHistorico(ticker);'
+        '    } else {'
+        '      status.textContent = "✅ "+d.nombre+" — $"+d.precio;'
+        '      status.style.color = "#30d158";'
+        '      bloquearAplicar();'
+        '    }'
+        '  } catch(e){ status.textContent="Error verificando"; status.style.color="#ff453a"; }'
         '}'
-        'async function aplicarComposicion(tipo){'
-        '  var total=parseFloat(document.getElementById("total-pesos").textContent);'
-        '  if(Math.abs(total-100)>0.5){alert("Los pesos deben sumar 100%. Ahora suman "+total+"%");return;}'
-        '  var pesosActuales=obtenerPesosActuales();'
-        '  var pesosNorm={};'
-        '  Object.entries(pesosActuales).forEach(function(kv){pesosNorm[kv[0]]=kv[1]/100;});'
-        '  var btns=document.querySelectorAll("#botones-propuesta button");'
-        '  btns.forEach(function(b){b.disabled=true;b.textContent="Guardando...";});'
+
+        # Recalcular proyecciones con pesos actuales
+        'async function recalcularProyecciones(){'
+        '  if(tickersNuevosPendientes.size > 0){'
+        '    alert("Espera a que termine de descargarse el histórico de: "+[...tickersNuevosPendientes].join(", "));'
+        '    return;'
+        '  }'
+        '  var btn = document.getElementById("btn-recalcular");'
+        '  if(btn){ btn.disabled=true; btn.textContent="Calculando..."; btn.style.opacity="0.6"; }'
+        '  var pesosActuales = obtenerPesosActuales();'
+        '  var pesosNorm = {};'
+        '  Object.entries(pesosActuales).forEach(function(kv){ pesosNorm[kv[0]] = kv[1]/100; });'
         '  try{'
-        '    var payload=Object.assign({},window.propuestaActual,{tipo:tipo,pesos:pesosNorm});'
-        '    var r=await fetch("/api/aplicar-propuesta/"+window.propuestaActual.archivo,{'
-        '      method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});'
-        '    var d=await r.json();'
-        '    if(d.ok){msgBot("✅ "+d.mensaje+" Redirigiendo...");if(d.redirigir)setTimeout(function(){window.location.href=d.redirigir;},1800);}'
-        '    else{msgBot("❌ "+d.error);btns.forEach(function(b){b.disabled=false;});}'
-        '  }catch(e){msgBot("Error de conexión.");btns.forEach(function(b){b.disabled=false;});}'
+        '    var payload = Object.assign({}, window.propuestaActual, {pesos: pesosNorm});'
+        '    var r = await fetch("/api/recalcular-proyecciones/"+window.propuestaActual.archivo,{'
+        '      method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});'
+        '    var d = await r.json();'
+        '    if(d.ok){'
+        '      var bloque = document.getElementById("bloque-reporte");'
+        '      if(bloque) bloque.textContent = d.reporte;'
+        '      window.propuestaActual.pesos = pesosNorm;'
+        '      desbloquearAplicar();'
+        '    } else { alert("Error recalculando: "+d.error); }'
+        '  } catch(e){ alert("Error de conexión."); }'
+        '  if(btn){ btn.disabled=false; btn.textContent="↻ Recalcular proyecciones"; btn.style.opacity="1"; }'
         '}'
+
+        # Aplicar composición final
+        'async function aplicarComposicion(tipo){'
+        '  var total = parseFloat(document.getElementById("total-pesos").textContent);'
+        '  if(Math.abs(total-100) > 0.5){ alert("Los pesos deben sumar 100%. Ahora suman "+total+"%"); return; }'
+        '  var pesosActuales = obtenerPesosActuales();'
+        '  var pesosNorm = {};'
+        '  Object.entries(pesosActuales).forEach(function(kv){ pesosNorm[kv[0]] = kv[1]/100; });'
+        '  var btns = document.querySelectorAll("#botones-propuesta button");'
+        '  btns.forEach(function(b){ b.disabled=true; b.textContent="Guardando..."; });'
+        '  try{'
+        '    var payload = Object.assign({}, window.propuestaActual, {tipo:tipo, pesos:pesosNorm});'
+        '    var r = await fetch("/api/aplicar-propuesta/"+window.propuestaActual.archivo,{'
+        '      method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(payload)});'
+        '    var d = await r.json();'
+        '    if(d.ok){ msgBot("✅ "+d.mensaje+" Redirigiendo..."); if(d.redirigir) setTimeout(function(){ window.location.href=d.redirigir; }, 1800); }'
+        '    else{ msgBot("❌ "+d.error); btns.forEach(function(b){ b.disabled=false; }); }'
+        '  } catch(e){ msgBot("Error de conexión."); btns.forEach(function(b){ b.disabled=false; }); }'
+        '}'
+
+        # Iniciar editor — se llama después de insertar el HTML de la propuesta
         'function iniciarEditor(){'
+        '  bloquearAplicar();'
+        # Crear aviso si no existe
+        '  if(!document.getElementById("aviso-recalcular")){'
+        '    var aviso = document.createElement("div");'
+        '    aviso.id = "aviso-recalcular";'
+        '    aviso.style.cssText = "margin-top:10px;padding:8px 14px;border-radius:8px;background:rgba(255,214,10,0.08);border:1px solid rgba(255,214,10,0.2);color:#ffd60a;font-size:12px;display:none";'
+        '    aviso.textContent = "⚠️ Editaste la composición — recalcula las proyecciones antes de aplicar.";'
+        '    var botones = document.getElementById("botones-propuesta");'
+        '    if(botones) botones.parentNode.insertBefore(aviso, botones);'
+        '  }'
+        # Event listeners inputs de peso
         '  document.querySelectorAll("#lista-activos .input-peso").forEach(function(i){'
-        '    i.addEventListener("input",actualizarPesos);'
+        '    i.addEventListener("input", actualizarPesos);'
         '  });'
+        # Event listeners botones quitar
         '  document.querySelectorAll("#lista-activos .btn-quitar").forEach(function(b){'
-        '    b.addEventListener("click",function(){quitarActivo(this);});'
+        '    b.addEventListener("click", function(){ quitarActivo(this); });'
         '  });'
-        '  var btnA=document.getElementById("btn-agregar");'
-        '  if(btnA)btnA.addEventListener("click",agregarActivo);'
-        '  var btnR=document.getElementById("btn-reemplazar");'
-        '  var btnN=document.getElementById("btn-nuevo");'
-        '  if(btnR)btnR.addEventListener("click",function(){aplicarComposicion("reemplazar");});'
-        '  if(btnN)btnN.addEventListener("click",function(){aplicarComposicion("nuevo");});'
-        '  actualizarPesos();'
+        # Botón agregar
+        '  var btnA = document.getElementById("btn-agregar");'
+        '  if(btnA) btnA.addEventListener("click", agregarActivo);'
+        # Botón recalcular
+        '  var btnRC = document.getElementById("btn-recalcular");'
+        '  if(btnRC) btnRC.addEventListener("click", recalcularProyecciones);'
+        # Botones aplicar
+        '  var btnR = document.getElementById("btn-reemplazar");'
+        '  var btnN = document.getElementById("btn-nuevo");'
+        '  if(btnR) btnR.addEventListener("click", function(){ aplicarComposicion("reemplazar"); });'
+        '  if(btnN) btnN.addEventListener("click", function(){ aplicarComposicion("nuevo"); });'
         '}'
         '</script>'
+        '</div>'
     )
     return pagina(f'Analista — {portafolio["nombre"]}', contenido)
 
@@ -1979,7 +2104,6 @@ def fix_banrep():
     return jsonify({'ok': False, 'mensaje': 'Archivo no encontrado'})
 
 @app.route('/api/verificar-ticker/<ticker>')
-@login_required if False else lambda f: f
 def api_verificar_ticker(ticker):
     if not session.get('username'):
         return jsonify({'valido': False})
@@ -1995,21 +2119,19 @@ def api_verificar_ticker(ticker):
         if hasattr(df.columns, 'get_level_values'):
             df.columns = df.columns.get_level_values(0)
         precio = round(float(df['Close'].iloc[-1]), 2)
-        # Intentar obtener nombre
         try:
             info   = yf.Ticker(ticker).info
             nombre = info.get('shortName', ticker)
         except:
             nombre = ticker
-        # Verificar si ya está en el recolector
-        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-        precios_path = os.path.join(BASE_DIR, "datos", "precios", "precios.parquet")
+        # Verificar si ya está en el histórico
+        precios_path = os.path.join(DATOS_DIR, "precios", "precios.parquet")
         es_nuevo = True
         if os.path.exists(precios_path):
             import pandas as pd
             cols = pd.read_parquet(precios_path).columns.tolist()
             es_nuevo = ticker not in cols
-        # Si es nuevo, agregarlo al parquet en background
+        # Si es nuevo lanzar descarga en background
         if es_nuevo:
             def descargar_historico(tk):
                 try:
@@ -2028,15 +2150,48 @@ def api_verificar_ticker(ticker):
                         if tk not in existente.columns:
                             nuevo = existente.join(close, how='outer')
                             nuevo.to_parquet(precios_path)
-                            print(f"✅ Histórico de {tk} agregado al recolector")
+                            print(f"✅ Histórico de {tk} agregado")
                     else:
                         close.to_parquet(precios_path)
+                    # Marcar como listo
+                    listo_path = os.path.join(DATOS_DIR, f"ticker_listo_{tk}.flag")
+                    open(listo_path, 'w').close()
                 except Exception as e:
                     print(f"❌ Error descargando histórico de {tk}: {e}")
+                    # Marcar como fallido
+                    listo_path = os.path.join(DATOS_DIR, f"ticker_listo_{tk}.flag")
+                    open(listo_path, 'w').close()
             threading.Thread(target=descargar_historico, args=(ticker,), daemon=True).start()
-        return jsonify({'valido': True, 'precio': precio, 'nombre': nombre, 'nuevo': es_nuevo})
+        return jsonify({
+            'valido':   True,
+            'precio':   precio,
+            'nombre':   nombre,
+            'es_nuevo': es_nuevo
+        })
     except Exception as e:
         return jsonify({'valido': False, 'error': str(e)})
+
+
+@app.route('/api/ticker-listo/<ticker>')
+def api_ticker_listo(ticker):
+    """Verifica si el histórico de un ticker nuevo ya terminó de descargarse."""
+    if not session.get('username'):
+        return jsonify({'listo': False})
+    # Si ya estaba en el histórico desde el inicio, siempre listo
+    precios_path = os.path.join(DATOS_DIR, "precios", "precios.parquet")
+    if os.path.exists(precios_path):
+        import pandas as pd
+        cols = pd.read_parquet(precios_path).columns.tolist()
+        if ticker in cols:
+            return jsonify({'listo': True})
+    # Verificar flag
+    flag = os.path.join(DATOS_DIR, f"ticker_listo_{ticker}.flag")
+    listo = os.path.exists(flag)
+    if listo:
+        # Limpiar flag
+        try: os.remove(flag)
+        except: pass
+    return jsonify({'listo': listo})
 
 @app.route('/api/recolector', methods=['POST'])
 def api_recolector():
