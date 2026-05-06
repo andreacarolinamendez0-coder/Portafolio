@@ -396,8 +396,10 @@ def nav_html(archivo, activa):
         + tab(f'/bot/{archivo}','Asistente','bot')
         + tab(f'/monitor/{archivo}','Monitor','monitor')
         + tab(f'/config/{archivo}','Config','config')
+        + tab(f'/settings','Mi Perfil','settings')
         + f'</div>'
-        f'<a href="/logout" style="margin-left:auto;color:#6e6e73;font-size:12px;text-decoration:none">Salir</a>'
+        f'<a href="/mis-portafolios" style="margin-left:auto;color:#6e6e73;font-size:12px;text-decoration:none;margin-right:8px">← Portafolios</a>'
+        f'<a href="/logout" style="color:#6e6e73;font-size:12px;text-decoration:none">Salir</a>'
         f'</div>'
     )
 
