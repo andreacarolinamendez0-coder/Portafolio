@@ -269,6 +269,15 @@ def recolectar_tasa_banrep():
 # EJECUCIÓN PRINCIPAL
 # ============================================================
 
+import os
+os.makedirs("datos/macro", exist_ok=True)
+os.makedirs("datos/precios", exist_ok=True)
+os.makedirs("datos/portafolios", exist_ok=True)
+os.makedirs("datos/Logs", exist_ok=True)
+os.makedirs("datos/Reportes", exist_ok=True)
+os.makedirs("datos/seguimiento", exist_ok=True)
+os.makedirs("datos/historico", exist_ok=True)
+
 if __name__ == "__main__":
     print("=" * 50)
     print("🤖 RECOLECTOR DE DATOS — INICIANDO")

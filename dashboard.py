@@ -12,6 +12,11 @@ _monitor_thread = iniciar_monitor()
 
 import subprocess, requests, time, threading
 
+os.makedirs("datos/macro", exist_ok=True)
+os.makedirs("datos/precios", exist_ok=True)
+os.makedirs("datos/portafolios", exist_ok=True)
+os.makedirs("datos/Logs", exist_ok=True)
+
 def notificar_url_ngrok():
     time.sleep(5)
     try:
