@@ -7,8 +7,13 @@ import yfinance as yf
 import warnings
 warnings.filterwarnings('ignore')
 from styles import CSS
-from monitor import iniciar_monitor
-_monitor_thread = iniciar_monitor()
+def arrancar_monitor():
+    import time
+    time.sleep(15)  # espera a que gunicorn levante primero
+    from monitor import iniciar_monitor
+    iniciar_monitor()
+
+threading.Thread(target=arrancar_monitor, daemon=True).start()
 
 import subprocess, requests, time, threading
 
