@@ -29,6 +29,13 @@ def notificar_url_ngrok():
 threading.Thread(target=notificar_url_ngrok, daemon=True).start()
 
 app = Flask(__name__)
+# Ruta base absoluta para que funcione en Railway y en local
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATOS_DIR = os.path.join(BASE_DIR, "datos")
+os.makedirs(os.path.join(DATOS_DIR, "macro"), exist_ok=True)
+os.makedirs(os.path.join(DATOS_DIR, "precios"), exist_ok=True)
+os.makedirs(os.path.join(DATOS_DIR, "portafolios"), exist_ok=True)
+os.makedirs(os.path.join(DATOS_DIR, "Logs"), exist_ok=True)
 app.secret_key = os.environ.get("SECRET_KEY", "portafolio_andrea_2026_secreto")
 GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "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")
 # ── SVG logo átomo ──────────────────────────────────────────
@@ -84,9 +91,13 @@ def groq_chat(messages, system='', max_tokens=300, temperature=0.5):
     return resp.choices[0].message.content
 
 def cargar_macro():
-    archivos = ["datos/macro/trm.parquet","datos/macro/inflacion_col.parquet",
-                "datos/macro/inflacion_usa.parquet","datos/macro/risk_free.parquet",
-                "datos/macro/tasa_banrep.parquet"]
+    archivos = [
+    os.path.join(DATOS_DIR, "macro/trm.parquet"),
+    os.path.join(DATOS_DIR, "macro/inflacion_col.parquet"),
+    os.path.join(DATOS_DIR, "macro/inflacion_usa.parquet"),
+    os.path.join(DATOS_DIR, "macro/risk_free.parquet"),
+    os.path.join(DATOS_DIR, "macro/tasa_banrep.parquet")
+]
     if any(not os.path.exists(f) for f in archivos):
         os.makedirs("datos/macro", exist_ok=True)
         os.makedirs("datos/precios", exist_ok=True)

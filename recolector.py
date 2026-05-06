@@ -1,48 +1,62 @@
 import yfinance as yf
 import pandas as pd
-import requests 
+import requests
 import json
 import io
 import os
 from datetime import datetime, timedelta
+
 # ============================================================
-# CONFIGURACIÓN — aquí defines los activos
+# RUTAS ABSOLUTAS — funciona igual en local y en Railway
+# ============================================================
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATOS_DIR = os.path.join(BASE_DIR, "datos")
+
+CARPETA_PRECIOS = os.path.join(DATOS_DIR, "precios")
+CARPETA_MACRO   = os.path.join(DATOS_DIR, "macro")
+CARPETA_LOGS    = os.path.join(DATOS_DIR, "Logs")
+
+# ============================================================
+# CONFIGURACIÓN — activos
 # ============================================================
 
 ACTIVOS = [
-    'AAPL', 'MSFT', 'GOOGL', 'NVDA', 'META', #Tecnología
-    'JPM', 'V', 'MA',                            # Financiero
-    'JNJ', 'LLY',                                # Salud
-    'AMZN', 'WMT', 'KO',                         # Consumo
-    'XOM', 'CVX',                                # Energía
-    'GLD', 'TLT',                                # Oro y Bonos
-    'VOO', 'VTI', 'VWO',                          # ETFs core
-    'QQQ', 'XLK',                                # índices de Tecnología
-    'BTC-USD', 'ETH-USD', 'SOL-USD'              # Criptomonedas
+    'AAPL', 'MSFT', 'GOOGL', 'NVDA', 'META',
+    'JPM', 'V', 'MA',
+    'JNJ', 'LLY',
+    'AMZN', 'WMT', 'KO',
+    'XOM', 'CVX',
+    'GLD', 'TLT',
+    'VOO', 'VTI', 'VWO',
+    'QQQ', 'XLK',
+    'BTC-USD', 'ETH-USD', 'SOL-USD'
 ]
-
-CARPETA_PRECIOS = "Datos/Precios"
-CARPETA_MACRO = "Datos/Macro"
-CARPETA_LOGS = "Datos/Logs"
-
 
 # ============================================================
 # UTILIDADES
 # ============================================================
 
-def registrar(mensaje, tipo="INFO"):
-    """Guarda cada evento en el log del día."""
-    hoy= datetime.now().strftime("%Y-%m-%d")
-    hora= datetime.now().strftime("%H:%M:%S")
-    linea= f"[{hora}][{tipo}]{mensaje}\n"
-    print(linea.strip())
-    with open (f"{CARPETA_LOGS}/Log_{hoy}.txt","a", encoding="utf-8") as f:
-        f.write(linea)
-
 def crear_carpetas():
-    """Crea las carpetas si no existen."""
-    for carpeta in [CARPETA_PRECIOS, CARPETA_MACRO, CARPETA_LOGS]:
+    for carpeta in [
+        CARPETA_PRECIOS, CARPETA_MACRO, CARPETA_LOGS,
+        os.path.join(DATOS_DIR, "portafolios"),
+        os.path.join(DATOS_DIR, "Reportes"),
+        os.path.join(DATOS_DIR, "seguimiento"),
+        os.path.join(DATOS_DIR, "historico"),
+    ]:
         os.makedirs(carpeta, exist_ok=True)
+
+def registrar(mensaje, tipo="INFO"):
+    hoy  = datetime.now().strftime("%Y-%m-%d")
+    hora = datetime.now().strftime("%H:%M:%S")
+    linea = f"[{hora}][{tipo}]{mensaje}\n"
+    print(linea.strip())
+    try:
+        with open(os.path.join(CARPETA_LOGS, f"Log_{hoy}.txt"), "a", encoding="utf-8") as f:
+            f.write(linea)
+    except Exception:
+        pass
 
 # ============================================================
 # RECOLECTOR 1 — PRECIOS DE ACCIONES
@@ -50,9 +64,8 @@ def crear_carpetas():
 
 def recolectar_precios():
     registrar("Iniciando descarga de precios...")
-    archivo= f"{CARPETA_PRECIOS}/precios.parquet"
+    archivo = os.path.join(CARPETA_PRECIOS, "precios.parquet")
 
-    #¿Ya tenemos datos guardados?
     if os.path.exists(archivo):
         df_existente = pd.read_parquet(archivo)
         ultima_fecha = df_existente.index.max()
@@ -60,32 +73,31 @@ def recolectar_precios():
         registrar(f"Datos existentes hasta {ultima_fecha.date()}. Descargando desde {inicio.date()}...")
     else:
         df_existente = pd.DataFrame()
-        inicio = datetime.now() - timedelta(days=365*10)
-        registrar("Primera descarga -  obteniendo 10 años de historia...")
+        inicio = datetime.now() - timedelta(days=365 * 10)
+        registrar("Primera descarga — obteniendo 10 años de historia...")
+
     fin = datetime.now()
 
-    #Descarga solo lo nuevo
     try:
         df_nuevo = yf.download(ACTIVOS, start=inicio, end=fin, auto_adjust=True)['Close']
         df_nuevo = df_nuevo.dropna(how='all')
 
         if df_nuevo.empty:
-            registrar("No hay datos neuvos hoy (mercado cerrado o fin de semana).", "AVISO")
+            registrar("No hay datos nuevos hoy (mercado cerrado o fin de semana).", "AVISO")
             return
-        
-        #Unimos con lo existente
+
         if not df_existente.empty:
-            df_final= pd.concat([df_existente, df_nuevo])
+            df_final = pd.concat([df_existente, df_nuevo])
             df_final = df_final[~df_final.index.duplicated(keep='last')]
         else:
             df_final = df_nuevo
 
         df_final.sort_index(inplace=True)
         df_final.to_parquet(archivo)
-        registrar(f" ✅ Precios guardados. {len(df_nuevo)} días nuevos. Total: {len(df_final)} días.")
-    
+        registrar(f"✅ Precios guardados. {len(df_nuevo)} días nuevos. Total: {len(df_final)} días.")
+
     except Exception as e:
-        registrar (f" ❌ Error descargando precios:{e}, ERROR")
+        registrar(f"❌ Error descargando precios: {e}", "ERROR")
 
 # ============================================================
 # RECOLECTOR 2 — TRM COLOMBIA
@@ -93,7 +105,7 @@ def recolectar_precios():
 
 def recolectar_trm():
     registrar("Iniciando descarga de TRM...")
-    archivo=f"{CARPETA_MACRO}/trm.parquet"
+    archivo = os.path.join(CARPETA_MACRO, "trm.parquet")
 
     try:
         url = "https://www.datos.gov.co/resource/ceyp-9c7c.csv?$limit=10000"
@@ -111,13 +123,14 @@ def recolectar_trm():
 
     except Exception as e:
         registrar(f"❌ Error descargando TRM: {e}", "ERROR")
+
 # ============================================================
 # RECOLECTOR 3 — INFLACIÓN USA
 # ============================================================
 
 def recolectar_inflacion_usa():
     registrar("Iniciando descarga de inflación USA...")
-    archivo = f"{CARPETA_MACRO}/inflacion_usa.parquet"
+    archivo = os.path.join(CARPETA_MACRO, "inflacion_usa.parquet")
 
     try:
         url = 'https://api.bls.gov/publicAPI/v2/timeseries/data/'
@@ -150,13 +163,14 @@ def recolectar_inflacion_usa():
 
     except Exception as e:
         registrar(f"❌ Error descargando inflación USA: {e}", "ERROR")
+
 # ============================================================
 # RECOLECTOR 4 — INFLACIÓN COLOMBIA
 # ============================================================
 
 def recolectar_inflacion_col():
     registrar("Iniciando descarga de inflación Colombia...")
-    archivo = f"{CARPETA_MACRO}/inflacion_col.parquet"
+    archivo = os.path.join(CARPETA_MACRO, "inflacion_col.parquet")
 
     try:
         url = "https://api.db.nomics.world/v22/series/IMF/CPI/M.CO.PCPI_PC_CP_A_PT.csv"
@@ -175,14 +189,15 @@ def recolectar_inflacion_col():
         registrar(f"✅ Inflación COL guardada. Último dato: {df['Inflacion_COL'].iloc[-1]:.2f}%")
 
     except Exception as e:
-         registrar(f"❌ Error descargando inflación COL: {e}", "ERROR")
+        registrar(f"❌ Error descargando inflación COL: {e}", "ERROR")
 
 # ============================================================
 # RECOLECTOR 5 — TASA LIBRE DE RIESGO
 # ============================================================
+
 def recolectar_tasa_libre_riesgo():
     registrar("Iniciando descarga de tasa libre de riesgo...")
-    archivo = f"{CARPETA_MACRO}/risk_free.parquet"
+    archivo = os.path.join(CARPETA_MACRO, "risk_free.parquet")
 
     try:
         url = (
@@ -206,16 +221,14 @@ def recolectar_tasa_libre_riesgo():
         registrar(f"❌ Error descargando tasa libre de riesgo: {e}", "ERROR")
 
 # ============================================================
-# RECOLECTOR 6 — TASA BANCO DE LA REPÚBLICA - CDT = Tasa BanRep-0.5%-1%
+# RECOLECTOR 6 — TASA BANCO DE LA REPÚBLICA
 # ============================================================
 
 def recolectar_tasa_banrep():
     registrar("Iniciando descarga de tasa Banrep...")
-    archivo = f"{CARPETA_MACRO}/tasa_banrep.parquet"
+    archivo = os.path.join(CARPETA_MACRO, "tasa_banrep.parquet")
     tasa = None
 
-    
-    # Si ya descargamos hoy, usar ese dato directamente
     if os.path.exists(archivo):
         try:
             df_prev = pd.read_parquet(archivo)
@@ -223,21 +236,17 @@ def recolectar_tasa_banrep():
             if ultima.date() == datetime.now().date():
                 tasa_hoy = float(df_prev['Tasa_Banrep'].iloc[-1])
                 registrar(f"✅ Tasa Banrep ya descargada hoy: {tasa_hoy:.2f}%")
-                return  # No volver a descargar
-        except: pass
+                return
+        except Exception:
+            pass
 
     try:
-        # Intentamos con la API de series estadísticas del Banrep
         url = "https://www.banrep.gov.co/es/estadisticas/tasas-de-interes-del-banco-de-la-republica"
         headers = {'User-Agent': 'Mozilla/5.0'}
         response = requests.get(url, headers=headers, timeout=15)
 
-        # Si no funciona la API, buscamos en el HTML el dato actual
         import re
-        texto = response.text
-        patron = r'(\d+[.,]\d+)\s*%'
-        matches = re.findall(patron, texto)
-
+        matches = re.findall(r'(\d+[.,]\d+)\s*%', response.text)
         if matches:
             tasa = float(matches[0].replace(',', '.'))
             registrar(f"✅ Tasa Banrep extraída del sitio web: {tasa:.2f}%")
@@ -245,18 +254,11 @@ def recolectar_tasa_banrep():
             raise ValueError("No se encontró la tasa en el HTML")
 
     except Exception:
-        # Backup con tasa actual conocida — actualizar manualmente si cambia
-        # Última tasa Banrep: 11.25% (vigente desde febrero 2024)
         tasa = 11.25
         registrar(f"⚠️ Usando tasa Banrep de respaldo: {tasa}%", "AVISO")
 
-    # Guardamos el dato
-    df = pd.DataFrame(
-        {'Tasa_Banrep': [tasa]},
-        index=[pd.Timestamp.now()]
-    )
+    df = pd.DataFrame({'Tasa_Banrep': [tasa]}, index=[pd.Timestamp.now()])
 
-    # Si ya existe el archivo, agregamos el nuevo dato
     if os.path.exists(archivo):
         df_existente = pd.read_parquet(archivo)
         df = pd.concat([df_existente, df])
@@ -265,18 +267,10 @@ def recolectar_tasa_banrep():
     df.sort_index(inplace=True)
     df.to_parquet(archivo)
     registrar(f"✅ Tasa Banrep guardada: {tasa:.2f}%")
+
 # ============================================================
 # EJECUCIÓN PRINCIPAL
 # ============================================================
-
-import os
-os.makedirs("datos/macro", exist_ok=True)
-os.makedirs("datos/precios", exist_ok=True)
-os.makedirs("datos/portafolios", exist_ok=True)
-os.makedirs("datos/Logs", exist_ok=True)
-os.makedirs("datos/Reportes", exist_ok=True)
-os.makedirs("datos/seguimiento", exist_ok=True)
-os.makedirs("datos/historico", exist_ok=True)
 
 if __name__ == "__main__":
     print("=" * 50)
@@ -291,7 +285,7 @@ if __name__ == "__main__":
     recolectar_inflacion_col()
     recolectar_tasa_libre_riesgo()
     recolectar_tasa_banrep()
+
     print("=" * 50)
     print("✅ RECOLECCIÓN COMPLETA")
     print("=" * 50)
-    
