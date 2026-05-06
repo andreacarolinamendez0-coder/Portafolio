@@ -240,22 +240,24 @@ def recolectar_tasa_banrep():
         except Exception:
             pass
 
-    try:
-        url = "https://www.banrep.gov.co/es/estadisticas/tasas-de-interes-del-banco-de-la-republica"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, headers=headers, timeout=15)
+        try:
+            url = "https://www.banrep.gov.co/es/estadisticas/tasas-de-interes-del-banco-de-la-republica"
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            response = requests.get(url, headers=headers, timeout=15)
 
-        import re
-        matches = re.findall(r'(\d+[.,]\d+)\s*%', response.text)
-        if matches:
-            tasa = float(matches[0].replace(',', '.'))
-            registrar(f"✅ Tasa Banrep extraída del sitio web: {tasa:.2f}%")
-        else:
-            raise ValueError("No se encontró la tasa en el HTML")
+            import re
+            matches = re.findall(r'(\d+[.,]\d+)\s*%', response.text)
+            registrar(f"DEBUG todos los porcentajes encontrados: {matches[:20]}", "INFO")
 
-    except Exception:
-        tasa = 11.25
-        registrar(f"⚠️ Usando tasa Banrep de respaldo: {tasa}%", "AVISO")
+            if matches:
+                tasa = float(matches[0].replace(',', '.'))
+                registrar(f"✅ Tasa Banrep extraída del sitio web: {tasa:.2f}%")
+            else:
+                raise ValueError("No se encontró la tasa en el HTML")
+
+        except Exception:
+            tasa = 11.25
+            registrar(f"⚠️ Usando tasa Banrep de respaldo: {tasa}%", "AVISO")
 
     df = pd.DataFrame({'Tasa_Banrep': [tasa]}, index=[pd.Timestamp.now()])
 
