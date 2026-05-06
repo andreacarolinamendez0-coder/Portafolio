@@ -1360,6 +1360,68 @@ def api_generar_propuesta(archivo):
         }})
     except Exception as e: return jsonify({'ok':False,'error':str(e)})
 
+@app.route('/api/recalcular-proyecciones/<archivo>', methods=['POST'])
+def api_recalcular_proyecciones(archivo):
+    if verificar_acceso(archivo): return jsonify({'ok':False,'error':'No autorizado'})
+    try:
+        import sys, io
+        from analista import cargar_datos, construir_panel, calcular_retornos_reales, generar_reporte
+
+        data      = request.get_json()
+        pesos_raw = data.get('pesos', {})
+        perfil    = data.get('perfil', 'agresivo')
+        inversion = float(data.get('inversion', 1000000))
+        aporte    = float(data.get('aporte_dca', 0))
+        freq      = int(data.get('frecuencia_meses', 1))
+        horizonte = int(data.get('horizonte', 10))
+
+        precios, trm, inf_usa, inf_col, risk_free, tasa_cdt = cargar_datos()
+        panel    = construir_panel(precios, trm, inf_usa, inf_col, risk_free)
+        ret_real = calcular_retornos_reales(panel, list(precios.columns))
+
+        pesos_con_historico = {k: v for k, v in pesos_raw.items() if k in ret_real.columns}
+        pesos_sin_historico = {k: v for k, v in pesos_raw.items() if k not in ret_real.columns}
+
+        inf_col_actual = float(
+            pd.read_parquet(os.path.join(DATOS_DIR, "macro/inflacion_col.parquet"))['Inflacion_COL'].iloc[-1]
+        )
+
+        reporte_txt = ''
+        if pesos_con_historico:
+            total = sum(pesos_con_historico.values())
+            pesos_norm = {k: v/total for k, v in pesos_con_historico.items()}
+            pesos_series = pd.Series(pesos_norm)
+            old = sys.stdout; sys.stdout = buf = io.StringIO()
+            try:
+                generar_reporte(
+                    pesos=pesos_series,
+                    inversion_inicial=inversion,
+                    ret_real=ret_real,
+                    perfil=perfil,
+                    horizonte=horizonte,
+                    risk_free=risk_free,
+                    inflacion_col=inf_col_actual,
+                    tasa_cdt=float(tasa_cdt),
+                    aporte_periodico=aporte,
+                    frecuencia_meses=freq
+                )
+            finally:
+                sys.stdout = old
+            reporte_txt = buf.getvalue()
+
+        if pesos_sin_historico:
+            tickers_nuevos = ', '.join(pesos_sin_historico.keys())
+            reporte_txt += (
+                f'\n\nNOTA: {tickers_nuevos} fue agregado manualmente. '
+                f'Las proyecciones anteriores corresponden al resto del portafolio. '
+                f'El histórico de {tickers_nuevos} ya fue descargado y estará disponible en el próximo análisis completo.'
+            )
+
+        return jsonify({'ok': True, 'reporte': reporte_txt})
+
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
 @app.route('/api/aplicar-propuesta/<archivo>', methods=['POST'])
 def api_aplicar_propuesta(archivo):
     if verificar_acceso(archivo): return jsonify({'ok':False,'error':'No autorizado'})
