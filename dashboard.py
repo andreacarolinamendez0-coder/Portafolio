@@ -978,11 +978,8 @@ def analista_view(archivo):
         f'Hola {portafolio["propietario"]} 👋 Soy tu analista. Puedo ayudarte a construir una propuesta de inversión personalizada o actualizar tu portafolio. ¿Qué te gustaría hacer?'
         '</div></div></div>'
         '<div style="display:flex;gap:8px;padding:12px 16px;flex-wrap:wrap;border-top:1px solid rgba(255,255,255,0.05);background:rgba(0,0,0,0.25)">'
-        '<button onclick="enviarOpc(\'Quiero crear un portafolio nuevo desde cero\')" style="padding:7px 16px;border-radius:980px;font-size:12px;font-family:DM Sans,sans-serif;cursor:pointer;border:1px solid rgba(0,113,227,0.35);background:rgba(0,113,227,0.1);color:#4da3ff" id="opc1">+ Nuevo portafolio</button>'
-        + (
+        '<button onclick="enviarOpc(\'Quiero un portafolio nuevo desde cero\')" style="padding:7px 16px;border-radius:980px;font-size:12px;font-family:DM Sans,sans-serif;cursor:pointer;border:1px solid rgba(0,113,227,0.35);background:rgba(0,113,227,0.1);color:#4da3ff" id="opc1">+ Nuevo portafolio</button>'
         '<button onclick="enviarOpc(\'Quiero actualizar mi portafolio actual. Dime qué puedo modificar.\')" style="padding:7px 16px;border-radius:980px;font-size:12px;font-family:DM Sans,sans-serif;cursor:pointer;border:1px solid rgba(48,209,88,0.35);background:rgba(48,209,88,0.08);color:#30d158" id="opc2">✏️ Actualizar actual</button>'
-        if composicion else ''
-        )
         '</div>'
         '<div style="display:flex;gap:8px;padding:12px 16px;border-top:1px solid rgba(255,255,255,0.05);background:rgba(0,0,0,0.3)">'
         '<input type="text" id="analista-input" placeholder="Escribe tu respuesta..." onkeypress="if(event.key===\'Enter\')enviar()" '
