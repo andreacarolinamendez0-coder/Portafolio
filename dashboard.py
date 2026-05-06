@@ -518,6 +518,8 @@ def mis_portafolios():
         '<h2 style="margin:0">Mis Portafolios</h2>'
         f'<div style="display:flex;gap:10px;align-items:center">'
         f'<span style="color:#6e6e73;font-size:13px">Hola, {username}</span>'
+        + (f'<a href="/admin" class="btn btn-secondary" style="font-size:12px;padding:7px 14px">🛡 Admin</a>' if session.get('es_admin') else '') +
+        '<a href="/settings" class="btn btn-secondary" style="font-size:12px;padding:7px 14px">Mi Perfil</a>'
         '<a href="/logout" class="btn btn-secondary" style="font-size:12px;padding:7px 14px">Cerrar sesión</a>'
         '<a href="/nuevo" class="btn btn-primary">+ Crear Portafolio</a></div></div>'
         + cards + '</div>')
@@ -902,23 +904,59 @@ def analista_view(archivo):
                   '<div class="alert alert-info" style="margin-bottom:16px">Tienes composición sin inversiones. Puedes reemplazarla o crear una adicional.</div>')
         comp_html = estado + f'<div class="card" style="margin-bottom:16px"><h3>Composición actual</h3>{filas}</div>'
 
+    # Contexto actual del portafolio para el analista
+    composicion_actual_txt = ''
+    if composicion:
+        composicion_actual_txt = 'COMPOSICIÓN ACTUAL:\n' + '\n'.join(
+            f'  - {a}: {v*100:.1f}%' for a, v in composicion.items()
+        )
+
     sistema = (
-        f'Eres un analista financiero experto que ayuda a {portafolio["propietario"]} a construir portafolios.\n\n'
-        f'Portafolio: {portafolio["nombre"]} | Tiene inversiones: {str(tiene_inv).lower()}\n'
-        f'IMPORTANTE: NUNCA asumas montos. SIEMPRE pregúntalos explícitamente.\n\n'
-        f'FLUJO OBLIGATORIO (una pregunta a la vez, en este orden estricto):\n'
-        f'PASO 1: ¿Portafolio NUEVO o ACTUALIZAR el actual?\n'
-        f'PASO 2: Pregunta el perfil. Las ÚNICAS opciones válidas son la palabra "conservador" o la palabra "agresivo". '
-        f'Cuando el usuario responda, copia esa palabra EXACTA en el campo perfil del JSON. '
-        f'Si dijo conservador, perfil debe ser "conservador". Si dijo agresivo, perfil debe ser "agresivo".\n'
-        f'PASO 3: ¿Monto inicial en COP?\n'
-        f'PASO 4: ¿Hará aportes periódicos (DCA)? Si sí: ¿cuánto y con qué frecuencia?\n'
-        f'PASO 5: ¿Horizonte de inversión en años?\n'
-        f'PASO 6: Cuando tengas TODOS los datos responde ÚNICAMENTE con el JSON, CERO texto adicional antes o después:\n'
-        f'{{"accion":"analizar","perfil":"conservador","inversion":1000000,'
-        f'"aporte_dca":500000,"frecuencia_meses":3,"horizonte":5,"es_nuevo":true}}\n\n'
-        f'REGLAS: Una pregunta por mensaje. No generes portafolio antes del paso 6. '
-        f'Respuestas cortas y amigables. Español. Sin asteriscos.'
+        f'Eres un analista financiero experto, riguroso y con criterio propio. Ayudas a {portafolio["propietario"]} con su portafolio.\n\n'
+        f'DATOS ACTUALES DEL PORTAFOLIO:\n'
+        f'- Nombre: {portafolio["nombre"]}\n'
+        f'- Perfil: {portafolio.get("perfil", "no definido")}\n'
+        f'- Inversión inicial: ${portafolio.get("inversion_inicial", 0):,.0f} COP\n'
+        f'- Aporte DCA: ${portafolio.get("aporte_dca", 0):,.0f} COP cada {portafolio.get("frecuencia_meses", 1)} mes(es)\n'
+        f'- Tiene inversiones registradas: {str(tiene_inv).lower()}\n'
+        f'{composicion_actual_txt}\n\n'
+
+        f'HAY DOS FLUJOS POSIBLES:\n\n'
+
+        f'=== FLUJO A: PORTAFOLIO NUEVO ===\n'
+        f'Si el usuario quiere un portafolio nuevo, sigue este orden estricto (una pregunta a la vez):\n'
+        f'A1: ¿Perfil? Solo "conservador" o "agresivo".\n'
+        f'A2: ¿Monto inicial en COP?\n'
+        f'A3: ¿Aportes DCA? Si sí: ¿cuánto y cada cuánto?\n'
+        f'A4: ¿Horizonte en años?\n'
+        f'A5: Responde SOLO el JSON:\n'
+        f'{{"accion":"analizar","perfil":"agresivo","inversion":1000000,"aporte_dca":0,"frecuencia_meses":1,"horizonte":10,"es_nuevo":true}}\n\n'
+
+        f'=== FLUJO B: ACTUALIZAR PORTAFOLIO EXISTENTE ===\n'
+        f'Si el usuario quiere actualizar, TÚ tienes toda la información actual arriba. NO la pidas de nuevo.\n'
+        f'Pregunta UNA SOLA VEZ: ¿Qué deseas modificar?\n'
+        f'  1. Monto de inversión\n'
+        f'  2. Aportes DCA (monto o frecuencia)\n'
+        f'  3. Horizonte de inversión\n'
+        f'  4. Perfil de riesgo\n'
+        f'  5. Activos o pesos (agregar, quitar o ajustar)\n'
+        f'  6. Varias cosas a la vez\n\n'
+        f'Cuando el usuario responda:\n'
+        f'- Recoge SOLO lo que quiere cambiar\n'
+        f'- Para lo que NO cambia, usa los valores actuales del portafolio\n'
+        f'- Si el cambio es riesgoso o no te parece bien, dilo con criterio antes de proceder\n'
+        f'  Ejemplo: "Quieres reducir el horizonte de 10 a 2 años — eso limita mucho el potencial. ¿Estás seguro?"\n'
+        f'- Si el cambio tiene sentido, confirma brevemente lo que vas a recalcular\n'
+        f'- Luego responde SOLO el JSON con los valores finales (mezcla de actuales + cambios):\n'
+        f'{{"accion":"analizar","perfil":"agresivo","inversion":1000000,"aporte_dca":500000,"frecuencia_meses":1,"horizonte":10,"es_nuevo":false}}\n\n'
+
+        f'REGLAS SIEMPRE:\n'
+        f'- Una pregunta por mensaje máximo\n'
+        f'- Respuestas cortas y directas\n'
+        f'- Español sin asteriscos\n'
+        f'- Tienes criterio propio: si algo no te parece bien, dilo antes de ejecutar\n'
+        f'- NUNCA pidas información que ya tienes en los datos actuales del portafolio\n'
+        f'- El JSON va al final, solo cuando tengas TODOS los datos listos'
     )
 
     contenido = (
@@ -940,8 +978,11 @@ def analista_view(archivo):
         f'Hola {portafolio["propietario"]} 👋 Soy tu analista. Puedo ayudarte a construir una propuesta de inversión personalizada o actualizar tu portafolio. ¿Qué te gustaría hacer?'
         '</div></div></div>'
         '<div style="display:flex;gap:8px;padding:12px 16px;flex-wrap:wrap;border-top:1px solid rgba(255,255,255,0.05);background:rgba(0,0,0,0.25)">'
-        '<button onclick="enviarOpc(\'Quiero un portafolio nuevo\')" style="padding:7px 16px;border-radius:980px;font-size:12px;font-family:DM Sans,sans-serif;cursor:pointer;border:1px solid rgba(0,113,227,0.35);background:rgba(0,113,227,0.1);color:#4da3ff" id="opc1">Nuevo portafolio</button>'
-        '<button onclick="enviarOpc(\'Quiero actualizar mi portafolio actual\')" style="padding:7px 16px;border-radius:980px;font-size:12px;font-family:DM Sans,sans-serif;cursor:pointer;border:1px solid rgba(255,255,255,0.08);background:rgba(255,255,255,0.04);color:#6e6e73" id="opc2">Actualizar actual</button>'
+        '<button onclick="enviarOpc(\'Quiero crear un portafolio nuevo desde cero\')" style="padding:7px 16px;border-radius:980px;font-size:12px;font-family:DM Sans,sans-serif;cursor:pointer;border:1px solid rgba(0,113,227,0.35);background:rgba(0,113,227,0.1);color:#4da3ff" id="opc1">+ Nuevo portafolio</button>'
+        + (
+        '<button onclick="enviarOpc(\'Quiero actualizar mi portafolio actual. Dime qué puedo modificar.\')" style="padding:7px 16px;border-radius:980px;font-size:12px;font-family:DM Sans,sans-serif;cursor:pointer;border:1px solid rgba(48,209,88,0.35);background:rgba(48,209,88,0.08);color:#30d158" id="opc2">✏️ Actualizar actual</button>'
+        if composicion else ''
+        )
         '</div>'
         '<div style="display:flex;gap:8px;padding:12px 16px;border-top:1px solid rgba(255,255,255,0.05);background:rgba(0,0,0,0.3)">'
         '<input type="text" id="analista-input" placeholder="Escribe tu respuesta..." onkeypress="if(event.key===\'Enter\')enviar()" '
