@@ -961,6 +961,7 @@ def analista_view(archivo):
         f'- NUNCA pidas información que ya tienes en los datos actuales del portafolio\n'
         f'- El JSON va al final, solo cuando tengas TODOS los datos listos'
         f'IMPORTANTE: Nunca pongas horizonte:0. El horizonte actual del portafolio es desconocido si no está en los datos — pregúntalo si es necesario, pero nunca pongas 0.\n'
+        f'- Cuando generes el JSON FINAL, escríbelo SOLO, sin ningún texto antes ni después. Solo el JSON puro.\n'
     )
 
     contenido = (
@@ -1028,12 +1029,7 @@ def analista_view(archivo):
         f'    historial.push({{role:"assistant",content:resp}});'
         f'    let esJSON=false;'
         f'    try{{'
-        f'      // Intentar parsear respuesta completa'
-        f'      let jsonStr = resp.trim();'
-        f'      // Si hay texto antes del JSON, extraer solo el JSON'
-        f'      const jsonMatch = jsonStr.match(/\\{{[\\s\\S]*"accion"[\\s\\S]*\\}}/);'
-        f'      if(jsonMatch) jsonStr = jsonMatch[0];'
-        f'      const p=JSON.parse(jsonStr);'
+        f'      const p=JSON.parse(resp.trim());'
         f'      if(p.accion==="analizar"){{'
         f'        esJSON=true; propuestaActual=p;'
         f'        document.getElementById(tid).innerHTML="Perfecto, tengo todo. Calculando tu propuesta óptima...";'
