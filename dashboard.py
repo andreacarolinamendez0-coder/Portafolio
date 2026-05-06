@@ -1293,11 +1293,20 @@ def api_generar_propuesta(archivo):
         portafolio = leer_portafolio(archivo)
         tiene_inv  = len(portafolio.get('aportes',[])) > 0
         precios, trm, inf_usa, inf_col, risk_free, tasa_cdt = cargar_datos()
-        activos  = [c for c in precios.columns if c not in ['JPMV','META']]
         panel    = construir_panel(precios, trm, inf_usa, inf_col, risk_free)
-        ret_real = calcular_retornos_reales(panel, activos)
-        pesos, _ = optimizar_portafolio(ret_real, panel, perfil, risk_free, inversion)
-        reporte_txt = ''
+        activos_todos = [c for c in precios.columns if c not in ['JPMV','META']]
+        ret_real = calcular_retornos_reales(panel, activos_todos)
+
+        # Si el analista ya propuso pesos específicos, usarlos directamente
+        activos_propuestos = data.get('activos', {})
+        if activos_propuestos:
+            # Normalizar para que sumen 1
+            total = sum(activos_propuestos.values())
+            pesos = pd.Series({k: v/total for k, v in activos_propuestos.items()})
+        else:
+            pesos, _ = optimizar_portafolio(ret_real, panel, perfil, risk_free, inversion)
+            
+            reporte_txt = ''
         try:
             from analista import generar_reporte
             import io
