@@ -543,6 +543,11 @@ def register():
                 session['username'] = username
                 session['es_admin'] = False
                 session.permanent   = True
+                from gestor_portafolio import registrar_actividad
+                ip          = request.headers.get('X-Forwarded-For', request.remote_addr or '—').split(',')[0].strip()
+                dispositivo = request.headers.get('User-Agent', '—')[:120]
+                registrar_actividad('registro_nuevo', username, email=email,
+                    detalle='Nuevo usuario registrado', ip=ip, dispositivo=dispositivo)
                 return redirect(url_for('mis_portafolios'))
             else:
                 error = resultado
@@ -593,10 +598,15 @@ def login():
         email    = request.form.get('email', '').strip()
         password = request.form.get('password', '')
         usuario  = login_usuario(email, password)
+        ip          = request.headers.get('X-Forwarded-For', request.remote_addr or '—').split(',')[0].strip()
+        dispositivo = request.headers.get('User-Agent', '—')[:120]
         if usuario:
             session['username'] = usuario['username']
             session['es_admin'] = usuario.get('es_admin', False)
             session.permanent   = True
+            from gestor_portafolio import registrar_actividad
+            registrar_actividad('login_ok', usuario['username'], email=email,
+                detalle='Login exitoso', ip=ip, dispositivo=dispositivo)
             try:
                 t = threading.Thread(
                     target=lambda: subprocess.run(["python","recolector.py"], check=False, timeout=120),
@@ -605,6 +615,9 @@ def login():
                 t.start()
             except: pass
             return redirect(url_for('mis_portafolios'))
+        from gestor_portafolio import registrar_actividad
+        registrar_actividad('login_fail', email, email=email,
+            detalle='Contraseña incorrecta', ip=ip, dispositivo=dispositivo)
         error = 'Email o contraseña incorrectos.'
     err_html = f'<div class="alert alert-error">{error}</div>' if error else ''
     contenido = (
@@ -1556,6 +1569,38 @@ def admin_panel():
                 f'<td>{p["fecha_inicio"]}</td><td>{mon}</td></tr>'
             )
         except: continue
+        from gestor_portafolio import _leer_logs
+    logs_actividad = list(reversed(_leer_logs()))[:100]
+
+    iconos = {
+        'login_ok':      '✅',
+        'login_fail':    '❌',
+        'registro_nuevo':'🆕',
+        'logout':        '👋'
+    }
+    colores = {
+        'login_ok':      'rgba(48,209,88,0.08)',
+        'login_fail':    'rgba(255,69,58,0.08)',
+        'registro_nuevo':'rgba(0,113,227,0.08)',
+        'logout':        'rgba(255,255,255,0.03)'
+    }
+    filas_logs = ''
+    for log in logs_actividad:
+        icono  = iconos.get(log['tipo'], '•')
+        color  = colores.get(log['tipo'], 'transparent')
+        filas_logs += (
+            f'<tr style="background:{color}">'
+            f'<td style="font-size:16px">{icono}</td>'
+            f'<td>{log["fecha"]}</td>'
+            f'<td><strong style="color:#f5f5f7">{log["username"]}</strong></td>'
+            f'<td style="color:#6e6e73">{log["email"]}</td>'
+            f'<td>{log["detalle"]}</td>'
+            f'<td style="font-family:var(--font-mono,monospace);font-size:11px;color:#6e6e73">{log["ip"]}</td>'
+            f'<td style="font-size:11px;color:#3d3d3f;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{log["dispositivo"]}</td>'
+            f'</tr>'
+        )
+    if not filas_logs:
+        filas_logs = '<tr><td colspan="7" style="text-align:center;color:#3d3d3f;padding:20px">Sin actividad registrada aún</td></tr>'
     contenido = (
         '<div class="container">'
         '<div style="margin-bottom:24px"><a href="/mis-portafolios" style="color:#6e6e73;font-size:0.85rem;text-decoration:none">← Volver</a></div>'
@@ -1575,7 +1620,13 @@ def admin_panel():
         '<div class="section-title">Todos los portafolios</div>'
         '<div class="card"><table class="tabla">'
         '<thead><tr><th>Nombre</th><th>Dueño</th><th>Perfil</th><th>Fecha inicio</th><th>Monitor</th></tr></thead>'
-        f'<tbody>{filas_ports}</tbody></table></div></div>'
+        f'<tbody>{filas_ports}</tbody></table></div>'
+
+        '<div class="section-title" style="margin-top:28px">Registro de Actividad</div>'
+        '<div class="card"><div style="overflow-x:auto"><table class="tabla">'
+        '<thead><tr><th></th><th>Fecha</th><th>Usuario</th><th>Email</th><th>Evento</th><th>IP</th><th>Dispositivo</th></tr></thead>'
+        f'<tbody>{filas_logs}</tbody>'
+        '</table></div></div></div>'
         '<script>'
         'async function resetPassword(username) {'
 '  if (!confirm(`¿Resetear contraseña de ${username} a "cambiar123"?`)) return;'

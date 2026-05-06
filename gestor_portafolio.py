@@ -400,3 +400,36 @@ def crear_portafolio_para_usuario(username, nombre, perfil, propietario,
     }
     _escribir(archivo, portafolio)
     return archivo
+
+# ============================================================
+# LOGS DE ACTIVIDAD (NUEVO)
+# ============================================================
+
+ARCHIVO_LOGS_ACTIVIDAD = "datos/logs_actividad.json"
+
+def _leer_logs():
+    if not os.path.exists(ARCHIVO_LOGS_ACTIVIDAD):
+        return []
+    try:
+        return _leer(ARCHIVO_LOGS_ACTIVIDAD)
+    except:
+        return []
+
+def registrar_actividad(tipo, username, email="", detalle="", ip="", dispositivo=""):
+    """
+    tipo: 'login_ok', 'login_fail', 'registro_nuevo', 'logout'
+    """
+    logs = _leer_logs()
+    logs.append({
+        "tipo":        tipo,
+        "username":    username,
+        "email":       email,
+        "detalle":     detalle,
+        "ip":          ip,
+        "dispositivo": dispositivo,
+        "fecha":       datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    })
+    # Mantener solo los últimos 500 registros
+    if len(logs) > 500:
+        logs = logs[-500:]
+    _escribir(ARCHIVO_LOGS_ACTIVIDAD, logs)
