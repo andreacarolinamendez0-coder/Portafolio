@@ -971,8 +971,7 @@ def analista_view(archivo):
         f'  d.textContent=txt; w.appendChild(d); chat.appendChild(w); chat.scrollTop=chat.scrollHeight;'
         f'}}'
 
-        f'function enviarOpc(t){{document.getElementById("opc1").style.display="none";document.getElementById("opc2").style.display="none";enviar(t);}}'
-
+        f'function enviarOpc(t){{document.getElementById("opc1").style.display="none";document.getElementById("opc2").style.display="none";if(t)enviar(t);}}'
         f'async function enviar(forzado){{'
         f'  const input=document.getElementById("analista-input");'
         f'  const txt=forzado||input.value.trim(); if(!txt)return;'
@@ -1008,11 +1007,7 @@ def analista_view(archivo):
         f'    else document.getElementById(tid).innerHTML="❌ "+d.error;'
         f'  }}catch(e){{document.getElementById(tid).innerHTML="Error al generar."}}'
         f'}}'
-        f'</script>'
-
-        # ── Script del editor de composición ──────────────────────
-        '<script>'
-
+        
         # Estado global de tickers nuevos pendientes
         'var tickersNuevosPendientes = new Set();'
 
