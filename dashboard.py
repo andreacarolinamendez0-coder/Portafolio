@@ -1560,13 +1560,26 @@ def admin_panel():
     filas_ports = ''
     for p in portafolios:
         try:
-            data  = leer_portafolio(p['archivo'])
-            owner = data.get('owner', '—')
-            mon   = '<span class="badge badge-green">Activo</span>' if p.get('monitoreo_activo') else '<span style="color:#3d3d3f">—</span>'
+            mon = ('<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 10px;'
+                   'border-radius:980px;font-size:11px;background:rgba(48,209,88,0.1);'
+                   'color:#30d158;border:1px solid rgba(48,209,88,0.2)">'
+                   '<span style="width:5px;height:5px;border-radius:50%;background:#30d158"></span>Activo</span>'
+                   if p.get('monitoreo_activo')
+                   else '<span style="color:#3d3d3f;font-size:12px">Inactivo</span>')
+            senal = p.get('ultima_senal', '—')
+            ts    = p.get('ultimo_analisis', '—')
+            if ts and ts != '—' and len(ts) > 16:
+                ts = ts[:16]
             filas_ports += (
-                f'<tr><td><strong style="color:#f5f5f7">{p["nombre"]}</strong></td>'
-                f'<td>{owner}</td><td>{p["perfil"].upper()}</td>'
-                f'<td>{p["fecha_inicio"]}</td><td>{mon}</td></tr>'
+                f'<tr>'
+                f'<td><strong style="color:#f5f5f7">{p["nombre"]}</strong></td>'
+                f'<td style="color:#a1a1a6">{p.get("owner","—")}</td>'
+                f'<td>{p["perfil"].upper()}</td>'
+                f'<td>{p["fecha_inicio"]}</td>'
+                f'<td>{mon}</td>'
+                f'<td>{senal}</td>'
+                f'<td style="font-size:11px;color:#6e6e73">{ts}</td>'
+                f'</tr>'
             )
         except: continue
         from gestor_portafolio import _leer_logs
@@ -1619,7 +1632,7 @@ def admin_panel():
         f'<tbody>{filas_usuarios}</tbody></table></div>'
         '<div class="section-title">Todos los portafolios</div>'
         '<div class="card"><table class="tabla">'
-        '<thead><tr><th>Nombre</th><th>Dueño</th><th>Perfil</th><th>Fecha inicio</th><th>Monitor</th></tr></thead>'
+        '<thead><tr><th>Nombre</th><th>Dueño</th><th>Perfil</th><th>Fecha inicio</th><th>Monitor</th><th>Última señal</th><th>Último análisis</th></tr></thead>'
         f'<tbody>{filas_ports}</tbody></table></div>'
 
         '<div class="section-title" style="margin-top:28px">Registro de Actividad</div>'

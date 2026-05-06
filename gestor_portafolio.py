@@ -32,13 +32,36 @@ def listar_portafolios():
     for archivo in archivos:
         try:
             data = _leer(f"{CARPETA_PORTAFOLIOS}/{archivo}")
+
+            # Leer último análisis del monitor si existe
+            ruta_monitor = f"{CARPETA_PORTAFOLIOS}/monitor_{archivo}"
+            ultimo_monitor = None
+            ultima_senal   = '—'
+            ultimo_ts      = '—'
+            if os.path.exists(ruta_monitor):
+                try:
+                    m = _leer(ruta_monitor)
+                    ultimo_ts    = m.get('timestamp', '—')
+                    resultados   = m.get('resultados', [])
+                    if resultados:
+                        senales = [r.get('senal','') for r in resultados]
+                        if 'ENTRAR'  in senales: ultima_senal = '🟢 ENTRAR'
+                        elif 'VIGILAR' in senales: ultima_senal = '🟡 VIGILAR'
+                        else: ultima_senal = '⚪ NEUTRAL'
+                except:
+                    pass
+
             portafolios.append({
-                'archivo':      archivo,
-                'nombre':       data.get('nombre', archivo),
-                'perfil':       data.get('perfil', 'desconocido'),
-                'propietario':  data.get('propietario', ''),
-                'fecha_inicio': data.get('fecha_inicio', ''),
-                'activo':       data.get('activo', False)
+                'archivo':          archivo,
+                'nombre':           data.get('nombre', archivo),
+                'perfil':           data.get('perfil', 'desconocido'),
+                'propietario':      data.get('propietario', ''),
+                'fecha_inicio':     data.get('fecha_inicio', ''),
+                'activo':           data.get('activo', False),
+                'owner':            data.get('owner', '—'),
+                'monitoreo_activo': data.get('monitoreo_activo', False),
+                'ultima_senal':     ultima_senal,
+                'ultimo_analisis':  ultimo_ts,
             })
         except:
             continue
