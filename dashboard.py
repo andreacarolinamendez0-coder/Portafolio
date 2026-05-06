@@ -105,11 +105,11 @@ def cargar_macro():
         try: subprocess.run(["python","recolector.py"], check=False, timeout=120)
         except: return None
     try:
-        trm       = pd.read_parquet("datos/macro/trm.parquet")
-        inf_col   = pd.read_parquet("datos/macro/inflacion_col.parquet")
-        inf_usa   = pd.read_parquet("datos/macro/inflacion_usa.parquet")
-        risk_free = pd.read_parquet("datos/macro/risk_free.parquet")
-        banrep    = pd.read_parquet("datos/macro/tasa_banrep.parquet")
+        trm       = pd.read_parquet(os.path.join(DATOS_DIR, "macro/trm.parquet"))
+        inf_col   = pd.read_parquet(os.path.join(DATOS_DIR, "macro/inflacion_col.parquet"))
+        inf_usa   = pd.read_parquet(os.path.join(DATOS_DIR, "macro/inflacion_usa.parquet"))
+        risk_free = pd.read_parquet(os.path.join(DATOS_DIR, "macro/risk_free.parquet"))
+        banrep    = pd.read_parquet(os.path.join(DATOS_DIR, "macro/tasa_banrep.parquet"))
         trm_actual   = float(trm['TRM'].iloc[-1])
         trm_hace_mes = float(trm['TRM'].iloc[-22]) if len(trm) > 22 else trm_actual
         return {
@@ -1628,6 +1628,18 @@ def api_eliminar_portafolio(archivo):
         return jsonify({'ok': True})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)})
+
+@app.route('/api/fix-banrep')
+def fix_banrep():
+    if not session.get('es_admin'):
+        return jsonify({'error': 'No autorizado'})
+    import os
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    ruta = os.path.join(BASE_DIR, "datos", "macro", "tasa_banrep.parquet")
+    if os.path.exists(ruta):
+        os.remove(ruta)
+        return jsonify({'ok': True, 'mensaje': 'Archivo borrado. Ahora haz clic en Actualizar datos.'})
+    return jsonify({'ok': False, 'mensaje': 'Archivo no encontrado'})
 
 @app.route('/api/recolector', methods=['POST'])
 def api_recolector():
