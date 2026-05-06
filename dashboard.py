@@ -2281,6 +2281,121 @@ def api_test_telegram():
         'usuarios': info
     })
 
+@app.route('/api/profile', methods=['GET'])
+def get_profile():
+    if not session.get('username'):
+        return jsonify({'error': 'No autorizado'})
+    from gestor_portafolio import get_usuario
+    u = get_usuario(session['username'])
+    if not u:
+        return jsonify({'error': 'Usuario no encontrado'})
+    return jsonify({
+        'username':          u.get('username'),
+        'email':             u.get('email'),
+        'telegram_chat_id':  u.get('telegram_chat_id', ''),
+        'email_notifications': u.get('email_notifications', True)
+    })
+
+@app.route('/api/profile', methods=['PUT'])
+def update_profile():
+    if not session.get('username'):
+        return jsonify({'error': 'No autorizado'})
+    from gestor_portafolio import actualizar_usuario, get_usuario
+    from werkzeug.security import generate_password_hash, check_password_hash
+    data     = request.get_json()
+    username = session['username']
+    campos   = {}
+    if 'email' in data and data['email']:
+        campos['email'] = data['email'].strip()
+    if 'telegram_chat_id' in data:
+        campos['telegram_chat_id'] = data['telegram_chat_id'].strip()
+    if 'email_notifications' in data:
+        campos['email_notifications'] = data['email_notifications']
+    if 'new_password' in data and data['new_password']:
+        u = get_usuario(username)
+        ph = u.get('password_hash', '')
+        cur = data.get('current_password', '')
+        from gestor_portafolio import hash_password
+        if hash_password(cur) != ph:
+            return jsonify({'error': 'Contraseña actual incorrecta'}), 400
+        campos['password_hash'] = hash_password(data['new_password'])
+    if not campos:
+        return jsonify({'error': 'Sin cambios'}), 400
+    ok = actualizar_usuario(username, campos)
+    if ok:
+        return jsonify({'ok': True, 'mensaje': 'Perfil actualizado correctamente'})
+    return jsonify({'error': 'Error actualizando perfil'}), 500
+
+@app.route('/settings')
+def settings():
+    if not session.get('username'):
+        return redirect(url_for('login'))
+    from gestor_portafolio import get_usuario
+    u = get_usuario(session['username'])
+    contenido = (
+        '<div class="container" style="max-width:600px">'
+        '<h2 style="margin-bottom:24px">Mi Perfil</h2>'
+
+        # Información personal
+        '<div class="card" style="margin-bottom:16px">'
+        '<h3 style="margin-bottom:16px">Información personal</h3>'
+        f'<div class="form-group"><label>Nombre de usuario</label>'
+        f'<input type="text" class="form-input" value="{u.get("username","")}" disabled style="opacity:0.5"></div>'
+        f'<div class="form-group"><label>Email</label>'
+        f'<input type="email" id="p-email" class="form-input" value="{u.get("email","")}" placeholder="tu@email.com"></div>'
+        f'<div class="form-group"><label>Telegram Chat ID</label>'
+        f'<input type="text" id="p-telegram" class="form-input" value="{u.get("telegram_chat_id","")}" placeholder="ej: 3002443898">'
+        '<p style="font-size:11px;color:#3d3d3f;margin-top:4px">Envía /start a @userinfobot en Telegram para obtener tu ID</p></div>'
+        '<button onclick="guardarPerfil()" class="btn btn-primary">Guardar cambios</button>'
+        '<div id="msg-perfil" style="margin-top:12px;font-size:13px;display:none"></div>'
+        '</div>'
+
+        # Cambiar contraseña
+        '<div class="card" style="margin-bottom:16px">'
+        '<h3 style="margin-bottom:16px">Cambiar contraseña</h3>'
+        '<div class="form-group"><label>Contraseña actual</label>'
+        '<input type="password" id="p-cur" class="form-input" placeholder="••••••••"></div>'
+        '<div class="form-group"><label>Nueva contraseña</label>'
+        '<input type="password" id="p-new" class="form-input" placeholder="Mínimo 6 caracteres"></div>'
+        '<button onclick="cambiarPassword()" class="btn btn-secondary">Cambiar contraseña</button>'
+        '<div id="msg-pw" style="margin-top:12px;font-size:13px;display:none"></div>'
+        '</div>'
+
+        '<script>'
+        'async function guardarPerfil(){'
+        '  var email=document.getElementById("p-email").value.trim();'
+        '  var telegram=document.getElementById("p-telegram").value.trim();'
+        '  var msg=document.getElementById("msg-perfil");'
+        '  try{'
+        '    var r=await fetch("/api/profile",{method:"PUT",headers:{"Content-Type":"application/json"},'
+        '      body:JSON.stringify({email:email,telegram_chat_id:telegram})});'
+        '    var d=await r.json();'
+        '    msg.style.display="block";'
+        '    if(d.ok){msg.style.color="#30d158";msg.textContent="✅ "+d.mensaje;}'
+        '    else{msg.style.color="#ff453a";msg.textContent="❌ "+(d.error||"Error");}'
+        '  }catch(e){msg.style.display="block";msg.style.color="#ff453a";msg.textContent="Error de conexión";}'
+        '}'
+        'async function cambiarPassword(){'
+        '  var cur=document.getElementById("p-cur").value;'
+        '  var nw=document.getElementById("p-new").value;'
+        '  var msg=document.getElementById("msg-pw");'
+        '  if(!cur||!nw){msg.style.display="block";msg.style.color="#ff453a";msg.textContent="Completa ambos campos";return;}'
+        '  if(nw.length<6){msg.style.display="block";msg.style.color="#ff453a";msg.textContent="Mínimo 6 caracteres";return;}'
+        '  try{'
+        '    var r=await fetch("/api/profile",{method:"PUT",headers:{"Content-Type":"application/json"},'
+        '      body:JSON.stringify({current_password:cur,new_password:nw})});'
+        '    var d=await r.json();'
+        '    msg.style.display="block";'
+        '    if(d.ok){msg.style.color="#30d158";msg.textContent="✅ Contraseña actualizada";'
+        '      document.getElementById("p-cur").value="";document.getElementById("p-new").value="";}'
+        '    else{msg.style.color="#ff453a";msg.textContent="❌ "+(d.error||"Error");}'
+        '  }catch(e){msg.style.display="block";msg.style.color="#ff453a";msg.textContent="Error de conexión";}'
+        '}'
+        '</script>'
+        '</div>'
+    )
+    return pagina('Mi Perfil', contenido)
+
 @app.route('/api/recolector', methods=['POST'])
 def api_recolector():
     try: subprocess.run(["python","recolector.py"],check=False,timeout=120); return jsonify({'ok':True})
