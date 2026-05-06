@@ -1048,7 +1048,7 @@ def api_generar_propuesta(archivo):
         try:
             from analista import generar_reporte
             import io
-            inf_col_actual = float(pd.read_parquet("datos/macro/inflacion_col.parquet")['Inflacion_COL'].iloc[-1])
+            inf_col_actual = float(pd.read_parquet(os.path.join(DATOS_DIR, "macro/inflacion_col.parquet"))['Inflacion_COL'].iloc[-1])
             old = sys.stdout; sys.stdout = buf = io.StringIO()
             try:
                 generar_reporte(pesos=pesos, inversion_inicial=inversion, ret_real=ret_real,
@@ -1060,185 +1060,193 @@ def api_generar_propuesta(archivo):
             reporte_txt = buf.getvalue()
         except Exception as e:
             reporte_txt = f'Proyecciones no disponibles: {str(e)}'
-        filas = ''.join(
-            f'<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.06)">'
-            f'<span style="color:#f5f5f7;font-weight:500">{a}</span>'
-            f'<div style="display:flex;align-items:center;gap:12px">'
-            f'<div style="background:rgba(0,113,227,0.15);border-radius:980px;height:6px;width:80px;overflow:hidden">'
-            f'<div style="background:#0071e3;height:100%;width:{v*100:.0f}%"></div></div>'
-            f'<span class="badge badge-blue">{v*100:.1f}%</span></div></div>'
-            for a,v in sorted(pesos.items(), key=lambda x:x[1], reverse=True))
+
+        pesos_dict = pesos.to_dict()
+
+        # Construir filas editables
+        filas_editables = ''
+        for a, v in sorted(pesos_dict.items(), key=lambda x: x[1], reverse=True):
+            pct = round(v * 100, 1)
+            filas_editables += (
+                f'<div class="fila-activo" data-ticker="{a}" style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.06)">'
+                f'<span style="color:#f5f5f7;font-weight:500;width:80px;font-family:monospace;font-size:13px">{a}</span>'
+                f'<div style="flex:1;background:rgba(0,113,227,0.15);border-radius:980px;height:6px;overflow:hidden">'
+                f'<div class="barra-peso" style="background:#0071e3;height:100%;width:{pct}%;transition:width 0.3s"></div></div>'
+                f'<input type="number" class="input-peso" value="{pct}" min="0" max="100" step="0.1" '
+                f'style="width:65px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);'
+                f'border-radius:6px;padding:4px 8px;color:#f5f5f7;font-size:12px;font-family:monospace;text-align:right">'
+                f'<span style="color:#6e6e73;font-size:11px">%</span>'
+                f'<button class="btn-quitar" style="background:rgba(255,69,58,0.1);border:1px solid rgba(255,69,58,0.2);'
+                f'border-radius:6px;padding:3px 8px;cursor:pointer;color:#ff453a;font-size:11px">✕</button>'
+                f'</div>'
+            )
+
         reporte_html = (
             f'<div style="margin-top:16px;padding:14px 16px;background:rgba(255,255,255,0.03);'
             f'border:1px solid rgba(255,255,255,0.07);border-radius:12px;'
             f'font-family:monospace;font-size:11px;color:#a1a1a6;line-height:1.8;'
             f'overflow-x:auto;white-space:pre">{reporte_txt}</div>'
         ) if reporte_txt else ''
-        if tiene_inv:
-            botones = (f'<div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">'
-                f'<button onclick="accionPropuesta(\'nuevo\')" style="padding:10px 20px;border-radius:10px;font-size:13px;font-family:DM Sans,sans-serif;cursor:pointer;background:rgba(0,113,227,0.15);color:#4da3ff;border:1px solid rgba(0,113,227,0.3)">Crear como portafolio adicional</button></div>')
-        else:
-            botones = (f'<div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">'
-                f'<button onclick="accionPropuesta(\'reemplazar\')" style="padding:10px 20px;border-radius:10px;font-size:13px;font-family:DM Sans,sans-serif;cursor:pointer;background:rgba(0,113,227,0.15);color:#4da3ff;border:1px solid rgba(0,113,227,0.3)">Aplicar a este portafolio</button>'
-                f'<button onclick="accionPropuesta(\'nuevo\')" style="padding:10px 20px;border-radius:10px;font-size:13px;font-family:DM Sans,sans-serif;cursor:pointer;background:rgba(255,255,255,0.05);color:#6e6e73;border:1px solid rgba(255,255,255,0.08)">Crear portafolio adicional</button></div>')
+
         dca_html = f'<span>DCA: <strong style="color:#f5f5f7">${aporte_dca:,.0f} COP</strong></span>' if aporte_dca > 0 else ''
 
-        # Construir filas editables
-        pesos_dict = pesos.to_dict()
-        filas_editables = ''
-        for a, v in sorted(pesos_dict.items(), key=lambda x: x[1], reverse=True):
-            pct = round(v * 100, 1)
-            filas_editables += (
-                f'<div class="fila-activo" data-ticker="{a}" style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.06)">'
-                f'<span style="color:#f5f5f7;font-weight:500;width:80px;font-family:monospace">{a}</span>'
-                f'<div style="flex:1;background:rgba(0,113,227,0.15);border-radius:980px;height:6px;overflow:hidden">'
-                f'<div class="barra-peso" style="background:#0071e3;height:100%;width:{pct}%;transition:width 0.3s"></div></div>'
-                f'<input type="number" class="input-peso" value="{pct}" min="0" max="100" step="0.1" '
-                f'style="width:65px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);'
-                f'border-radius:6px;padding:4px 8px;color:#f5f5f7;font-size:12px;font-family:monospace;text-align:right" '
-                f'oninput="actualizarPesos()">'
-                f'<span style="color:#6e6e73;font-size:11px">%</span>'
-                f'<button onclick="quitarActivo(this)" style="background:rgba(255,69,58,0.1);border:1px solid rgba(255,69,58,0.2);'
-                f'border-radius:6px;padding:3px 8px;cursor:pointer;color:#ff453a;font-size:11px">✕</button>'
-                f'</div>'
+        if tiene_inv:
+            btns_html = '<button id="btn-nuevo" style="padding:10px 20px;border-radius:10px;font-size:13px;font-family:DM Sans,sans-serif;cursor:pointer;background:rgba(0,113,227,0.15);color:#4da3ff;border:1px solid rgba(0,113,227,0.3)">Crear como portafolio adicional</button>'
+        else:
+            btns_html = (
+                '<button id="btn-reemplazar" style="padding:10px 20px;border-radius:10px;font-size:13px;font-family:DM Sans,sans-serif;cursor:pointer;background:rgba(0,113,227,0.15);color:#4da3ff;border:1px solid rgba(0,113,227,0.3)">Aplicar a este portafolio</button>'
+                '<button id="btn-nuevo" style="padding:10px 20px;border-radius:10px;font-size:13px;font-family:DM Sans,sans-serif;cursor:pointer;background:rgba(255,255,255,0.05);color:#6e6e73;border:1px solid rgba(255,255,255,0.08)">Crear portafolio adicional</button>'
             )
 
         html = (
-            f'<div id="editor-composicion" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.07);border-radius:14px;padding:16px;margin-top:8px">'
+            '<div id="editor-composicion" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.07);border-radius:14px;padding:16px;margin-top:8px">'
             f'<p style="color:#6e6e73;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;margin:0 0 4px">Propuesta optimizada · {perfil.upper()}</p>'
-            f'<p style="color:#4a5578;font-size:11px;margin:0 0 14px">Puedes editar los pesos, quitar activos o agregar nuevos antes de aplicar</p>'
-
-            # Filas editables
+            '<p style="color:#4a5578;font-size:11px;margin:0 0 14px">Edita pesos, quita o agrega activos antes de aplicar</p>'
             f'<div id="lista-activos">{filas_editables}</div>'
-
-            # Agregar activo nuevo
-            f'<div style="margin-top:14px;padding:12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:10px">'
-            f'<p style="color:#6e6e73;font-size:11px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.05em">+ Agregar activo</p>'
-            f'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
-            f'<input type="text" id="nuevo-ticker" placeholder="Ticker (ej: SCHD, BRK-B)" '
-            f'style="width:160px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);'
-            f'border-radius:6px;padding:6px 10px;color:#f5f5f7;font-size:12px;font-family:monospace" '
-            f'oninput="this.value=this.value.toUpperCase()">'
-            f'<input type="number" id="nuevo-peso" placeholder="%" min="0" max="100" step="0.1" '
-            f'style="width:70px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);'
-            f'border-radius:6px;padding:6px 10px;color:#f5f5f7;font-size:12px;text-align:right">'
-            f'<button onclick="agregarActivo()" '
-            f'style="padding:6px 14px;border-radius:6px;background:rgba(0,113,227,0.15);color:#4da3ff;'
-            f'border:1px solid rgba(0,113,227,0.3);cursor:pointer;font-size:12px;font-family:DM Sans,sans-serif">'
-            f'Agregar</button>'
-            f'<span id="ticker-status" style="font-size:11px;color:#6e6e73"></span>'
-            f'</div></div>'
-
-            # Total y validación
-            f'<div style="margin-top:12px;display:flex;align-items:center;justify-content:space-between">'
-            f'<span style="font-size:13px;color:#6e6e73">Total: <strong id="total-pesos" style="color:#f5f5f7">100.0%</strong></span>'
-            f'<span id="alerta-total" style="font-size:11px;color:#ff453a;display:none">⚠️ Debe sumar 100%</span>'
-            f'</div>'
-
+            '<div style="margin-top:14px;padding:12px;background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:10px">'
+            '<p style="color:#6e6e73;font-size:11px;margin:0 0 8px;text-transform:uppercase;letter-spacing:0.05em">+ Agregar activo</p>'
+            '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+            '<input type="text" id="nuevo-ticker" placeholder="Ticker (ej: SCHD)" style="width:160px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 10px;color:#f5f5f7;font-size:12px;font-family:monospace">'
+            '<input type="number" id="nuevo-peso" placeholder="%" min="0" max="100" step="0.1" style="width:70px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:6px 10px;color:#f5f5f7;font-size:12px;text-align:right">'
+            '<button id="btn-agregar" style="padding:6px 14px;border-radius:6px;background:rgba(0,113,227,0.15);color:#4da3ff;border:1px solid rgba(0,113,227,0.3);cursor:pointer;font-size:12px;font-family:DM Sans,sans-serif">Agregar</button>'
+            '<span id="ticker-status" style="font-size:11px;color:#6e6e73"></span>'
+            '</div></div>'
+            '<div style="margin-top:12px;display:flex;align-items:center;justify-content:space-between">'
+            '<span style="font-size:13px;color:#6e6e73">Total: <strong id="total-pesos" style="color:#f5f5f7">100.0%</strong></span>'
+            '<span id="alerta-total" style="font-size:11px;color:#ff453a;display:none">⚠️ Debe sumar 100%</span>'
+            '</div>'
             f'{reporte_html}'
-            f'<div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.06);display:flex;gap:16px;font-size:12px;color:#6e6e73">'
+            '<div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.06);display:flex;gap:16px;font-size:12px;color:#6e6e73">'
             f'<span>Inversión: <strong style="color:#f5f5f7">${inversion:,.0f} COP</strong></span>'
             f'{dca_html}'
             f'<span>Horizonte: <strong style="color:#f5f5f7">{horizonte} años</strong></span>'
-            f'</div>'
-
-            # Botones
-            f'<div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap" id="botones-propuesta">'
-            + (f'<button onclick="aplicarComposicion(\'nuevo\')" style="padding:10px 20px;border-radius:10px;font-size:13px;font-family:DM Sans,sans-serif;cursor:pointer;background:rgba(0,113,227,0.15);color:#4da3ff;border:1px solid rgba(0,113,227,0.3)">Crear como portafolio adicional</button>' if tiene_inv else
-               f'<button onclick="aplicarComposicion(\'reemplazar\')" style="padding:10px 20px;border-radius:10px;font-size:13px;font-family:DM Sans,sans-serif;cursor:pointer;background:rgba(0,113,227,0.15);color:#4da3ff;border:1px solid rgba(0,113,227,0.3)">Aplicar a este portafolio</button>'
-               f'<button onclick="aplicarComposicion(\'nuevo\')" style="padding:10px 20px;border-radius:10px;font-size:13px;font-family:DM Sans,sans-serif;cursor:pointer;background:rgba(255,255,255,0.05);color:#6e6e73;border:1px solid rgba(255,255,255,0.08)">Crear portafolio adicional</button>')
-            + f'</div>'
-            f'</div>'
-
-            # JavaScript del editor
-            f'<script>'
-            f'function actualizarPesos(){{'
-            f'  const inputs=document.querySelectorAll(".input-peso");'
-            f'  let total=0;'
-            f'  inputs.forEach(i=>{{total+=parseFloat(i.value)||0;}});'
-            f'  total=Math.round(total*10)/10;'
-            f'  const el=document.getElementById("total-pesos");'
-            f'  el.textContent=total+"%";'
-            f'  el.style.color=Math.abs(total-100)<0.5?"#30d158":"#ff453a";'
-            f'  document.getElementById("alerta-total").style.display=Math.abs(total-100)<0.5?"none":"inline";'
-            f'  // Actualizar barras'
-            f'  document.querySelectorAll(".fila-activo").forEach(fila=>{{'
-            f'    const input=fila.querySelector(".input-peso");'
-            f'    const barra=fila.querySelector(".barra-peso");'
-            f'    if(barra)barra.style.width=(parseFloat(input.value)||0)+"%";'
-            f'  }});'
-            f'}}'
-
-            f'function quitarActivo(btn){{'
-            f'  btn.closest(".fila-activo").remove();'
-            f'  actualizarPesos();'
-            f'}}'
-
-            f'async function agregarActivo(){{'
-            f'  const ticker=document.getElementById("nuevo-ticker").value.trim().toUpperCase();'
-            f'  const peso=parseFloat(document.getElementById("nuevo-peso").value)||0;'
-            f'  const status=document.getElementById("ticker-status");'
-            f'  if(!ticker||peso<=0){{status.textContent="Completa ticker y peso";status.style.color="#ff453a";return;}}'
-            f'  // Verificar que no exista ya'
-            f'  const existentes=[...document.querySelectorAll(".fila-activo")].map(f=>f.dataset.ticker);'
-            f'  if(existentes.includes(ticker)){{status.textContent="Ya está en la lista";status.style.color="#ffd60a";return;}}'
-            f'  status.textContent="Verificando ticker...";status.style.color="#6e6e73";'
-            f'  try{{'
-            f'    const r=await fetch("/api/verificar-ticker/"+ticker);'
-            f'    const d=await r.json();'
-            f'    if(!d.valido){{status.textContent="❌ Ticker no encontrado";status.style.color="#ff453a";return;}}'
-            f'    status.textContent="✅ "+d.nombre+" — $"+d.precio;status.style.color="#30d158";'
-            f'    // Agregar fila'
-            f'    const lista=document.getElementById("lista-activos");'
-            f'    const div=document.createElement("div");'
-            f'    div.className="fila-activo"; div.dataset.ticker=ticker;'
-            f'    div.style.cssText="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.06)";'
-            f'    div.innerHTML=`<span style="color:#f5f5f7;font-weight:500;width:80px;font-family:monospace">${{ticker}}</span>`'
-            f'      +`<div style="flex:1;background:rgba(0,113,227,0.15);border-radius:980px;height:6px;overflow:hidden"><div class="barra-peso" style="background:#0071e3;height:100%;width:${{peso}}%;transition:width 0.3s"></div></div>`'
-            f'      +`<input type="number" class="input-peso" value="${{peso}}" min="0" max="100" step="0.1" oninput="actualizarPesos()" style="width:65px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:4px 8px;color:#f5f5f7;font-size:12px;font-family:monospace;text-align:right">`'
-            f'      +`<span style="color:#6e6e73;font-size:11px">%</span>`'
-            f'      +`<button onclick="quitarActivo(this)" style="background:rgba(255,69,58,0.1);border:1px solid rgba(255,69,58,0.2);border-radius:6px;padding:3px 8px;cursor:pointer;color:#ff453a;font-size:11px">✕</button>`'
-            f'      +(d.nuevo?`<span style="font-size:10px;color:#ffd60a;padding:2px 6px;border-radius:4px;background:rgba(255,214,10,0.1);border:1px solid rgba(255,214,10,0.2)">Nuevo</span>`:"");'
-            f'    lista.appendChild(div);'
-            f'    actualizarPesos();'
-            f'    document.getElementById("nuevo-ticker").value="";'
-            f'    document.getElementById("nuevo-peso").value="";'
-            f'  }}catch(e){{status.textContent="Error verificando";status.style.color="#ff453a";}}'
-            f'}}'
-
-            f'function obtenerPesosActuales(){{'
-            f'  const pesos={{}};'
-            f'  document.querySelectorAll(".fila-activo").forEach(fila=>{{'
-            f'    const ticker=fila.dataset.ticker;'
-            f'    const peso=parseFloat(fila.querySelector(".input-peso").value)||0;'
-            f'    if(ticker&&peso>0)pesos[ticker]=Math.round(peso*10)/10;'
-            f'  }});'
-            f'  return pesos;'
-            f'}}'
-
-            f'async function aplicarComposicion(tipo){{'
-            f'  const total=parseFloat(document.getElementById("total-pesos").textContent);'
-            f'  if(Math.abs(total-100)>0.5){{alert("Los pesos deben sumar 100%. Actualmente suman "+total+"%");return;}}'
-            f'  const pesosActuales=obtenerPesosActuales();'
-            f'  const pesosNormalizados={{}};'
-            f'  Object.entries(pesosActuales).forEach(([k,v])=>pesosNormalizados[k]=v/100);'
-            f'  const btns=document.querySelectorAll("#botones-propuesta button");'
-            f'  btns.forEach(b=>{{b.disabled=true;b.textContent="Guardando..."}});'
-            f'  try{{'
-            f'    const r=await fetch("/api/aplicar-propuesta/{archivo}",{{method:"POST",'
-            f'      headers:{{"Content-Type":"application/json"}},'
-            f'      body:JSON.stringify({{...window.propuestaActual,tipo,pesos:pesosNormalizados}})}});'
-            f'    const d=await r.json();'
-            f'    if(d.ok){{msgBot("✅ "+d.mensaje+" Redirigiendo...");if(d.redirigir)setTimeout(()=>window.location.href=d.redirigir,1800);}}'
-            f'    else{{msgBot("❌ "+d.error);btns.forEach(b=>b.disabled=false);}}'
-            f'  }}catch(e){{msgBot("Error de conexión.");btns.forEach(b=>b.disabled=false);}}'
-            f'}}'
-            f'</script>'
+            '</div>'
+            f'<div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap" id="botones-propuesta">{btns_html}</div>'
+            '</div>'
         )
 
-        return jsonify({'ok': True, 'html': html, 'propuesta': {
+        import json as _json
+        propuesta_json = _json.dumps({
             'pesos': pesos_dict, 'perfil': perfil, 'inversion': inversion,
-            'aporte_dca': aporte_dca, 'frecuencia_meses': freq, 'horizonte': horizonte, 'archivo': archivo
+            'aporte_dca': aporte_dca, 'frecuencia_meses': freq,
+            'horizonte': horizonte, 'archivo': archivo
+        })
+
+        # JavaScript separado y limpio
+        js = """
+<script>
+(function() {
+  // Guardar propuesta base
+  var propuestaBase = """ + propuesta_json + """;
+  window.propuestaActual = propuestaBase;
+
+  function actualizarPesos() {
+    var inputs = document.querySelectorAll('#lista-activos .input-peso');
+    var total = 0;
+    inputs.forEach(function(i) { total += parseFloat(i.value) || 0; });
+    total = Math.round(total * 10) / 10;
+    var el = document.getElementById('total-pesos');
+    el.textContent = total + '%';
+    el.style.color = Math.abs(total - 100) < 0.5 ? '#30d158' : '#ff453a';
+    document.getElementById('alerta-total').style.display = Math.abs(total - 100) < 0.5 ? 'none' : 'inline';
+    document.querySelectorAll('#lista-activos .fila-activo').forEach(function(fila) {
+      var inp = fila.querySelector('.input-peso');
+      var barra = fila.querySelector('.barra-peso');
+      if (barra) barra.style.width = (parseFloat(inp.value) || 0) + '%';
+    });
+  }
+
+  function quitarActivo(btn) {
+    btn.closest('.fila-activo').remove();
+    actualizarPesos();
+  }
+
+  function obtenerPesosActuales() {
+    var pesos = {};
+    document.querySelectorAll('#lista-activos .fila-activo').forEach(function(fila) {
+      var ticker = fila.dataset.ticker;
+      var peso = parseFloat(fila.querySelector('.input-peso').value) || 0;
+      if (ticker && peso > 0) pesos[ticker] = Math.round(peso * 10) / 10;
+    });
+    return pesos;
+  }
+
+  async function agregarActivo() {
+    var ticker = document.getElementById('nuevo-ticker').value.trim().toUpperCase();
+    var peso = parseFloat(document.getElementById('nuevo-peso').value) || 0;
+    var status = document.getElementById('ticker-status');
+    if (!ticker || peso <= 0) { status.textContent = 'Completa ticker y peso'; status.style.color = '#ff453a'; return; }
+    var existentes = [...document.querySelectorAll('#lista-activos .fila-activo')].map(function(f) { return f.dataset.ticker; });
+    if (existentes.includes(ticker)) { status.textContent = 'Ya está en la lista'; status.style.color = '#ffd60a'; return; }
+    status.textContent = 'Verificando...'; status.style.color = '#6e6e73';
+    try {
+      var r = await fetch('/api/verificar-ticker/' + ticker);
+      var d = await r.json();
+      if (!d.valido) { status.textContent = '❌ Ticker no encontrado'; status.style.color = '#ff453a'; return; }
+      status.textContent = '✅ ' + d.nombre + ' — $' + d.precio; status.style.color = '#30d158';
+      var lista = document.getElementById('lista-activos');
+      var div = document.createElement('div');
+      div.className = 'fila-activo';
+      div.dataset.ticker = ticker;
+      div.style.cssText = 'display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.06)';
+      div.innerHTML = '<span style="color:#f5f5f7;font-weight:500;width:80px;font-family:monospace;font-size:13px">' + ticker + '</span>'
+        + '<div style="flex:1;background:rgba(0,113,227,0.15);border-radius:980px;height:6px;overflow:hidden"><div class="barra-peso" style="background:#0071e3;height:100%;width:' + peso + '%;transition:width 0.3s"></div></div>'
+        + '<input type="number" class="input-peso" value="' + peso + '" min="0" max="100" step="0.1" style="width:65px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:6px;padding:4px 8px;color:#f5f5f7;font-size:12px;font-family:monospace;text-align:right">'
+        + '<span style="color:#6e6e73;font-size:11px">%</span>'
+        + '<button class="btn-quitar" style="background:rgba(255,69,58,0.1);border:1px solid rgba(255,69,58,0.2);border-radius:6px;padding:3px 8px;cursor:pointer;color:#ff453a;font-size:11px">✕</button>'
+        + (d.nuevo ? '<span style="font-size:10px;color:#ffd60a;padding:2px 6px;border-radius:4px;background:rgba(255,214,10,0.1);border:1px solid rgba(255,214,10,0.2)">Nuevo ⏳</span>' : '');
+      lista.appendChild(div);
+      div.querySelector('.input-peso').addEventListener('input', actualizarPesos);
+      div.querySelector('.btn-quitar').addEventListener('click', function() { quitarActivo(this); });
+      actualizarPesos();
+      document.getElementById('nuevo-ticker').value = '';
+      document.getElementById('nuevo-peso').value = '';
+    } catch(e) { status.textContent = 'Error verificando'; status.style.color = '#ff453a'; }
+  }
+
+  async function aplicarComposicion(tipo) {
+    var total = parseFloat(document.getElementById('total-pesos').textContent);
+    if (Math.abs(total - 100) > 0.5) { alert('Los pesos deben sumar 100%. Ahora suman ' + total + '%'); return; }
+    var pesosActuales = obtenerPesosActuales();
+    var pesosNorm = {};
+    Object.entries(pesosActuales).forEach(function(kv) { pesosNorm[kv[0]] = Math.round(kv[1]) / 100; });
+    var btns = document.querySelectorAll('#botones-propuesta button');
+    btns.forEach(function(b) { b.disabled = true; b.textContent = 'Guardando...'; });
+    try {
+      var payload = Object.assign({}, window.propuestaActual, { tipo: tipo, pesos: pesosNorm });
+      var r = await fetch('/api/aplicar-propuesta/' + propuestaBase.archivo, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      var d = await r.json();
+      if (d.ok) { msgBot('✅ ' + d.mensaje + ' Redirigiendo...'); if (d.redirigir) setTimeout(function() { window.location.href = d.redirigir; }, 1800); }
+      else { msgBot('❌ ' + d.error); btns.forEach(function(b) { b.disabled = false; }); }
+    } catch(e) { msgBot('Error de conexión.'); btns.forEach(function(b) { b.disabled = false; }); }
+  }
+
+  // Eventos iniciales
+  document.querySelectorAll('#lista-activos .input-peso').forEach(function(i) {
+    i.addEventListener('input', actualizarPesos);
+  });
+  document.querySelectorAll('#lista-activos .btn-quitar').forEach(function(b) {
+    b.addEventListener('click', function() { quitarActivo(this); });
+  });
+  document.getElementById('btn-agregar').addEventListener('click', agregarActivo);
+
+  var btnR = document.getElementById('btn-reemplazar');
+  var btnN = document.getElementById('btn-nuevo');
+  if (btnR) btnR.addEventListener('click', function() { aplicarComposicion('reemplazar'); });
+  if (btnN) btnN.addEventListener('click', function() { aplicarComposicion('nuevo'); });
+
+  actualizarPesos();
+})();
+</script>
+"""
+        return jsonify({'ok': True, 'html': html + js, 'propuesta': {
+            'pesos': pesos_dict, 'perfil': perfil, 'inversion': inversion,
+            'aporte_dca': aporte_dca, 'frecuencia_meses': freq,
+            'horizonte': horizonte, 'archivo': archivo
         }})
     except Exception as e: return jsonify({'ok':False,'error':str(e)})
 
