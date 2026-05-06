@@ -1300,10 +1300,19 @@ def api_generar_propuesta(archivo):
             )
 
         reporte_html = (
-            f'<div style="margin-top:16px;padding:14px 16px;background:rgba(255,255,255,0.03);'
+            f'<div style="margin-top:16px">'
+            f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">'
+            f'<span style="font-size:11px;color:#6e6e73;text-transform:uppercase;letter-spacing:0.05em">Proyecciones</span>'
+            f'<button id="btn-recalcular" '
+            f'style="padding:4px 12px;border-radius:6px;font-size:11px;font-family:DM Sans,sans-serif;cursor:pointer;'
+            f'background:rgba(79,138,255,0.1);color:#4da3ff;border:1px solid rgba(79,138,255,0.3)">'
+            f'↻ Recalcular proyecciones</button>'
+            f'</div>'
+            f'<div id="bloque-reporte" style="padding:14px 16px;background:rgba(255,255,255,0.03);'
             f'border:1px solid rgba(255,255,255,0.07);border-radius:12px;'
             f'font-family:monospace;font-size:11px;color:#a1a1a6;line-height:1.8;'
             f'overflow-x:auto;white-space:pre">{reporte_txt}</div>'
+            f'</div>'
         ) if reporte_txt else ''
 
         dca_html = f'<span>DCA: <strong style="color:#f5f5f7">${aporte_dca:,.0f} COP</strong></span>' if aporte_dca > 0 else ''
