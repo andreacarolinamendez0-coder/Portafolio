@@ -481,27 +481,65 @@ def mis_portafolios():
     username    = session['username']
     portafolios = listar_portafolios_de_usuario(username)
     cards = ''
+    n_activos = sum(1 for p in portafolios if p.get('monitoreo_activo'))
+    aviso_duplicado = ''
+    if n_activos > 1:
+        aviso_duplicado = (
+            '<div style="background:rgba(255,69,58,0.08);border:1px solid rgba(255,69,58,0.2);'
+            'border-radius:12px;padding:12px 16px;margin-bottom:16px;display:flex;gap:10px;align-items:center">'
+            '<span style="font-size:18px">⚠️</span>'
+            '<div>'
+            '<p style="color:#ff453a;font-size:13px;font-weight:500;margin:0 0 2px">Más de un portafolio monitoreado</p>'
+            '<p style="color:#6e6e73;font-size:12px;margin:0">Solo debería estar activo uno a la vez. '
+            'Entra al Monitor de cada portafolio y desactiva los que no necesites.</p>'
+            '</div></div>'
+        )
+ 
     if portafolios:
         for p in portafolios:
             pb = f'<span class="badge badge-{"yellow" if p["perfil"]=="agresivo" else "blue"}">{p["perfil"].upper()}</span>'
-            borde = 'rgba(255,255,255,0.07)'; fondo = 'rgba(255,255,255,0.04)'
-            if p.get('monitoreo_activo'):
-                btn = (f'<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:#30d158;'
-                       f'padding:5px 12px;border-radius:980px;background:rgba(48,209,88,0.08);border:1px solid rgba(48,209,88,0.2)">'
-                       f'<span style="width:5px;height:5px;border-radius:50%;background:#30d158;display:inline-block"></span>Monitoreando</span>')
+            es_monitoreado = p.get('monitoreo_activo', False)
+            borde = 'rgba(48,209,88,0.25)' if es_monitoreado else 'rgba(255,255,255,0.07)'
+            fondo = 'rgba(48,209,88,0.04)' if es_monitoreado else 'rgba(255,255,255,0.04)'
+ 
+            if es_monitoreado:
+                btn = (
+                    '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">'
+                    '<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:#30d158;'
+                    'padding:5px 12px;border-radius:980px;background:rgba(48,209,88,0.08);'
+                    'border:1px solid rgba(48,209,88,0.2)">'
+                    '<span style="width:5px;height:5px;border-radius:50%;background:#30d158;'
+                    'animation:pulse 2s infinite;display:inline-block"></span>'
+                    'Monitoreando activamente</span>'
+                    f'<span style="font-size:10px;color:#6e6e73">Este es el portafolio en seguimiento</span>'
+                    '</div>'
+                )
             else:
-                btn = (f'<form method="POST" action="/activar-portafolio/{p["archivo"]}" style="display:inline" onsubmit="event.stopPropagation()">'
-                       f'<button type="submit" onclick="event.stopPropagation()" style="padding:5px 14px;border-radius:980px;font-size:11px;'
-                       f'font-family:DM Sans,sans-serif;cursor:pointer;border:1px solid rgba(255,255,255,0.12);'
-                       f'background:rgba(255,255,255,0.06);color:#6e6e73">Activar monitoreo</button></form>')
+                btn = (
+                    f'<form method="POST" action="/activar-portafolio/{p["archivo"]}" '
+                    f'style="display:inline" onsubmit="event.stopPropagation()">'
+                    f'<button type="submit" onclick="event.stopPropagation()" '
+                    f'style="padding:5px 14px;border-radius:980px;font-size:11px;'
+                    f'font-family:DM Sans,sans-serif;cursor:pointer;'
+                    f'border:1px solid rgba(255,255,255,0.12);'
+                    f'background:rgba(255,255,255,0.06);color:#6e6e73">'
+                    f'Activar monitoreo</button></form>'
+                )
+ 
             cards += (
                 f'<div style="position:relative;margin-bottom:12px">'
-                f'<a href="/portafolio/{p["archivo"]}" style="display:block;text-decoration:none;background:{fondo};border:1px solid {borde};'
-                f'border-radius:18px;padding:24px 28px;backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);transition:all 0.2s ease"'
-                f' onmouseover="this.style.borderColor=\'rgba(255,255,255,0.16)\';this.style.transform=\'translateY(-1px)\'"'
+                f'<a href="/portafolio/{p["archivo"]}" style="display:block;text-decoration:none;'
+                f'background:{fondo};border:1px solid {borde};'
+                f'border-radius:18px;padding:24px 28px;'
+                f'backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);transition:all 0.2s ease"'
+                f' onmouseover="this.style.borderColor=\'{"rgba(48,209,88,0.4)" if es_monitoreado else "rgba(255,255,255,0.16)"}\';this.style.transform=\'translateY(-1px)\'"'
                 f' onmouseout="this.style.borderColor=\'{borde}\';this.style.transform=\'translateY(0)\'">'
                 f'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px">'
-                f'<div><div style="font-size:1.15rem;font-weight:600;color:#f5f5f7;margin-bottom:2px;letter-spacing:-0.02em">{p["nombre"]}</div>'
+                f'<div>'
+                f'<div style="font-size:1.15rem;font-weight:600;color:#f5f5f7;margin-bottom:2px;letter-spacing:-0.02em">'
+                f'{p["nombre"]}'
+                + (' <span style="font-size:11px;color:#30d158;font-weight:400">● en vivo</span>' if es_monitoreado else '')
+                + f'</div>'
                 f'<div style="color:#6e6e73;font-size:0.85rem">{p["propietario"]}</div></div>'
                 f'<div style="display:flex;gap:6px;align-items:center">{pb}</div></div>'
                 f'<div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px">'
@@ -509,8 +547,13 @@ def mis_portafolios():
                 f'{btn}</div></a></div>'
             )
     else:
-        cards = ('<div class="card"><div class="no-data">No tienes portafolios aún.<br><br>'
-                 '<a href="/nuevo" class="btn btn-primary" style="display:inline-flex;width:auto;margin-top:16px">Crear mi primer portafolio</a></div></div>')
+        cards = (
+            '<div class="card"><div class="no-data">No tienes portafolios aún.<br><br>'
+            '<a href="/nuevo" class="btn btn-primary" '
+            'style="display:inline-flex;width:auto;margin-top:16px">Crear mi primer portafolio</a>'
+            '</div></div>'
+        )
+
     contenido = (
         '<div class="container"><div class="header">'
         '<h1>Sistema de Portafolio</h1><p class="subtitle">Gestión inteligente de inversiones</p></div>'
@@ -522,7 +565,7 @@ def mis_portafolios():
         '<a href="/settings" class="btn btn-secondary" style="font-size:12px;padding:7px 14px">Mi Perfil</a>'
         '<a href="/logout" class="btn btn-secondary" style="font-size:12px;padding:7px 14px">Cerrar sesión</a>'
         '<a href="/nuevo" class="btn btn-primary">+ Crear Portafolio</a></div></div>'
-        + cards + '</div>')
+        + aviso_duplicado + cards + '</div>')
     return pagina('Mis Portafolios', contenido)
 
 # ============================================================
@@ -1761,109 +1804,289 @@ def api_bot(archivo):
 # MONITOR
 # ============================================================
 
+def leer_estado_monitor(archivo):
+    ruta = os.path.join(DATOS_DIR, "portafolios", f"monitor_{archivo}")
+    if os.path.exists(ruta):
+        try:
+            with open(ruta, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except:
+            pass
+    return {}
+
+
 @app.route('/monitor/<archivo>')
 def monitor_view(archivo):
     redir = verificar_acceso(archivo)
     if redir: return redir
     from gestor_portafolio import leer_portafolio
     portafolio  = leer_portafolio(archivo)
-    composicion = portafolio.get('composicion',{})
-    monitoreo   = portafolio.get('monitoreo_activo',False)
-    ruta_m      = f"datos/portafolios/monitor_{archivo}"
-    ultimo      = None
-    if os.path.exists(ruta_m):
-        with open(ruta_m,'r',encoding='utf-8') as f: ultimo=json.load(f)
+    composicion = portafolio.get('composicion', {})
+    monitoreo   = portafolio.get('monitoreo_activo', False)
+    estado      = leer_estado_monitor(archivo)   # helper abajo
+
+    # ── Botón y badge de estado ─────────────────────────────
     if monitoreo:
-        btn_m  = (f'<form method="POST" action="/api/toggle-monitor/{archivo}"><button type="submit" style="padding:8px 20px;border-radius:980px;font-size:12px;font-family:DM Sans,sans-serif;cursor:pointer;background:rgba(255,69,58,0.1);color:#ff453a;border:1px solid rgba(255,69,58,0.2)">Detener monitoreo</button></form>')
-        estado = ('<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:980px;font-size:12px;background:rgba(48,209,88,0.1);color:#30d158;border:1px solid rgba(48,209,88,0.2)">'
-                  '<span style="width:6px;height:6px;border-radius:50%;background:#30d158;animation:pulse 2s infinite"></span>Monitoreando activamente</span>')
+        btn_m = (
+            f'<form method="POST" action="/api/toggle-monitor/{archivo}">'
+            '<button type="submit" style="padding:8px 20px;border-radius:980px;font-size:12px;'
+            'font-family:DM Sans,sans-serif;cursor:pointer;background:rgba(255,69,58,0.1);'
+            'color:#ff453a;border:1px solid rgba(255,69,58,0.2)">Detener monitoreo</button></form>'
+        )
+        estado_badge = (
+            '<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;'
+            'border-radius:980px;font-size:12px;background:rgba(48,209,88,0.1);color:#30d158;'
+            'border:1px solid rgba(48,209,88,0.2)">'
+            '<span style="width:6px;height:6px;border-radius:50%;background:#30d158;'
+            'animation:pulse 2s infinite"></span>Monitoreando activamente</span>'
+        )
     else:
-        btn_m  = (f'<form method="POST" action="/api/toggle-monitor/{archivo}"><button type="submit" style="padding:8px 20px;border-radius:980px;font-size:12px;font-family:DM Sans,sans-serif;cursor:pointer;background:rgba(0,113,227,0.12);color:#4da3ff;border:1px solid rgba(0,113,227,0.3)">Activar monitoreo</button></form>')
-        estado = '<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:980px;font-size:12px;background:rgba(255,255,255,0.04);color:#6e6e73;border:1px solid rgba(255,255,255,0.08)">⚪ Inactivo</span>'
-    activos_html=''
-    if ultimo and ultimo.get('resultados'):
-        for r in ultimo['resultados']:
-            s=r['senal']
-            col={'ENTRAR':'#30d158','VIGILAR':'#ffd60a','NEUTRAL':'#6e6e73'}.get(s,'#6e6e73')
-            bg ={'ENTRAR':'rgba(48,209,88,0.08)','VIGILAR':'rgba(255,214,10,0.08)','NEUTRAL':'rgba(255,255,255,0.03)'}.get(s,'rgba(255,255,255,0.03)')
-            bd ={'ENTRAR':'rgba(48,209,88,0.2)','VIGILAR':'rgba(255,214,10,0.2)','NEUTRAL':'rgba(255,255,255,0.07)'}.get(s,'rgba(255,255,255,0.07)')
-            em ={'ENTRAR':'🟢','VIGILAR':'🟡','NEUTRAL':'⚪'}.get(s,'⚪')
-            btn_c='' if s!='ENTRAR' else (f'<a href="/seguimiento/{archivo}?activo={r["ticker"]}" style="padding:6px 14px;border-radius:980px;font-size:11px;text-decoration:none;background:rgba(0,113,227,0.15);color:#4da3ff;border:1px solid rgba(0,113,227,0.3);white-space:nowrap">Comprar →</a>')
-            activos_html+=(
-                f'<div style="background:{bg};border:1px solid {bd};border-radius:14px;padding:16px 20px;margin-bottom:10px">'
-                f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">'
-                f'<div style="display:flex;align-items:center;gap:10px"><strong style="color:#f5f5f7;font-size:15px">{r["ticker"]}</strong><span style="color:#f5f5f7;font-size:14px;font-weight:500">${r["precio"]:,.2f}</span></div>'
-                f'<div style="display:flex;align-items:center;gap:10px"><span style="padding:4px 12px;border-radius:980px;font-size:11px;font-weight:500;background:{bg};color:{col};border:1px solid {bd}">{em} {s}</span>{btn_c}</div></div>'
-                f'<div style="display:flex;gap:20px;flex-wrap:wrap">'
-                f'<div style="text-align:center"><p style="color:#6e6e73;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;margin:0 0 2px">RSI</p><p style="color:#f5f5f7;font-size:14px;font-weight:500;margin:0">{r["rsi"]}</p></div>'
-                f'<div style="text-align:center"><p style="color:#6e6e73;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;margin:0 0 2px">Score</p><p style="color:{col};font-size:14px;font-weight:500;margin:0">{r["score"]}/10</p></div>'
-                f'<div style="text-align:center"><p style="color:#6e6e73;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;margin:0 0 2px">Tendencia</p><p style="color:{"#30d158" if r["tendencia"]>0 else "#ff453a"};font-size:14px;font-weight:500;margin:0">{r["tendencia"]:+.1f}%</p></div>'
-                f'<div style="text-align:center"><p style="color:#6e6e73;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;margin:0 0 2px">Vol ratio</p><p style="color:#f5f5f7;font-size:14px;font-weight:500;margin:0">{r["vol_ratio"]}x</p></div>'
-                f'<div style="text-align:center"><p style="color:#6e6e73;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;margin:0 0 2px">MA50</p><p style="color:#f5f5f7;font-size:14px;font-weight:500;margin:0">${r["ma50"]:,.2f}</p></div>'
-                f'</div></div>')
-    elif composicion and not ultimo:
-        activos_html=('<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:14px;padding:40px;text-align:center;color:#6e6e73">Activa el monitoreo para ver el análisis.<br><span style="font-size:12px;margin-top:8px;display:block">El primer análisis tarda ~2 minutos.</span></div>')
+        btn_m = (
+            f'<form method="POST" action="/api/toggle-monitor/{archivo}">'
+            '<button type="submit" style="padding:8px 20px;border-radius:980px;font-size:12px;'
+            'font-family:DM Sans,sans-serif;cursor:pointer;background:rgba(0,113,227,0.12);'
+            'color:#4da3ff;border:1px solid rgba(0,113,227,0.3)">Activar monitoreo</button></form>'
+        )
+        estado_badge = (
+            '<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;'
+            'border-radius:980px;font-size:12px;background:rgba(255,255,255,0.04);color:#6e6e73;'
+            'border:1px solid rgba(255,255,255,0.08)">⚪ Inactivo</span>'
+        )
+
+    # ── Badge mercado ───────────────────────────────────────
+    from monitor import mercado_abierto, hora_colombia
+    if mercado_abierto():
+        mercado_badge = (
+            '<div style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;'
+            'border-radius:980px;font-size:12px;margin-bottom:20px;'
+            'background:rgba(48,209,88,0.08);color:#30d158;border:1px solid rgba(48,209,88,0.2)">'
+            '<span style="width:6px;height:6px;border-radius:50%;background:#30d158;'
+            'animation:pulse 2s infinite"></span>Mercado abierto · NYSE</div>'
+        )
     else:
-        activos_html=(f'<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);border-radius:14px;padding:40px;text-align:center;color:#6e6e73">Sin composición definida.<br><a href="/analista/{archivo}" style="color:#4da3ff;font-size:13px;text-decoration:none;margin-top:12px;display:inline-block">Ir al Analista →</a></div>')
-    ia_html=''
-    if ultimo:
-        pred=ultimo.get('prediccion',''); just=ultimo.get('justificacion',''); ts=ultimo.get('timestamp','')
-        pc='#30d158' if '✅' in pred else '#ffd60a' if '👁' in pred else '#6e6e73'
-        ia_html=(
-            '<div class="section-title">Análisis IA</div>'
-            '<div style="background:rgba(0,113,227,0.05);border:1px solid rgba(0,113,227,0.12);border-radius:14px;padding:18px 20px;margin-bottom:12px">'
-            f'<div style="display:flex;gap:10px;align-items:flex-start"><div style="width:28px;height:28px;background:#0a0a0a;border-radius:8px;display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,0.08);flex-shrink:0;margin-top:2px">{LOGO_SM}</div>'
-            f'<div style="flex:1"><p style="color:#a1a1a6;font-size:13px;line-height:1.6;margin:0 0 12px">{just}</p>'
-            f'<div style="padding:10px 14px;border-radius:10px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.07)"><p style="color:{pc};font-size:13px;font-weight:500;margin:0">{pred}</p></div>'
-            f'<p style="color:#6e6e73;font-size:10px;margin:10px 0 0">Último análisis: {ts}</p>'
+        ahora = hora_colombia()
+        msg_c = 'Reabre el lunes a las 9:30 AM' if ahora.weekday() >= 5 else 'Reabre mañana a las 9:30 AM'
+        mercado_badge = (
+            f'<div style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;'
+            f'border-radius:980px;font-size:12px;margin-bottom:20px;'
+            f'background:rgba(255,255,255,0.04);color:#6e6e73;border:1px solid rgba(255,255,255,0.08)">'
+            f'🔒 Mercado cerrado · {msg_c}</div>'
+        )
+
+    # ── Métricas rápidas ────────────────────────────────────
+    resultados   = estado.get('resultados', [])
+    dias_sin     = estado.get('dias_consecutivos_sin_senal', 0)
+    n_entrar     = sum(1 for r in resultados if r['senal'] == 'ENTRAR')
+    n_vigilar    = sum(1 for r in resultados if r['senal'] == 'VIGILAR')
+    n_neutral    = sum(1 for r in resultados if r['senal'] == 'NEUTRAL')
+    ultimo_ts    = estado.get('timestamp', '—')
+
+    metricas_html = (
+        '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px">'
+        f'<div style="background:rgba(48,209,88,0.06);border:1px solid rgba(48,209,88,0.15);'
+        f'border-radius:12px;padding:14px 16px;text-align:center">'
+        f'<p style="color:#6e6e73;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin:0 0 4px">Entrar</p>'
+        f'<p style="color:#30d158;font-size:26px;font-weight:600;margin:0">{n_entrar}</p></div>'
+        f'<div style="background:rgba(255,214,10,0.06);border:1px solid rgba(255,214,10,0.15);'
+        f'border-radius:12px;padding:14px 16px;text-align:center">'
+        f'<p style="color:#6e6e73;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin:0 0 4px">Vigilar</p>'
+        f'<p style="color:#ffd60a;font-size:26px;font-weight:600;margin:0">{n_vigilar}</p></div>'
+        f'<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);'
+        f'border-radius:12px;padding:14px 16px;text-align:center">'
+        f'<p style="color:#6e6e73;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin:0 0 4px">Neutral</p>'
+        f'<p style="color:#6e6e73;font-size:26px;font-weight:600;margin:0">{n_neutral}</p></div>'
+        f'<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);'
+        f'border-radius:12px;padding:14px 16px;text-align:center">'
+        f'<p style="color:#6e6e73;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin:0 0 4px">Días sin señal</p>'
+        f'<p style="color:{"#ff453a" if dias_sin >= 5 else "#a1a1a6"};font-size:26px;font-weight:600;margin:0">{dias_sin}</p></div>'
+        '</div>'
+    )
+
+    # ── Cards por activo ────────────────────────────────────
+    activos_html = ''
+    if resultados:
+        for r in sorted(resultados, key=lambda x: x['score'], reverse=True):
+            s   = r['senal']
+            col = {'ENTRAR': '#30d158', 'VIGILAR': '#ffd60a', 'NEUTRAL': '#6e6e73'}.get(s, '#6e6e73')
+            bg  = {'ENTRAR': 'rgba(48,209,88,0.06)', 'VIGILAR': 'rgba(255,214,10,0.06)',
+                   'NEUTRAL': 'rgba(255,255,255,0.03)'}.get(s, 'rgba(255,255,255,0.03)')
+            bd  = {'ENTRAR': 'rgba(48,209,88,0.18)', 'VIGILAR': 'rgba(255,214,10,0.18)',
+                   'NEUTRAL': 'rgba(255,255,255,0.07)'}.get(s, 'rgba(255,255,255,0.07)')
+            em  = {'ENTRAR': '🟢', 'VIGILAR': '🟡', 'NEUTRAL': '⚪'}.get(s, '⚪')
+
+            # Barra de score
+            barra_w  = int(r['score'] * 10)
+            barra_c  = '#30d158' if r['score'] >= 6.5 else '#ffd60a' if r['score'] >= 4.5 else '#3d3d3f'
+
+            btn_c = ''
+            if s == 'ENTRAR':
+                btn_c = (
+                    f'<a href="/seguimiento/{archivo}?activo={r["ticker"]}" '
+                    f'style="padding:6px 14px;border-radius:980px;font-size:11px;text-decoration:none;'
+                    f'background:rgba(0,113,227,0.15);color:#4da3ff;border:1px solid rgba(0,113,227,0.3);'
+                    f'white-space:nowrap">Comprar →</a>'
+                )
+
+            peso_port = composicion.get(r['ticker'], 0)
+
+            activos_html += (
+                f'<div style="background:{bg};border:1px solid {bd};border-radius:14px;'
+                f'padding:16px 20px;margin-bottom:10px">'
+
+                # Encabezado
+                f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">'
+                f'<div style="display:flex;align-items:center;gap:10px">'
+                f'<strong style="color:#f5f5f7;font-size:15px;font-family:monospace">{r["ticker"]}</strong>'
+                f'<span style="color:#6e6e73;font-size:12px">{peso_port*100:.1f}% del portafolio</span>'
+                f'</div>'
+                f'<div style="display:flex;align-items:center;gap:10px">'
+                f'<span style="padding:4px 12px;border-radius:980px;font-size:11px;font-weight:500;'
+                f'background:{bg};color:{col};border:1px solid {bd}">{em} {s}</span>'
+                f'{btn_c}</div></div>'
+
+                # Precio grande
+                f'<div style="margin-bottom:12px">'
+                f'<span style="color:#f5f5f7;font-size:22px;font-weight:600">${r["precio"]:,.2f}</span>'
+                f'<span style="color:{"#30d158" if r["tendencia"]>0 else "#ff453a"};font-size:13px;margin-left:8px">'
+                f'{r["tendencia"]:+.1f}% (20d)</span>'
+                f'</div>'
+
+                # Score bar
+                f'<div style="margin-bottom:12px">'
+                f'<div style="display:flex;justify-content:space-between;margin-bottom:4px">'
+                f'<span style="font-size:11px;color:#6e6e73;text-transform:uppercase;letter-spacing:0.05em">Score de entrada</span>'
+                f'<span style="font-size:13px;font-weight:600;color:{barra_c}">{r["score"]}/10</span></div>'
+                f'<div style="background:rgba(255,255,255,0.06);border-radius:980px;height:5px;overflow:hidden">'
+                f'<div style="background:{barra_c};height:100%;width:{barra_w}%;transition:width 0.4s"></div>'
+                f'</div></div>'
+
+                # Métricas
+                f'<div style="display:flex;gap:16px;flex-wrap:wrap">'
+                f'<div><p style="color:#6e6e73;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin:0 0 2px">RSI</p>'
+                f'<p style="color:{"#30d158" if r["rsi"]<40 else "#ffd60a" if r["rsi"]<55 else "#ff453a"};font-size:13px;font-weight:500;margin:0">{r["rsi"]}</p></div>'
+                f'<div><p style="color:#6e6e73;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin:0 0 2px">MA20</p>'
+                f'<p style="color:#a1a1a6;font-size:13px;font-weight:500;margin:0">${r["ma20"]:,.2f}</p></div>'
+                f'<div><p style="color:#6e6e73;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin:0 0 2px">MA50</p>'
+                f'<p style="color:#a1a1a6;font-size:13px;font-weight:500;margin:0">${r["ma50"]:,.2f}</p></div>'
+                f'<div><p style="color:#6e6e73;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin:0 0 2px">Vol ratio</p>'
+                f'<p style="color:{"#ffd60a" if r["vol_ratio"]>1.5 else "#a1a1a6"};font-size:13px;font-weight:500;margin:0">{r["vol_ratio"]}x</p></div>'
+                f'</div></div>'
+            )
+    elif composicion and not estado:
+        activos_html = (
+            '<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);'
+            'border-radius:14px;padding:40px;text-align:center;color:#6e6e73">'
+            'Activa el monitoreo para ver el análisis en tiempo real.<br>'
+            '<span style="font-size:12px;display:block;margin-top:8px">'
+            'El primer análisis arranca automáticamente.</span></div>'
+        )
+    else:
+        activos_html = (
+            f'<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);'
+            f'border-radius:14px;padding:40px;text-align:center;color:#6e6e73">'
+            f'Sin composición definida.<br>'
+            f'<a href="/analista/{archivo}" style="color:#4da3ff;font-size:13px;'
+            f'text-decoration:none;margin-top:12px;display:inline-block">Ir al Analista →</a></div>'
+        )
+
+    # ── Análisis IA del ciclo ───────────────────────────────
+    ia_html = ''
+    if estado.get('justificacion') or estado.get('prediccion'):
+        pred = estado.get('prediccion', '')
+        just = estado.get('justificacion', '')
+        pc   = '#30d158' if '🟢' in pred else '#ffd60a' if '👁' in pred else '#6e6e73'
+        ia_html = (
+            '<div style="margin-top:20px">'
+            '<p style="color:#6e6e73;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px">Análisis del último ciclo</p>'
+            '<div style="background:rgba(0,113,227,0.05);border:1px solid rgba(0,113,227,0.12);'
+            'border-radius:14px;padding:18px 20px">'
+            f'<div style="display:flex;gap:10px;align-items:flex-start">'
+            f'<div style="width:28px;height:28px;background:#0a0a0a;border-radius:8px;display:flex;'
+            f'align-items:center;justify-content:center;border:1px solid rgba(255,255,255,0.08);'
+            f'flex-shrink:0;margin-top:2px">{LOGO_SM}</div>'
+            f'<div style="flex:1">'
+            + (f'<p style="color:#a1a1a6;font-size:13px;line-height:1.6;margin:0 0 10px">{just}</p>' if just else '')
+            + f'<div style="padding:8px 12px;border-radius:8px;background:rgba(255,255,255,0.04);'
+            f'border:1px solid rgba(255,255,255,0.07)">'
+            f'<p style="color:{pc};font-size:13px;font-weight:500;margin:0">{pred}</p></div>'
+            f'<p style="color:#6e6e73;font-size:10px;margin:8px 0 0">Último análisis: {ultimo_ts}</p>'
+            f'</div></div></div></div>'
+        )
+
+    # ── Alerta subóptima ────────────────────────────────────
+    sub_html = ''
+    if estado.get('alerta_suboptimal') and dias_sin >= 5:
+        sub_html = (
+            '<div style="margin-top:16px;background:rgba(255,159,10,0.06);'
+            'border:1px solid rgba(255,159,10,0.2);border-radius:14px;padding:18px 20px">'
+            '<div style="display:flex;gap:10px;align-items:flex-start">'
+            '<div style="font-size:20px;flex-shrink:0">⚠️</div>'
+            '<div>'
+            f'<p style="color:#ff9f0a;font-size:13px;font-weight:500;margin:0 0 6px">'
+            f'{dias_sin} días sin señal ideal — considera entrada parcial</p>'
+            f'<p style="color:#a1a1a6;font-size:13px;line-height:1.6;margin:0">'
+            f'{estado["alerta_suboptimal"]}</p>'
             '</div></div></div>'
         )
-        if ultimo.get('resultados'):
-            try:
-                resumen_activos = ''
-                for r in ultimo['resultados']:
-                    resumen_activos += (f'{r["ticker"]}: RSI {r["rsi"]} | Score {r["score"]}/10 | '
-                        f'Señal {r["senal"]} | Tendencia {r["tendencia"]:+.1f}% | '
-                        f'Precio ${r["precio"]:,.2f} | MA50 ${r["ma50"]:,.2f}\n')
-                pronostico_txt = groq_chat(
-                    [{'role':'user','content':
-                      f'Eres analista técnico del portafolio {portafolio["nombre"]} (perfil {portafolio["perfil"]}).\n\n'
-                      f'MÉTRICAS ACTUALES:\n{resumen_activos}\n'
-                      f'Pronóstico de entrada CONCRETO en máximo 4 oraciones. Directo. Sin asteriscos. Español.'}],
-                    max_tokens=200, temperature=0.3)
-                if pronostico_txt:
-                    ia_html += (
-                        '<div style="background:rgba(255,214,10,0.05);border:1px solid rgba(255,214,10,0.15);'
-                        'border-radius:14px;padding:18px 20px;margin-bottom:12px">'
-                        '<div style="display:flex;gap:10px;align-items:flex-start">'
-                        '<div style="font-size:18px;flex-shrink:0;margin-top:2px">🔭</div>'
-                        '<div style="flex:1">'
-                        '<p style="color:#6e6e73;font-size:10px;letter-spacing:0.06em;text-transform:uppercase;margin:0 0 8px">Pronóstico de entrada</p>'
-                        f'<p style="color:#a1a1a6;font-size:13px;line-height:1.6;margin:0">{pronostico_txt}</p>'
-                        '</div></div></div>')
-            except: pass
-    from monitor import mercado_abierto
-    if mercado_abierto():
-        mercado_html = ('<div style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:980px;font-size:12px;margin-bottom:16px;background:rgba(48,209,88,0.08);color:#30d158;border:1px solid rgba(48,209,88,0.2)"><span style="width:6px;height:6px;border-radius:50%;background:#30d158;animation:pulse 2s infinite"></span>Mercado abierto · NYSE</div>')
-    else:
-        ahora = datetime.now()
-        msg_cerrado = 'Reabre el lunes a las 9:30 AM' if ahora.weekday() >= 5 else 'Reabre mañana a las 9:30 AM'
-        mercado_html = (f'<div style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:980px;font-size:12px;margin-bottom:16px;background:rgba(255,255,255,0.04);color:#6e6e73;border:1px solid rgba(255,255,255,0.08)">🔒 Mercado cerrado · {msg_cerrado}</div>')
-    contenido=(
-        '<div class="container">'+nav_html(archivo,'monitor')+
-        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:24px;flex-wrap:wrap;gap:12px">'
-        '<div><h2 style="margin:0 0 6px">Monitor de Mercado</h2>'
-        '<p style="color:#6e6e73;font-size:13px;margin:0">Horario NYSE · 9:30am – 4:00pm hora Colombia</p></div>'
-        f'<div style="display:flex;align-items:center;gap:12px">{estado}{btn_m}</div></div>'
-        + mercado_html
-        + '<div class="section-title">Estado de Activos</div>'
-        + activos_html + ia_html
+
+    # ── Reporte de cierre guardado ──────────────────────────
+    cierre_html = ''
+    if estado.get('reporte_cierre') and estado.get('reporte_cierre_fecha') == hora_colombia().strftime('%Y-%m-%d'):
+        cierre_html = (
+            '<div style="margin-top:20px">'
+            '<p style="color:#6e6e73;font-size:11px;text-transform:uppercase;'
+            'letter-spacing:0.06em;margin-bottom:10px">Reporte de cierre de hoy</p>'
+            '<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.07);'
+            'border-radius:14px;padding:18px 20px;font-size:13px;color:#a1a1a6;'
+            'line-height:1.7;white-space:pre-wrap">'
+            + estado.get('reporte_cierre', '').replace('<b>', '').replace('</b>', '')
+              .replace('<i>', '').replace('</i>', '').replace('<br>', '\n')
+            + '</div></div>'
+        )
+
+    # ── Configuración del ciclo ─────────────────────────────
+    config_html = (
+        '<div style="margin-top:20px;padding:14px 18px;background:rgba(255,255,255,0.02);'
+        'border:1px solid rgba(255,255,255,0.06);border-radius:12px;'
+        'display:flex;gap:24px;flex-wrap:wrap">'
+        f'<span style="font-size:12px;color:#6e6e73">🔄 Ciclo cada <strong style="color:#a1a1a6">18 min</strong></span>'
+        f'<span style="font-size:12px;color:#6e6e73">🟢 Umbral entrada <strong style="color:#a1a1a6">≥ 6.5/10</strong></span>'
+        f'<span style="font-size:12px;color:#6e6e73">📋 Cierre <strong style="color:#a1a1a6">4:30pm Colombia</strong></span>'
+        f'<span style="font-size:12px;color:#6e6e73">⚠️ Alerta subóptima <strong style="color:#a1a1a6">≥ 5 días sin señal</strong></span>'
+        f'<span style="font-size:12px;color:#6e6e73">📲 Notificaciones <strong style="color:#a1a1a6">Telegram + app</strong></span>'
+        '</div>'
+    )
+
+    contenido = (
+        '<div class="container">'
+        + nav_html(archivo, 'monitor') +
+        '<div style="display:flex;justify-content:space-between;align-items:center;'
+        'margin-bottom:20px;flex-wrap:wrap;gap:12px">'
+        '<div>'
+        '<h2 style="margin:0 0 4px">Monitor de Mercado</h2>'
+        '<p style="color:#6e6e73;font-size:13px;margin:0">'
+        'Análisis automático · NYSE 9:30am–4:00pm Colombia</p></div>'
+        f'<div style="display:flex;align-items:center;gap:12px">{estado_badge}{btn_m}</div></div>'
+        + mercado_badge
+        + metricas_html
+        + '<p style="color:#6e6e73;font-size:11px;text-transform:uppercase;'
+        'letter-spacing:0.06em;margin-bottom:10px">Estado de activos</p>'
+        + activos_html
+        + ia_html
+        + sub_html
+        + cierre_html
+        + config_html
         + '<div style="text-align:center;margin-top:24px;padding-bottom:32px">'
-        '<button onclick="location.reload()" style="padding:8px 24px;border-radius:980px;font-size:12px;font-family:DM Sans,sans-serif;cursor:pointer;background:rgba(255,255,255,0.05);color:#6e6e73;border:1px solid rgba(255,255,255,0.08)">Actualizar</button>'
-        '<p style="color:#3d3d3f;font-size:11px;margin-top:8px">Se actualiza automáticamente cada 60 segundos</p>'
+        '<button onclick="location.reload()" style="padding:8px 24px;border-radius:980px;'
+        'font-size:12px;font-family:DM Sans,sans-serif;cursor:pointer;'
+        'background:rgba(255,255,255,0.05);color:#6e6e73;border:1px solid rgba(255,255,255,0.08)">'
+        'Actualizar</button>'
+        '<p style="color:#3d3d3f;font-size:11px;margin-top:8px">'
+        'Se actualiza automáticamente cada 60 segundos</p>'
         '</div></div>'
         '<style>@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}</style>'
-        '<script>setTimeout(()=>location.reload(),60000);</script>')
+        '<script>setTimeout(()=>location.reload(),60000);</script>'
+    )
     return pagina(f'Monitor — {portafolio["nombre"]}', contenido)
 
 @app.route('/api/toggle-monitor/<archivo>', methods=['POST'])
@@ -1871,12 +2094,52 @@ def api_toggle_monitor(archivo):
     redir = verificar_acceso(archivo)
     if redir: return redir
     try:
-        ruta=f'datos/portafolios/{archivo}'
-        with open(ruta,'r',encoding='utf-8') as f: d=json.load(f)
-        d['monitoreo_activo']=not d.get('monitoreo_activo',False)
-        with open(ruta,'w',encoding='utf-8') as f: json.dump(d,f,indent=2,ensure_ascii=False)
-    except: pass
-    return redirect(url_for('monitor_view',archivo=archivo))
+        ruta = f'datos/portafolios/{archivo}'
+        with open(ruta, 'r', encoding='utf-8') as f:
+            d = json.load(f)
+ 
+        nuevo_estado = not d.get('monitoreo_activo', False)
+        d['monitoreo_activo'] = nuevo_estado
+ 
+        # Si se está ACTIVANDO: desactivar todos los demás portafolios del usuario
+        if nuevo_estado:
+            username = session.get('username', '')
+            from gestor_portafolio import listar_portafolios_de_usuario
+            todos = listar_portafolios_de_usuario(username)
+            for p in todos:
+                if p['archivo'] != archivo:
+                    otra_ruta = f'datos/portafolios/{p["archivo"]}'
+                    try:
+                        with open(otra_ruta, 'r', encoding='utf-8') as f2:
+                            otro = json.load(f2)
+                        if otro.get('monitoreo_activo'):
+                            otro['monitoreo_activo'] = False
+                            with open(otra_ruta, 'w', encoding='utf-8') as f2:
+                                json.dump(otro, f2, indent=2, ensure_ascii=False)
+                            print(f"🔴 Monitor desactivado en {p['archivo']} (exclusividad)")
+                    except:
+                        pass
+ 
+        with open(ruta, 'w', encoding='utf-8') as f:
+            json.dump(d, f, indent=2, ensure_ascii=False)
+ 
+        # Si se acaba de activar, disparar primer ciclo inmediatamente
+        if nuevo_estado:
+            from monitor import ciclo_portafolio
+            def primer_ciclo():
+                import time
+                time.sleep(2)
+                try:
+                    ciclo_portafolio(archivo, d)
+                except Exception as e:
+                    print(f"❌ Primer ciclo error: {e}")
+            threading.Thread(target=primer_ciclo, daemon=True).start()
+ 
+    except Exception as e:
+        print(f"❌ toggle-monitor error: {e}")
+    return redirect(url_for('monitor_view', archivo=archivo))
+ 
+
 
 # ============================================================
 # CONFIGURACIÓN
@@ -2300,10 +2563,9 @@ def api_verificar_ticker(ticker):
     except Exception as e:
         return jsonify({'valido': False, 'error': str(e)})
 
-
 @app.route('/api/ticker-listo/<ticker>')
 def api_ticker_listo(ticker):
-    """Verifica si el histórico de un ticker nuevo ya terminó de descargarse."""
+    """Verifica si el historico de un ticker nuevo ya terminó de descargarse."""
     if not session.get('username'):
         return jsonify({'listo': False})
     # Si ya estaba en el histórico desde el inicio, siempre listo

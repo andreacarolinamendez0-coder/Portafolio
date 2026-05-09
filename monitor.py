@@ -1,353 +1,530 @@
-import yfinance as yf
-import pandas as pd
-import numpy as np
-import json
-import os
-import requests
-import threading
-import time
+"""
+monitor.py — Motor de monitoreo de mercado
+==========================================
+- Corre en hilo daemon independiente
+- Analiza portafolios con monitoreo_activo = True
+- Alertas cada 15-20 min si hay posible entrada (Telegram + app)
+- Reporte de cierre a las 4:30pm Colombia (Telegram + app)
+- Recomendación de entrada subóptima si pasa 1 semana sin señal
+"""
+
+import os, json, time, threading, requests
 from datetime import datetime, timedelta
+import pandas as pd
+import yfinance as yf
 import warnings
 warnings.filterwarnings('ignore')
 
-CARPETA    = "datos/portafolios"
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8332465511:AAH-PlentkDhWWNenLGOdvJCLC6OXNEnrA8")
-GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "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")
-# ── Horario NYSE en hora Colombia (EST+1) ──
+BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
+DATOS_DIR = os.path.join(BASE_DIR, "datos")
+PORTS_DIR = os.path.join(DATOS_DIR, "portafolios")
+BOT_TOKEN = "8332465511:AAH-PlentkDhWWNenLGOdvJCLC6OXNEnrA8"
+
+INTERVALO_MINUTOS   = 18   # cada cuántos minutos se analiza durante el día
+UMBRAL_ENTRADA      = 6.5  # score mínimo para emitir alerta de entrada
+DIAS_SIN_SENAL_MAX  = 5    # días hábiles sin señal antes de recomendar entrada subóptima
+
+# ─────────────────────────────────────────────────────────────
+# UTILIDADES DE TIEMPO
+# ─────────────────────────────────────────────────────────────
+
+def hora_colombia():
+    """Hora actual en Colombia (UTC-5)."""
+    return datetime.utcnow() - timedelta(hours=5)
+
 def mercado_abierto():
-    ahora = datetime.now()
-    # NYSE opera L-V 9:30am-4:00pm EST = 9:30am-4:00pm hora Colombia
-    if ahora.weekday() >= 5:  # Sábado=5, Domingo=6
+    """NYSE abre 9:30am–4:00pm hora Colombia, lunes a viernes."""
+    ahora = hora_colombia()
+    if ahora.weekday() >= 5:
         return False
-    hora_decimal = ahora.hour + ahora.minute / 60
-    return 9.5 <= hora_decimal < 16.0
+    apertura = ahora.replace(hour=9, minute=30, second=0, microsecond=0)
+    cierre   = ahora.replace(hour=16, minute=0, second=0, microsecond=0)
+    return apertura <= ahora <= cierre
 
-# ── Enviar alerta ──
-def enviar_telegram(chat_id, mensaje):
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        requests.post(url, json={
-            "chat_id": chat_id, "text": mensaje, "parse_mode": "HTML"
-        }, timeout=10)
-    except: pass
+def es_hora_cierre():
+    """True entre 4:00pm y 4:45pm Colombia (ventana de reporte de cierre)."""
+    ahora = hora_colombia()
+    if ahora.weekday() >= 5:
+        return False
+    inicio = ahora.replace(hour=16, minute=0, second=0, microsecond=0)
+    fin    = ahora.replace(hour=16, minute=45, second=0, microsecond=0)
+    return inicio <= ahora <= fin
 
-def enviar_email(email, asunto, mensaje):
-    try:
-        import smtplib
-        from email.mime.text import MIMEText
-        from email.mime.multipart import MIMEMultipart
-        gmail_user = os.environ.get('GMAIL_USER', '')
-        gmail_pass = os.environ.get('GMAIL_PASS', '')
-        if not gmail_user or not gmail_pass:
-            return
-        msg            = MIMEMultipart()
-        msg['From']    = gmail_user
-        msg['To']      = email
-        msg['Subject'] = asunto
-        msg.attach(MIMEText(mensaje, 'plain'))
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-            server.login(gmail_user, gmail_pass)
-            server.send_message(msg)
-    except: pass
+def es_viernes():
+    return hora_colombia().weekday() == 4
 
-# ── Calcular señales técnicas ──
-def calcular_senales(ticker):
+def segundos_hasta_apertura():
+    ahora = hora_colombia()
+    if ahora.weekday() >= 5:
+        dias = 7 - ahora.weekday()
+        prox = (ahora + timedelta(days=dias)).replace(hour=9, minute=35, second=0, microsecond=0)
+    else:
+        hoy_apertura = ahora.replace(hour=9, minute=35, second=0, microsecond=0)
+        if ahora < hoy_apertura:
+            prox = hoy_apertura
+        else:
+            prox = (ahora + timedelta(days=1)).replace(hour=9, minute=35, second=0, microsecond=0)
+            while prox.weekday() >= 5:
+                prox += timedelta(days=1)
+    return max(0, (prox - ahora).total_seconds())
+
+# ─────────────────────────────────────────────────────────────
+# TELEGRAM
+# ─────────────────────────────────────────────────────────────
+
+def telegram(chat_id, texto):
+    if not chat_id:
+        return
     try:
-        hoy    = datetime.now()
-        inicio = (hoy - timedelta(days=200)).strftime("%Y-%m-%d")
+        requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={"chat_id": chat_id, "text": texto, "parse_mode": "HTML"},
+            timeout=10
+        )
+    except Exception as e:
+        print(f"❌ Telegram error: {e}")
+
+# ─────────────────────────────────────────────────────────────
+# ANÁLISIS TÉCNICO DE UN ACTIVO
+# ─────────────────────────────────────────────────────────────
+
+def analizar_activo(ticker):
+    """
+    Descarga datos recientes y calcula:
+    - Precio actual, MA20, MA50
+    - RSI (14)
+    - Tendencia (retorno últimos 20d)
+    - Volumen relativo (ratio vs media 20d)
+    - Score de entrada 0-10
+    - Señal: ENTRAR / VIGILAR / NEUTRAL
+    """
+    try:
+        hoy    = datetime.utcnow()
+        inicio = (hoy - timedelta(days=90)).strftime("%Y-%m-%d")
         df = yf.download(ticker, start=inicio, end=hoy.strftime("%Y-%m-%d"),
-                        interval="1d", auto_adjust=True, progress=False)
-        if df.empty or len(df) < 50:
+                         interval="1d", auto_adjust=True, progress=False)
+        if df is None or len(df) < 20:
             return None
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
 
-        close  = df['Close'].squeeze()
-        volume = df['Volume'].squeeze()
+        close  = df["Close"].squeeze()
+        volume = df["Volume"].squeeze() if "Volume" in df.columns else pd.Series([1]*len(df))
+
+        precio  = float(close.iloc[-1])
+        ma20    = float(close.rolling(20).mean().iloc[-1])
+        ma50    = float(close.rolling(50).mean().iloc[-1]) if len(close) >= 50 else ma20
+        tend    = round(((precio - float(close.iloc[-20])) / float(close.iloc[-20])) * 100, 2)
+        vol_r   = round(float(volume.iloc[-1]) / float(volume.rolling(20).mean().iloc[-1]), 2) if float(volume.rolling(20).mean().iloc[-1]) > 0 else 1.0
 
         # RSI
-        delta  = close.diff()
-        gain   = delta.clip(lower=0).rolling(14).mean()
-        loss   = (-delta.clip(upper=0)).rolling(14).mean()
-        rs     = gain / loss
-        rsi    = float((100 - 100 / (1 + rs)).iloc[-1])
+        delta = close.diff()
+        gain  = delta.clip(lower=0).rolling(14).mean()
+        loss  = (-delta.clip(upper=0)).rolling(14).mean()
+        rs    = gain / loss.replace(0, 1e-9)
+        rsi   = round(float(100 - (100 / (1 + rs.iloc[-1]))), 1)
 
-        # MACD
-        ema12  = close.ewm(span=12).mean()
-        ema26  = close.ewm(span=26).mean()
-        macd   = ema12 - ema26
-        signal = macd.ewm(span=9).mean()
-        macd_v = float(macd.iloc[-1])
-        sig_v  = float(signal.iloc[-1])
-
-        # Bollinger
-        ma20   = close.rolling(20).mean()
-        std20  = close.rolling(20).std()
-        bb_up  = float((ma20 + 2*std20).iloc[-1])
-        bb_low = float((ma20 - 2*std20).iloc[-1])
-        precio = float(close.iloc[-1])
-
-        # Medias móviles
-        ma50   = float(close.rolling(50).mean().iloc[-1])
-        ma200  = float(close.rolling(200).mean().iloc[-1]) if len(close) >= 200 else ma50
-
+        # Score de entrada (0-10)
+        score = 0.0
+        # RSI: ideal entre 30-50 para largo plazo
+        if rsi < 30:
+            score += 3.0
+        elif rsi < 45:
+            score += 2.5
+        elif rsi < 55:
+            score += 1.5
+        elif rsi < 65:
+            score += 0.5
+        # Precio vs medias
+        if precio < ma20:
+            score += 2.0
+        elif precio < ma50:
+            score += 1.0
+        # Tendencia reciente (quiere retroceso o lateral)
+        if -10 <= tend <= -3:
+            score += 2.5
+        elif -3 < tend <= 0:
+            score += 1.5
+        elif 0 < tend <= 3:
+            score += 1.0
+        elif tend < -10:
+            score += 1.5   # caída fuerte, más riesgo pero oportunidad
         # Volumen
-        vol_avg = float(volume.rolling(20).mean().iloc[-1])
-        vol_hoy = float(volume.iloc[-1])
-        vol_ratio = vol_hoy / vol_avg if vol_avg > 0 else 1
+        if vol_r > 1.5:
+            score += 0.5   # actividad inusual
 
-        # Score
-        score = 0
-        if rsi < 35:   score += 3
-        elif rsi < 45: score += 2
-        elif rsi < 55: score += 1
-        if macd_v > sig_v:  score += 2
-        if precio < bb_low: score += 2
-        if precio > ma50:   score += 1
-        if vol_ratio > 1.2: score += 1
+        score = round(min(score, 10.0), 1)
 
-        # Señal
-        if score >= 7:   senal = "ENTRAR"
-        elif score >= 4: senal = "VIGILAR"
-        else:            senal = "NEUTRAL"
-
-        # Tendencia mensual
-        hace_mes = float(close.iloc[-22]) if len(close) > 22 else precio
-        tendencia = ((precio - hace_mes) / hace_mes) * 100
+        if score >= UMBRAL_ENTRADA:
+            senal = "ENTRAR"
+        elif score >= 4.5:
+            senal = "VIGILAR"
+        else:
+            senal = "NEUTRAL"
 
         return {
-            "ticker":     ticker,
-            "precio":     round(precio, 2),
-            "rsi":        round(rsi, 1),
-            "macd":       round(macd_v, 4),
-            "macd_signal":round(sig_v, 4),
-            "bb_low":     round(bb_low, 2),
-            "bb_up":      round(bb_up, 2),
-            "ma50":       round(ma50, 2),
-            "ma200":      round(ma200, 2),
-            "vol_ratio":  round(vol_ratio, 2),
-            "score":      score,
-            "senal":      senal,
-            "tendencia":  round(tendencia, 2)
+            "ticker":    ticker,
+            "precio":    round(precio, 2),
+            "ma20":      round(ma20, 2),
+            "ma50":      round(ma50, 2),
+            "rsi":       rsi,
+            "tendencia": tend,
+            "vol_ratio": vol_r,
+            "score":     score,
+            "senal":     senal,
+            "timestamp": hora_colombia().strftime("%Y-%m-%d %H:%M"),
         }
-    except:
+    except Exception as e:
+        print(f"❌ Error analizando {ticker}: {e}")
         return None
 
-# ── Generar justificación IA ──
-def generar_justificacion(resultados, portafolio):
+# ─────────────────────────────────────────────────────────────
+# ANÁLISIS IA (Groq)
+# ─────────────────────────────────────────────────────────────
+
+def analisis_ia(resultados, portafolio, tipo="ciclo"):
+    """
+    tipo: 'ciclo' | 'cierre' | 'subtimal'
+    """
     try:
         from groq import Groq
+        GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
+
         resumen = ""
         for r in resultados:
-            resumen += (
-                f"{r['ticker']}: ${r['precio']:,.2f} | RSI {r['rsi']} | "
-                f"Score {r['score']}/10 | Señal: {r['senal']} | "
-                f"Tendencia mensual: {r['tendencia']:+.1f}%\n"
+            resumen += (f"- {r['ticker']}: ${r['precio']} | RSI {r['rsi']} | "
+                        f"Score {r['score']}/10 | Señal {r['senal']} | "
+                        f"Tendencia {r['tendencia']:+.1f}% | MA20 ${r['ma20']} | MA50 ${r['ma50']}\n")
+
+        if tipo == "cierre":
+            prompt = (
+                f"Eres analista financiero de {portafolio['propietario']}. "
+                f"Es el cierre del mercado NYSE hoy {hora_colombia().strftime('%A %d de %B')}.\n\n"
+                f"MÉTRICAS FINALES DEL DÍA:\n{resumen}\n\n"
+                f"Escribe un reporte de cierre en español, máximo 5 párrafos:\n"
+                f"1. Resumen general del día\n"
+                f"2. Activos que mostraron señales\n"
+                f"3. Activos que hay que vigilar mañana\n"
+                f"4. Recomendación concreta para la próxima sesión\n"
+                f"5. Nivel de oportunidad general (bajo/medio/alto)\n"
+                f"Sin asteriscos. Directo. Usa los números exactos."
             )
-
-        entradas = [r for r in resultados if r['senal'] == 'ENTRAR']
-        vigilar  = [r for r in resultados if r['senal'] == 'VIGILAR']
-
-        prompt = (
-            f"Portafolio: {portafolio['nombre']} ({portafolio['perfil']})\n\n"
-            f"ANÁLISIS TÉCNICO ACTUAL:\n{resumen}\n\n"
-            f"En máximo 4 oraciones:\n"
-            f"1. Estado general del portafolio ahora mismo\n"
-            f"2. Si hay activos para entrar HOY, cuáles y por qué\n"
-            f"3. Si no hay entradas hoy, qué vigilar esta semana\n"
-            f"4. Recomendación concreta de acción\n"
-            f"Sin asteriscos. Sin bullets. Español directo."
-        )
+        elif tipo == "suboptimal":
+            prompt = (
+                f"Eres analista financiero de {portafolio['propietario']}. "
+                f"Han pasado {DIAS_SIN_SENAL_MAX}+ días hábiles sin ninguna señal de entrada clara.\n\n"
+                f"ESTADO ACTUAL DEL MERCADO:\n{resumen}\n\n"
+                f"Escribe una recomendación especial en español, máximo 4 párrafos:\n"
+                f"1. Por qué no ha habido señal ideal\n"
+                f"2. Riesgo de esperar más vs entrar ahora\n"
+                f"3. Qué activos son los mejores candidatos a pesar de no ser el momento perfecto\n"
+                f"4. Recomendación final: ¿entrar parcialmente, esperar, o DCA?\n"
+                f"Sin asteriscos. Con criterio propio. Directo."
+            )
+        else:
+            entradas = [r for r in resultados if r['senal'] == 'ENTRAR']
+            vigilar  = [r for r in resultados if r['senal'] == 'VIGILAR']
+            prompt = (
+                f"Analista de {portafolio['propietario']}. Ciclo de monitoreo {hora_colombia().strftime('%H:%M')}.\n\n"
+                f"SEÑALES DETECTADAS:\n{resumen}\n\n"
+                f"{'HAY ' + str(len(entradas)) + ' POSIBLE(S) ENTRADA(S): ' + ', '.join(r['ticker'] for r in entradas) if entradas else 'Sin entradas claras este ciclo.'}\n\n"
+                f"2-3 oraciones máximo. Solo lo importante. Sin asteriscos."
+            )
 
         resp = Groq(api_key=GROQ_API_KEY).chat.completions.create(
-            model='llama-3.3-70b-versatile',
-            messages=[
-                {'role': 'system', 'content': 'Eres analista técnico. Solo datos reales. Sin inventar.'},
-                {'role': 'user', 'content': prompt}
-            ],
-            max_tokens=200, temperature=0.3
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=500 if tipo in ("cierre", "suboptimal") else 200,
+            temperature=0.3
         )
-        justificacion = resp.choices[0].message.content
-
-        # Predicción del día
-        if entradas:
-            prediccion = f"✅ Posible entrada HOY en: {', '.join(r['ticker'] for r in entradas)}"
-        elif vigilar:
-            prediccion = f"👁 Vigilar de cerca: {', '.join(r['ticker'] for r in vigilar)}"
-        else:
-            prediccion = "⏳ Sin oportunidades claras por ahora. Esperar próximo análisis."
-
-        return justificacion, prediccion
-
+        return resp.choices[0].message.content.strip()
     except Exception as e:
-        return "Error generando análisis.", "No disponible."
+        print(f"❌ IA error: {e}")
+        return ""
 
-# ── Analizar un portafolio ──
-def analizar_portafolio(archivo):
+# ─────────────────────────────────────────────────────────────
+# PERSISTENCIA DEL ESTADO DEL MONITOR
+# ─────────────────────────────────────────────────────────────
+
+def leer_estado(archivo):
+    ruta = os.path.join(PORTS_DIR, f"monitor_{archivo}")
+    if os.path.exists(ruta):
+        try:
+            with open(ruta, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            pass
+    return {}
+
+def guardar_estado(archivo, estado):
+    ruta = os.path.join(PORTS_DIR, f"monitor_{archivo}")
     try:
-        ruta = f"{CARPETA}/{archivo}"
-        with open(ruta, 'r', encoding='utf-8') as f:
-            portafolio = json.load(f)
-
-        composicion = portafolio.get('composicion', {})
-        if not composicion:
-            return
-
-        activos   = list(composicion.keys())
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        print(f"[{timestamp}] Analizando {portafolio['nombre']}...")
-
-        resultados = []
-        for ticker in activos:
-            r = calcular_senales(ticker)
-            if r:
-                resultados.append(r)
-                estado = {"ENTRAR": "🟢", "VIGILAR": "🟡", "NEUTRAL": "⚪"}.get(r['senal'], "⚪")
-                print(f"  {estado} {ticker}: RSI {r['rsi']} | Score {r['score']}/10 | {r['senal']}")
-
-        if not resultados:
-            return
-
-        justificacion, prediccion = generar_justificacion(resultados, portafolio)
-
-        # Guardar resultado
-        monitor_data = {
-            "archivo":       archivo,
-            "nombre":        portafolio['nombre'],
-            "timestamp":     timestamp,
-            "resultados":    resultados,
-            "justificacion": justificacion,
-            "prediccion":    prediccion
-        }
-
-        ruta_monitor = f"{CARPETA}/monitor_{archivo}"
-        with open(ruta_monitor, 'w', encoding='utf-8') as f:
-            json.dump(monitor_data, f, indent=2, ensure_ascii=False)
-
-        # Alertas
-        entradas = [r for r in resultados if r['senal'] == 'ENTRAR']
-        if entradas:
-            msg = (
-                f"🔔 <b>ALERTA DE ENTRADA — {portafolio['nombre']}</b>\n"
-                f"📅 {timestamp}\n\n"
-            )
-            for r in entradas:
-                msg += f"✅ <b>{r['ticker']}</b> — ${r['precio']:,.2f}\n"
-                msg += f"   RSI: {r['rsi']} | Score: {r['score']}/10\n\n"
-            msg += f"💬 {justificacion}\n\n{prediccion}"
-
-            chat_id = portafolio.get('telegram_chat_id', '')
-            email   = portafolio.get('email', '')
-            if chat_id: enviar_telegram(chat_id, msg)
-            if email:   enviar_email(email, f"Alerta entrada — {portafolio['nombre']}", msg)
-
-        print(f"  📊 {prediccion}")
-
+        with open(ruta, "w", encoding="utf-8") as f:
+            json.dump(estado, f, indent=2, ensure_ascii=False)
     except Exception as e:
-        print(f"Error analizando {archivo}: {e}")
+        print(f"❌ Error guardando estado monitor: {e}")
 
-# ── Loop principal ──
-def loop_monitor():
-    print("🔍 Monitor iniciado")
-    ultimo_analisis = {}  # archivo -> timestamp ultimo analisis
+def leer_portafolios_activos():
+    """Devuelve lista de (archivo, portafolio_dict) con monitoreo_activo=True."""
+    activos = []
+    if not os.path.exists(PORTS_DIR):
+        return activos
+    for fn in os.listdir(PORTS_DIR):
+        if not fn.endswith(".json") or fn.startswith("monitor_"):
+            continue
+        ruta = os.path.join(PORTS_DIR, fn)
+        try:
+            with open(ruta, "r", encoding="utf-8") as f:
+                p = json.load(f)
+            if p.get("monitoreo_activo") and p.get("composicion"):
+                activos.append((fn, p))
+        except:
+            continue
+    return activos
+
+def chat_id_de(portafolio):
+    """Obtiene el telegram_chat_id del dueño del portafolio."""
+    try:
+        from gestor_portafolio import get_usuario
+        owner = portafolio.get("owner", "")
+        if owner:
+            u = get_usuario(owner)
+            if u:
+                return u.get("telegram_chat_id", "")
+    except:
+        pass
+    return portafolio.get("telegram_chat_id", "")
+
+# ─────────────────────────────────────────────────────────────
+# CICLO PRINCIPAL DE UN PORTAFOLIO
+# ─────────────────────────────────────────────────────────────
+
+def ciclo_portafolio(archivo, portafolio):
+    """
+    Analiza todos los activos del portafolio.
+    Emite alertas si hay entradas. Guarda estado.
+    """
+    composicion = portafolio.get("composicion", {})
+    tickers     = list(composicion.keys())
+    if not tickers:
+        return
+
+    print(f"  🔍 Analizando {len(tickers)} activos de {portafolio['nombre']}...")
+    resultados = []
+    for tk in tickers:
+        r = analizar_activo(tk)
+        if r:
+            resultados.append(r)
+        time.sleep(0.5)  # respetar rate limits de yfinance
+
+    if not resultados:
+        return
+
+    estado    = leer_estado(archivo)
+    chat_id   = chat_id_de(portafolio)
+    ahora_str = hora_colombia().strftime("%Y-%m-%d %H:%M")
+    hoy_str   = hora_colombia().strftime("%Y-%m-%d")
+
+    entradas = [r for r in resultados if r["senal"] == "ENTRAR"]
+    vigilar  = [r for r in resultados if r["senal"] == "VIGILAR"]
+
+    # ── Alertas de entrada ──────────────────────────────────
+    if entradas:
+        ia_txt = analisis_ia(resultados, portafolio, tipo="ciclo")
+        for r in entradas:
+            msg = (
+                f"🟢 <b>POSIBLE ENTRADA — {r['ticker']}</b>\n"
+                f"📊 Score: <b>{r['score']}/10</b> | RSI: {r['rsi']}\n"
+                f"💵 Precio: ${r['precio']:,} | MA20: ${r['ma20']:,} | MA50: ${r['ma50']:,}\n"
+                f"📈 Tendencia 20d: {r['tendencia']:+.1f}% | Vol ratio: {r['vol_ratio']}x\n"
+                f"🕐 {ahora_str}\n"
+            )
+            if ia_txt:
+                msg += f"\n💬 <i>{ia_txt}</i>"
+            telegram(chat_id, msg)
+            print(f"  ✅ Alerta ENTRAR enviada: {r['ticker']}")
+
+        # Registrar último día con señal
+        estado["ultimo_dia_con_senal"] = hoy_str
+        estado["dias_consecutivos_sin_senal"] = 0
+    else:
+        # Contar días hábiles sin señal
+        ultimo = estado.get("ultimo_dia_con_senal")
+        if ultimo:
+            try:
+                dias = sum(1 for i in range(
+                    (datetime.strptime(hoy_str, "%Y-%m-%d") -
+                     datetime.strptime(ultimo, "%Y-%m-%d")).days
+                ) if (datetime.strptime(ultimo, "%Y-%m-%d") + timedelta(days=i+1)).weekday() < 5)
+                estado["dias_consecutivos_sin_senal"] = dias
+            except:
+                estado["dias_consecutivos_sin_senal"] = estado.get("dias_consecutivos_sin_senal", 0)
+        else:
+            estado["dias_consecutivos_sin_senal"] = estado.get("dias_consecutivos_sin_senal", 0) + 1
+
+    # Guardar resultados del ciclo
+    estado["resultados"]        = resultados
+    estado["timestamp"]         = ahora_str
+    estado["prediccion"]        = (f"🟢 {len(entradas)} entrada(s) detectada(s)" if entradas
+                                   else f"👁 {len(vigilar)} en vigilancia" if vigilar
+                                   else "⚪ Sin señales este ciclo")
+    estado["justificacion"]     = analisis_ia(resultados, portafolio, tipo="ciclo") if not entradas else ""
+    estado["nombre_portafolio"] = portafolio["nombre"]
+
+    guardar_estado(archivo, estado)
+    return estado
+
+# ─────────────────────────────────────────────────────────────
+# REPORTE DE CIERRE (4:30pm)
+# ─────────────────────────────────────────────────────────────
+
+def reporte_cierre(archivo, portafolio, estado):
+    """Emite el reporte numérico + hablado al cierre del mercado."""
+    resultados = estado.get("resultados", [])
+    if not resultados:
+        return
+
+    chat_id = chat_id_de(portafolio)
+    hoy_str = hora_colombia().strftime("%A %d de %B de %Y")
+    dias_sin = estado.get("dias_consecutivos_sin_senal", 0)
+
+    # ── Tabla numérica ──────────────────────────────────────
+    lineas = [f"📋 <b>REPORTE DE CIERRE — {portafolio['nombre']}</b>",
+              f"📅 {hoy_str}\n"]
+    for r in sorted(resultados, key=lambda x: x["score"], reverse=True):
+        emoji = {"ENTRAR": "🟢", "VIGILAR": "🟡", "NEUTRAL": "⚪"}.get(r["senal"], "⚪")
+        lineas.append(
+            f"{emoji} <b>{r['ticker']}</b>  ${r['precio']:,}\n"
+            f"   Score {r['score']}/10 | RSI {r['rsi']} | {r['tendencia']:+.1f}% | Vol {r['vol_ratio']}x"
+        )
+
+    entradas = [r for r in resultados if r["senal"] == "ENTRAR"]
+    if entradas:
+        lineas.append(f"\n🎯 Señales de entrada: {', '.join(r['ticker'] for r in entradas)}")
+    else:
+        lineas.append(f"\n⚪ Sin señales de entrada hoy")
+
+    if dias_sin > 0:
+        lineas.append(f"📆 Días hábiles sin señal: {dias_sin}")
+
+    msg_numerico = "\n".join(lineas)
+
+    # ── Análisis hablado ────────────────────────────────────
+    ia_cierre = analisis_ia(resultados, portafolio, tipo="cierre")
+
+    msg_final = msg_numerico
+    if ia_cierre:
+        msg_final += f"\n\n💬 <b>Análisis:</b>\n<i>{ia_cierre}</i>"
+
+    # ── Recomendación subóptima si aplica ──────────────────
+    if dias_sin >= DIAS_SIN_SENAL_MAX and es_viernes():
+        ia_sub = analisis_ia(resultados, portafolio, tipo="suboptimal")
+        sub_msg = (
+            f"\n\n⚠️ <b>ALERTA: {dias_sin} días sin señal ideal</b>\n"
+            f"El mercado podría estar encareciendo. Considera una entrada parcial.\n"
+        )
+        if ia_sub:
+            sub_msg += f"<i>{ia_sub}</i>"
+        msg_final += sub_msg
+
+    telegram(chat_id, msg_final)
+    print(f"  📋 Reporte de cierre enviado: {portafolio['nombre']}")
+
+    # Guardar en el estado de la app
+    estado["reporte_cierre"]       = msg_final
+    estado["reporte_cierre_fecha"] = hora_colombia().strftime("%Y-%m-%d")
+    estado["cierre_enviado_hoy"]   = hora_colombia().strftime("%Y-%m-%d")
+    guardar_estado(archivo, estado)
+
+# ─────────────────────────────────────────────────────────────
+# RECOMENDACIÓN SUBÓPTIMA (si aplica fuera del viernes)
+# ─────────────────────────────────────────────────────────────
+
+def verificar_alerta_suboptimal(archivo, portafolio, estado):
+    """
+    Si llevan DIAS_SIN_SENAL_MAX días sin señal y es viernes,
+    ya se envía dentro del reporte de cierre.
+    Para otros días: solo registra en estado para mostrarlo en la app.
+    """
+    dias_sin = estado.get("dias_consecutivos_sin_senal", 0)
+    if dias_sin < DIAS_SIN_SENAL_MAX:
+        return
+    resultados = estado.get("resultados", [])
+    if not resultados:
+        return
+    if not estado.get("alerta_suboptimal_semana") == hora_colombia().strftime("%Y-W%W"):
+        ia_sub = analisis_ia(resultados, portafolio, tipo="suboptimal")
+        estado["alerta_suboptimal"]        = ia_sub
+        estado["alerta_suboptimal_semana"] = hora_colombia().strftime("%Y-W%W")
+        estado["dias_sin_senal_display"]   = dias_sin
+        guardar_estado(archivo, estado)
+
+# ─────────────────────────────────────────────────────────────
+# HILO PRINCIPAL DEL MONITOR
+# ─────────────────────────────────────────────────────────────
+
+_monitor_activo = False
+
+def iniciar_monitor():
+    global _monitor_activo
+    if _monitor_activo:
+        return
+    _monitor_activo = True
+    t = threading.Thread(target=_loop_monitor, daemon=True)
+    t.start()
+    print("🚀 Monitor iniciado")
+
+def _loop_monitor():
+    """
+    Loop principal:
+    - Durante mercado abierto: ciclo cada INTERVALO_MINUTOS minutos
+    - Al cierre (4:00-4:45pm): reporte de cierre (solo una vez por día)
+    - Fuera de horario: duerme hasta la próxima apertura
+    """
+    ultimo_ciclo       = {}   # archivo -> datetime del último ciclo
+    cierre_enviado     = {}   # archivo -> fecha en que se envió el cierre
 
     while True:
-        ahora = datetime.now()
-        es_horario = mercado_abierto()
-
-        # Leer portafolios con monitoreo activo
         try:
-            portafolios_activos = []
-            for archivo in os.listdir(CARPETA):
-                if not archivo.endswith('.json') or archivo.startswith('monitor_'):
-                    continue
-                try:
-                    with open(f"{CARPETA}/{archivo}", 'r', encoding='utf-8') as f:
-                        p = json.load(f)
-                    if p.get('monitoreo_activo') and p.get('composicion'):
-                        portafolios_activos.append(archivo)
-                except:
-                    continue
-        except:
+            portafolios = leer_portafolios_activos()
+
+            if mercado_abierto():
+                ahora = hora_colombia()
+                for archivo, portafolio in portafolios:
+                    # ── Ciclo de análisis ──────────────────────────
+                    ultimo = ultimo_ciclo.get(archivo)
+                    if ultimo is None or (ahora - ultimo).total_seconds() >= INTERVALO_MINUTOS * 60:
+                        try:
+                            estado = ciclo_portafolio(archivo, portafolio)
+                            if estado:
+                                verificar_alerta_suboptimal(archivo, portafolio, estado)
+                        except Exception as e:
+                            print(f"❌ Error ciclo {archivo}: {e}")
+                        ultimo_ciclo[archivo] = ahora
+
+                time.sleep(60)  # chequea cada minuto si toca correr el siguiente ciclo
+
+            elif es_hora_cierre():
+                hoy = hora_colombia().strftime("%Y-%m-%d")
+                for archivo, portafolio in portafolios:
+                    # ── Reporte de cierre (solo una vez por día) ───
+                    if cierre_enviado.get(archivo) != hoy:
+                        estado = leer_estado(archivo)
+                        if estado:
+                            try:
+                                reporte_cierre(archivo, portafolio, estado)
+                            except Exception as e:
+                                print(f"❌ Error reporte cierre {archivo}: {e}")
+                        cierre_enviado[archivo] = hoy
+                time.sleep(60)
+
+            else:
+                # Mercado cerrado — dormir hasta la próxima apertura
+                segs = segundos_hasta_apertura()
+                print(f"💤 Mercado cerrado. Próxima apertura en {segs/3600:.1f}h")
+                # Dormir en bloques de 5 min para poder reaccionar a cambios
+                time.sleep(min(segs, 300))
+
+        except Exception as e:
+            print(f"❌ Error loop monitor: {e}")
             time.sleep(60)
-            continue
-
-        if not portafolios_activos:
-            time.sleep(60)
-            continue
-
-        if es_horario:
-            # Analizar cada portafolio activo
-            for archivo in portafolios_activos:
-                ultimo = ultimo_analisis.get(archivo)
-                # Solo analizar si pasaron 15 minutos desde el último
-                if ultimo and (ahora - ultimo).total_seconds() < 900:
-                    continue
-                # Analizar en thread separado para no bloquear los demás portafolios
-                t = threading.Thread(target=analizar_portafolio, args=(archivo,), daemon=True)
-                t.start()
-                ultimo_analisis[archivo] = ahora
-            time.sleep(60)  # Revisar cada minuto si ya pasaron 15
-
-        else:
-            # Mercado cerrado — notificar una vez por día al abrir y al cerrar
-            hora = ahora.strftime("%H:%M")
-            # Notificar al cierre (4:01 PM) y solo una vez
-            if hora == "16:01":
-                for archivo in portafolios_activos:
-                    try:
-                        with open(f"{CARPETA}/{archivo}", 'r', encoding='utf-8') as f:
-                            p = json.load(f)
-                        msg = (
-                            f"🔔 <b>{p['nombre']}</b>\n"
-                            f"🔒 Mercado cerrado — NYSE cerró a las 4:00 PM\n"
-                            f"📅 Próxima sesión: mañana a las 9:30 AM\n"
-                            f"💤 El monitor reanudará el análisis mañana."
-                        )
-                        if p.get('telegram_chat_id'):
-                            enviar_telegram(p['telegram_chat_id'], msg)
-                        if p.get('email'):
-                            enviar_email(p['email'], f"Mercado cerrado — {p['nombre']}", msg)
-
-                        # Actualizar archivo monitor con estado cerrado
-                        ruta_m = f"{CARPETA}/monitor_{archivo}"
-                        monitor_data = {
-                            "archivo": archivo,
-                            "nombre": p['nombre'],
-                            "timestamp": ahora.strftime("%Y-%m-%d %H:%M:%S"),
-                            "mercado_abierto": False,
-                            "resultados": [],
-                            "justificacion": "Mercado cerrado. NYSE opera de 9:30 AM a 4:00 PM hora Colombia.",
-                            "prediccion": "⏳ El análisis reanudará mañana a las 9:30 AM."
-                        }
-                        with open(ruta_m, 'w', encoding='utf-8') as f:
-                            json.dump(monitor_data, f, indent=2, ensure_ascii=False)
-                    except:
-                        continue
-
-            # Notificar al abrir (9:30 AM) y solo una vez
-            elif hora == "09:30":
-                for archivo in portafolios_activos:
-                    try:
-                        with open(f"{CARPETA}/{archivo}", 'r', encoding='utf-8') as f:
-                            p = json.load(f)
-                        msg = (
-                            f"🔔 <b>{p['nombre']}</b>\n"
-                            f"🟢 Mercado abierto — NYSE abrió a las 9:30 AM\n"
-                            f"🔍 Iniciando monitoreo cada 15 minutos.\n"
-                            f"📊 Recibirás alertas cuando haya oportunidades de entrada."
-                        )
-                        if p.get('telegram_chat_id'):
-                            enviar_telegram(p['telegram_chat_id'], msg)
-                        if p.get('email'):
-                            enviar_email(p['email'], f"Mercado abierto — {p['nombre']}", msg)
-                    except:
-                        continue
-
-            time.sleep(60)  # Revisar cada minuto fuera de horario
-
-# ── Iniciar como thread ──
-def iniciar_monitor():
-    t = threading.Thread(target=loop_monitor, daemon=True)
-    t.start()
-    return t
