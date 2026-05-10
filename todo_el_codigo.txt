@@ -44,9 +44,7 @@ os.makedirs(os.path.join(DATOS_DIR, "precios"), exist_ok=True)
 os.makedirs(os.path.join(DATOS_DIR, "portafolios"), exist_ok=True)
 os.makedirs(os.path.join(DATOS_DIR, "Logs"), exist_ok=True)
 app.secret_key = os.environ.get("SECRET_KEY", "portafolio_andrea_2026_secreto")
-
-
-
+GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "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")
 # ── SVG logo átomo ──────────────────────────────────────────
 LOGO = (
     '<svg width="18" height="18" viewBox="0 0 30 30" fill="none">'
@@ -88,17 +86,16 @@ def verificar_acceso(archivo):
     return None
 
 def groq_chat(messages, system='', max_tokens=300, temperature=0.5):
-    import anthropic
-    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
-    kwargs = {
-        "model": "claude-sonnet-4-20250514",
-        "max_tokens": max_tokens,
-        "messages": messages
-    }
+    from groq import Groq
+    msgs = []
     if system:
-        kwargs["system"] = system
-    resp = client.messages.create(**kwargs)
-    return resp.content[0].text
+        msgs.append({'role': 'system', 'content': system})
+    msgs.extend(messages)
+    resp = Groq(api_key=GROQ_API_KEY).chat.completions.create(
+        model='llama-3.3-70b-versatile',
+        messages=msgs, max_tokens=max_tokens, temperature=temperature
+    )
+    return resp.choices[0].message.content
 
 def cargar_macro():
     archivos = [
@@ -219,19 +216,13 @@ def grafica_trm(trm_hist):
         cambio  = ((trm_hoy-trm_mes)/trm_mes)*100
         noticias_txt = '\n'.join(noticias) if noticias else 'Sin noticias recientes.'
         analisis_trm = groq_chat(
-    [{'role': 'user', 'content':
-      f'TRM hoy: ${trm_hoy:,.0f} COP/USD. Cambio vs hace un mes: {cambio:+.1f}%.\n\n'
-      f'NOTICIAS ECONÓMICAS REALES (últimas 48h):\n{noticias_txt}\n\n'
-      f'Como analista cambiario especializado en Colombia, escribe 3 oraciones precisas:\n'
-      f'1. Qué está pasando con el peso HOY y por qué (basándote en las noticias).\n'
-      f'2. Qué factor macro explica la tendencia reciente ({cambio:+.1f}% en 30 días).\n'
-      f'3. Qué debe vigilar un inversionista colombiano con exposición en USD esta semana.\n\n'
-      f'Solo habla de lo que está en las noticias. Sin asteriscos. Español directo.'}],
-    system=(
-        'Eres analista cambiario senior del mercado colombiano. Directo, nunca genérico. '
-        'Si no tienes información suficiente para afirmar algo, lo dices. Nunca inventas.'
-    ),
-    max_tokens=200, temperature=0.2)
+            [{'role':'user','content':
+              f'TRM hoy ${trm_hoy:,.0f} COP/USD, cambio {cambio:+.1f}% último mes.\n'
+              f'NOTICIAS REALES:\n{noticias_txt}\n\n'
+              f'Basándote SOLO en estas noticias, 2-3 oraciones sobre qué pasa con la TRM y qué puede pasar. '
+              f'Sin inventar. Sin asteriscos. Español directo.'}],
+            system='Eres analista financiero. Solo hablas de lo que está en las noticias. Nunca inventas.',
+            max_tokens=150, temperature=0.3)
     except: pass
 
     import json as jm
@@ -964,29 +955,56 @@ def analista_view(archivo):
         )
 
     sistema = (
-        f'Eres un analista financiero senior especializado en portafolios de renta variable americana '
-        f'para inversionistas colombianos. Tu cliente es {portafolio["propietario"]}.\n\n'
-        f'PORTAFOLIO:\n'
-        f'- Perfil: {portafolio.get("perfil", "no definido")} '
-        f'({"10 años, maximizar retorno ajustado por riesgo" if portafolio.get("perfil") == "agresivo" else "5 años, menor volatilidad"})\n'
-        f'- Capital: ${portafolio.get("inversion_inicial", 0):,.0f} COP\n'
-        f'- DCA: ${portafolio.get("aporte_dca", 0):,.0f} COP cada {portafolio.get("frecuencia_meses", 1)} mes(es)\n'
-        f'- Con inversiones: {"sí" if tiene_inv else "no"}\n'
+        f'Eres un analista financiero experto, riguroso y con criterio propio. Ayudas a {portafolio["propietario"]} con su portafolio.\n\n'
+        f'DATOS ACTUALES DEL PORTAFOLIO:\n'
+        f'- Nombre: {portafolio["nombre"]}\n'
+        f'- Perfil: {portafolio.get("perfil", "no definido")}\n'
+        f'- Inversión inicial: ${portafolio.get("inversion_inicial", 0):,.0f} COP\n'
+        f'- Aporte DCA: ${portafolio.get("aporte_dca", 0):,.0f} COP cada {portafolio.get("frecuencia_meses", 1)} mes(es)\n'
+        f'- Tiene inversiones registradas: {str(tiene_inv).lower()}\n'
         f'{composicion_actual_txt}\n\n'
-        f'TU ESTILO:\n'
-        f'- Una pregunta a la vez. Nunca varias en un mismo mensaje.\n'
-        f'- Tienes criterio: si algo no conviene al cliente, lo dices con datos antes de ejecutar.\n'
-        f'- Nunca pides información que ya tienes arriba.\n\n'
-        f'FLUJO A — PORTAFOLIO NUEVO: recoge en orden (uno por mensaje): perfil → monto → DCA → horizonte.\n'
-        f'Cuando tengas todo, responde SOLO el JSON:\n'
+
+        f'HAY DOS FLUJOS POSIBLES:\n\n'
+
+        f'=== FLUJO A: PORTAFOLIO NUEVO ===\n'
+        f'Si el usuario quiere un portafolio nuevo, sigue este orden estricto (una pregunta a la vez):\n'
+        f'A1: ¿Perfil? Solo "conservador" o "agresivo".\n'
+        f'A2: ¿Monto inicial en COP?\n'
+        f'A3: ¿Aportes DCA? Si sí: ¿cuánto y cada cuánto?\n'
+        f'A4: ¿Horizonte en años?\n'
+        f'A5: Responde SOLO el JSON:\n'
         f'{{"accion":"analizar","perfil":"agresivo","inversion":1000000,"aporte_dca":0,"frecuencia_meses":1,"horizonte":10,"es_nuevo":true}}\n\n'
-        f'FLUJO B — ACTUALIZAR EXISTENTE: ya tienes los datos. Pregunta UNA VEZ qué quiere cambiar. '
-        f'Evalúa si el cambio tiene sentido para su perfil. Si es riesgoso, díselo antes de proceder. '
-        f'Luego genera el JSON con los valores finales (actuales + cambios). SIEMPRE incluye "activos" en actualizaciones.\n'
-        f'Ejemplo: {{"accion":"analizar","perfil":"agresivo","inversion":2000000,"aporte_dca":200000,'
-        f'"frecuencia_meses":1,"horizonte":10,"es_nuevo":false,'
-        f'"activos":{{"WMT":0.265,"LLY":0.212,"XLK":0.159,"GOOGL":0.154,"MSFT":0.110,"VTI":0.100}}}}\n\n'
-        f'REGLAS: Una pregunta por mensaje. JSON solo y sin texto adicional. Español. Sin asteriscos. Horizonte entre 1 y 30, nunca 0.'
+
+        f'=== FLUJO B: ACTUALIZAR PORTAFOLIO EXISTENTE ===\n'
+        f'Si el usuario quiere actualizar, TÚ tienes toda la información actual arriba. NO la pidas de nuevo.\n'
+        f'Pregunta UNA SOLA VEZ: ¿Qué deseas modificar?\n'
+        f'  1. Monto de inversión\n'
+        f'  2. Aportes DCA (monto o frecuencia)\n'
+        f'  3. Horizonte de inversión\n'
+        f'  4. Perfil de riesgo\n'
+        f'  5. Activos o pesos (agregar, quitar o ajustar)\n'
+        f'  6. Varias cosas a la vez\n\n'
+        f'Cuando el usuario responda:\n'
+        f'- Recoge SOLO lo que quiere cambiar\n'
+        f'- Para lo que NO cambia, usa los valores actuales del portafolio\n'
+        f'- Si el cambio es riesgoso o no te parece bien, dilo con criterio antes de proceder\n'
+        f'  Ejemplo: "Quieres reducir el horizonte de 10 a 2 años — eso limita mucho el potencial. ¿Estás seguro?"\n'
+        f'- Si el cambio tiene sentido, confirma brevemente lo que vas a recalcular\n'
+        f'- Luego responde SOLO el JSON con los valores finales (mezcla de actuales + cambios):\n'
+        f'IMPORTANTE: En actualizaciones SIEMPRE incluye el campo "activos" con los pesos finales de TODOS los activos.\n'
+        f'IMPORTANTE: Nunca pongas horizonte:0. Si no cambia, usa el valor actual: {portafolio.get("inversion_inicial", 1000000)}.\n'
+        f'Ejemplo JSON de actualización:\n'
+        f'{{"accion":"analizar","perfil":"conservador","inversion":1000000,"aporte_dca":200000,"frecuencia_meses":1,"horizonte":10,"es_nuevo":false,'
+        f'"activos":{{"WMT":0.294,"LLY":0.236,"XLK":0.176,"GOOGL":0.121,"MSFT":0.082,"VTI":0.091}}}}\n\n'
+        f'REGLAS SIEMPRE:\n'
+        f'- Una pregunta por mensaje máximo\n'
+        f'- Respuestas cortas y directas\n'
+        f'- Español sin asteriscos\n'
+        f'- Tienes criterio propio: si algo no te parece bien, dilo antes de ejecutar\n'
+        f'- NUNCA pidas información que ya tienes en los datos actuales del portafolio\n'
+        f'- El JSON va al final, solo cuando tengas TODOS los datos listos'
+        f'IMPORTANTE: El horizonte debe ser un número razonable de años entre 1 y 30. Si no lo sabes, usa 10. Nunca pongas 0 ni números absurdos.\n'
+        f'- Cuando generes el JSON FINAL, escríbelo SOLO, sin ningún texto antes ni después. Solo el JSON puro.\n'
     )
 
     contenido = (
@@ -1764,22 +1782,19 @@ def api_bot(archivo):
                     if t is not None: noticias_mercado += f'- {tk}: {t.text[:80]}\n'
         except: pass
         noticias_txt = f'\nNOTICIAS RECIENTES DE TUS ACTIVOS:\n{noticias_mercado}' if noticias_mercado else ''
-        ctx = (
-            f'Eres el asesor de inversiones personal de {p["propietario"]}, '
-            f'con acceso completo a su portafolio en tiempo real. '
-            f'Tu trabajo es dar análisis honestos, con criterio propio, sin rodeos.\n\n'
-            f'PERFIL:\n'
-            f'- Riesgo: {p["perfil"]} ({"largo plazo 10 años, acepta volatilidad" if p["perfil"] == "agresivo" else "mediano plazo 5 años, prioriza estabilidad"})\n'
-            f'- Capital inicial: ${p.get("inversion_inicial", 0):,.0f} COP\n'
-            f'- DCA: ${p.get("aporte_dca", 0):,.0f} COP cada {p.get("frecuencia_meses", 1)} mes(es)\n\n'
-            f'PORTAFOLIO HOY:\n{resumen_tr}\n\n'
-            f'MACRO:\n{mt}\n{noticias_txt}\n\n'
-            f'INSTRUCCIONES:\n'
-            f'- Usa los números reales. Nunca inventes cifras.\n'
-            f'- Si gana: explica qué lo impulsa. Si pierde: sé honesto y pon en contexto largo plazo.\n'
-            f'- Cuando pregunten "¿qué hago?": da una recomendación concreta, no "depende".\n'
-            f'- Siempre compara contra inflación colombiana — eso es lo que realmente importa.\n'
-            f'- Máximo 4 párrafos. Sin asteriscos. Sin bullets. Español directo.'
+        ctx=(
+            f'Eres el asesor financiero personal de {p["propietario"]}. '
+            f'Directo, honesto, sin rodeos y con criterio propio.\n\n'
+            f'PERFIL DEL INVERSIONISTA:\n'
+            f'- Nombre: {p["propietario"]}\n'
+            f'- Perfil de riesgo: {p["perfil"]}\n'
+            f'- Inversión inicial: ${p.get("inversion_inicial",0):,.0f} COP\n'
+            f'- DCA: ${p.get("aporte_dca",0):,.0f} COP cada {p.get("frecuencia_meses",1)} mes(es)\n\n'
+            f'DATOS REALES HOY:\n{resumen_tr}\n'
+            f'CONTEXTO MACRO:\n{mt}\n'
+            f'{noticias_txt}\n\n'
+            f'Responde en español. Sin asteriscos. Máximo 4 párrafos. '
+            f'Usa los números exactos. NUNCA inventes cifras.'
         )
         resp = groq_chat([{'role':'user','content':mensaje}], system=ctx, max_tokens=800, temperature=0.4)
         return jsonify({'respuesta':resp})
@@ -2752,3 +2767,2487 @@ if __name__=="__main__":
     print("   http://localhost:5000")
     print("="*55)
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT',5000)), debug=False)
+"""
+monitor.py — Motor de monitoreo de mercado
+==========================================
+- Corre en hilo daemon independiente
+- Analiza portafolios con monitoreo_activo = True
+- Alertas cada 15-20 min si hay posible entrada (Telegram + app)
+- Reporte de cierre a las 4:30pm Colombia (Telegram + app)
+- Recomendación de entrada subóptima si pasa 1 semana sin señal
+"""
+
+import os, json, time, threading, requests
+from datetime import datetime, timedelta
+import pandas as pd
+import yfinance as yf
+import warnings
+warnings.filterwarnings('ignore')
+
+BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
+DATOS_DIR = os.path.join(BASE_DIR, "datos")
+PORTS_DIR = os.path.join(DATOS_DIR, "portafolios")
+BOT_TOKEN = "8332465511:AAH-PlentkDhWWNenLGOdvJCLC6OXNEnrA8"
+
+INTERVALO_MINUTOS   = 18   # cada cuántos minutos se analiza durante el día
+UMBRAL_ENTRADA      = 6.5  # score mínimo para emitir alerta de entrada
+DIAS_SIN_SENAL_MAX  = 5    # días hábiles sin señal antes de recomendar entrada subóptima
+
+# ─────────────────────────────────────────────────────────────
+# UTILIDADES DE TIEMPO
+# ─────────────────────────────────────────────────────────────
+
+def hora_colombia():
+    """Hora actual en Colombia (UTC-5)."""
+    return datetime.utcnow() - timedelta(hours=5)
+
+def mercado_abierto():
+    """NYSE abre 9:30am–4:00pm hora Colombia, lunes a viernes."""
+    ahora = hora_colombia()
+    if ahora.weekday() >= 5:
+        return False
+    apertura = ahora.replace(hour=9, minute=30, second=0, microsecond=0)
+    cierre   = ahora.replace(hour=16, minute=0, second=0, microsecond=0)
+    return apertura <= ahora <= cierre
+
+def es_hora_cierre():
+    """True entre 4:00pm y 4:45pm Colombia (ventana de reporte de cierre)."""
+    ahora = hora_colombia()
+    if ahora.weekday() >= 5:
+        return False
+    inicio = ahora.replace(hour=16, minute=0, second=0, microsecond=0)
+    fin    = ahora.replace(hour=16, minute=45, second=0, microsecond=0)
+    return inicio <= ahora <= fin
+
+def es_viernes():
+    return hora_colombia().weekday() == 4
+
+def segundos_hasta_apertura():
+    ahora = hora_colombia()
+    if ahora.weekday() >= 5:
+        dias = 7 - ahora.weekday()
+        prox = (ahora + timedelta(days=dias)).replace(hour=9, minute=35, second=0, microsecond=0)
+    else:
+        hoy_apertura = ahora.replace(hour=9, minute=35, second=0, microsecond=0)
+        if ahora < hoy_apertura:
+            prox = hoy_apertura
+        else:
+            prox = (ahora + timedelta(days=1)).replace(hour=9, minute=35, second=0, microsecond=0)
+            while prox.weekday() >= 5:
+                prox += timedelta(days=1)
+    return max(0, (prox - ahora).total_seconds())
+
+# ─────────────────────────────────────────────────────────────
+# TELEGRAM
+# ─────────────────────────────────────────────────────────────
+
+def telegram(chat_id, texto):
+    if not chat_id:
+        return
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={"chat_id": chat_id, "text": texto, "parse_mode": "HTML"},
+            timeout=10
+        )
+    except Exception as e:
+        print(f"❌ Telegram error: {e}")
+
+# ─────────────────────────────────────────────────────────────
+# ANÁLISIS TÉCNICO DE UN ACTIVO
+# ─────────────────────────────────────────────────────────────
+
+def analizar_activo(ticker):
+    """
+    Descarga datos recientes y calcula:
+    - Precio actual, MA20, MA50
+    - RSI (14)
+    - Tendencia (retorno últimos 20d)
+    - Volumen relativo (ratio vs media 20d)
+    - Score de entrada 0-10
+    - Señal: ENTRAR / VIGILAR / NEUTRAL
+    """
+    try:
+        hoy    = datetime.utcnow()
+        inicio = (hoy - timedelta(days=90)).strftime("%Y-%m-%d")
+        df = yf.download(ticker, start=inicio, end=hoy.strftime("%Y-%m-%d"),
+                         interval="1d", auto_adjust=True, progress=False)
+        if df is None or len(df) < 20:
+            return None
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+
+        close  = df["Close"].squeeze()
+        volume = df["Volume"].squeeze() if "Volume" in df.columns else pd.Series([1]*len(df))
+
+        precio  = float(close.iloc[-1])
+        ma20    = float(close.rolling(20).mean().iloc[-1])
+        ma50    = float(close.rolling(50).mean().iloc[-1]) if len(close) >= 50 else ma20
+        tend    = round(((precio - float(close.iloc[-20])) / float(close.iloc[-20])) * 100, 2)
+        vol_r   = round(float(volume.iloc[-1]) / float(volume.rolling(20).mean().iloc[-1]), 2) if float(volume.rolling(20).mean().iloc[-1]) > 0 else 1.0
+
+        # RSI
+        delta = close.diff()
+        gain  = delta.clip(lower=0).rolling(14).mean()
+        loss  = (-delta.clip(upper=0)).rolling(14).mean()
+        rs    = gain / loss.replace(0, 1e-9)
+        rsi   = round(float(100 - (100 / (1 + rs.iloc[-1]))), 1)
+
+        # Score de entrada (0-10)
+        score = 0.0
+        # RSI: ideal entre 30-50 para largo plazo
+        if rsi < 30:
+            score += 3.0
+        elif rsi < 45:
+            score += 2.5
+        elif rsi < 55:
+            score += 1.5
+        elif rsi < 65:
+            score += 0.5
+        # Precio vs medias
+        if precio < ma20:
+            score += 2.0
+        elif precio < ma50:
+            score += 1.0
+        # Tendencia reciente (quiere retroceso o lateral)
+        if -10 <= tend <= -3:
+            score += 2.5
+        elif -3 < tend <= 0:
+            score += 1.5
+        elif 0 < tend <= 3:
+            score += 1.0
+        elif tend < -10:
+            score += 1.5   # caída fuerte, más riesgo pero oportunidad
+        # Volumen
+        if vol_r > 1.5:
+            score += 0.5   # actividad inusual
+
+        score = round(min(score, 10.0), 1)
+
+        if score >= UMBRAL_ENTRADA:
+            senal = "ENTRAR"
+        elif score >= 4.5:
+            senal = "VIGILAR"
+        else:
+            senal = "NEUTRAL"
+
+        return {
+            "ticker":    ticker,
+            "precio":    round(precio, 2),
+            "ma20":      round(ma20, 2),
+            "ma50":      round(ma50, 2),
+            "rsi":       rsi,
+            "tendencia": tend,
+            "vol_ratio": vol_r,
+            "score":     score,
+            "senal":     senal,
+            "timestamp": hora_colombia().strftime("%Y-%m-%d %H:%M"),
+        }
+    except Exception as e:
+        print(f"❌ Error analizando {ticker}: {e}")
+        return None
+
+# ─────────────────────────────────────────────────────────────
+# ANÁLISIS IA (Groq)
+# ─────────────────────────────────────────────────────────────
+
+def analisis_ia(resultados, portafolio, tipo="ciclo"):
+    """
+    tipo: 'ciclo' | 'cierre' | 'subtimal'
+    """
+    try:
+        from groq import Groq
+        GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
+
+        resumen = ""
+        for r in resultados:
+            resumen += (f"- {r['ticker']}: ${r['precio']} | RSI {r['rsi']} | "
+                        f"Score {r['score']}/10 | Señal {r['senal']} | "
+                        f"Tendencia {r['tendencia']:+.1f}% | MA20 ${r['ma20']} | MA50 ${r['ma50']}\n")
+
+        if tipo == "cierre":
+            prompt = (
+                f"Eres analista financiero de {portafolio['propietario']}. "
+                f"Es el cierre del mercado NYSE hoy {hora_colombia().strftime('%A %d de %B')}.\n\n"
+                f"MÉTRICAS FINALES DEL DÍA:\n{resumen}\n\n"
+                f"Escribe un reporte de cierre en español, máximo 5 párrafos:\n"
+                f"1. Resumen general del día\n"
+                f"2. Activos que mostraron señales\n"
+                f"3. Activos que hay que vigilar mañana\n"
+                f"4. Recomendación concreta para la próxima sesión\n"
+                f"5. Nivel de oportunidad general (bajo/medio/alto)\n"
+                f"Sin asteriscos. Directo. Usa los números exactos."
+            )
+        elif tipo == "suboptimal":
+            prompt = (
+                f"Eres analista financiero de {portafolio['propietario']}. "
+                f"Han pasado {DIAS_SIN_SENAL_MAX}+ días hábiles sin ninguna señal de entrada clara.\n\n"
+                f"ESTADO ACTUAL DEL MERCADO:\n{resumen}\n\n"
+                f"Escribe una recomendación especial en español, máximo 4 párrafos:\n"
+                f"1. Por qué no ha habido señal ideal\n"
+                f"2. Riesgo de esperar más vs entrar ahora\n"
+                f"3. Qué activos son los mejores candidatos a pesar de no ser el momento perfecto\n"
+                f"4. Recomendación final: ¿entrar parcialmente, esperar, o DCA?\n"
+                f"Sin asteriscos. Con criterio propio. Directo."
+            )
+        else:
+            entradas = [r for r in resultados if r['senal'] == 'ENTRAR']
+            vigilar  = [r for r in resultados if r['senal'] == 'VIGILAR']
+            prompt = (
+                f"Analista de {portafolio['propietario']}. Ciclo de monitoreo {hora_colombia().strftime('%H:%M')}.\n\n"
+                f"SEÑALES DETECTADAS:\n{resumen}\n\n"
+                f"{'HAY ' + str(len(entradas)) + ' POSIBLE(S) ENTRADA(S): ' + ', '.join(r['ticker'] for r in entradas) if entradas else 'Sin entradas claras este ciclo.'}\n\n"
+                f"2-3 oraciones máximo. Solo lo importante. Sin asteriscos."
+            )
+
+        resp = Groq(api_key=GROQ_API_KEY).chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=500 if tipo in ("cierre", "suboptimal") else 200,
+            temperature=0.3
+        )
+        return resp.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"❌ IA error: {e}")
+        return ""
+
+# ─────────────────────────────────────────────────────────────
+# PERSISTENCIA DEL ESTADO DEL MONITOR
+# ─────────────────────────────────────────────────────────────
+
+def leer_estado(archivo):
+    ruta = os.path.join(PORTS_DIR, f"monitor_{archivo}")
+    if os.path.exists(ruta):
+        try:
+            with open(ruta, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            pass
+    return {}
+
+def guardar_estado(archivo, estado):
+    ruta = os.path.join(PORTS_DIR, f"monitor_{archivo}")
+    try:
+        with open(ruta, "w", encoding="utf-8") as f:
+            json.dump(estado, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"❌ Error guardando estado monitor: {e}")
+
+def leer_portafolios_activos():
+    """Devuelve lista de (archivo, portafolio_dict) con monitoreo_activo=True."""
+    activos = []
+    if not os.path.exists(PORTS_DIR):
+        print(f"⚠️ Directorio no existe: {PORTS_DIR}")
+        return activos
+    for fn in os.listdir(PORTS_DIR):
+        if not fn.endswith(".json") or fn.startswith("monitor_"):
+            continue
+        ruta = os.path.join(PORTS_DIR, fn)
+        try:
+            with open(ruta, "r", encoding="utf-8") as f:
+                p = json.load(f)
+            tiene_monitor = p.get("monitoreo_activo", False)
+            tiene_comp    = bool(p.get("composicion"))
+            if tiene_monitor and tiene_comp:
+                print(f"✅ Portafolio activo: {p.get('nombre','?')} — {len(p['composicion'])} activos")
+                activos.append((fn, p))
+            elif tiene_monitor and not tiene_comp:
+                print(f"⚠️ {p.get('nombre','?')} tiene monitoreo ON pero SIN composición — no se monitorea")
+        except Exception as e:
+            print(f"❌ Error leyendo {fn}: {e}")
+            continue
+    if not activos:
+        print("💤 Sin portafolios activos para monitorear")
+    return activos
+
+def chat_id_de(portafolio):
+    """Obtiene el telegram_chat_id del dueño del portafolio."""
+    # Primero intenta desde el perfil del usuario
+    try:
+        import sys
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from gestor_portafolio import get_usuario
+        owner = portafolio.get("owner", "")
+        if owner:
+            u = get_usuario(owner)
+            if u:
+                cid = u.get("telegram_chat_id", "").strip()
+                if cid:
+                    print(f"📲 chat_id encontrado para {owner}: {cid}")
+                    return cid
+    except Exception as e:
+        print(f"⚠️ No pudo leer usuario para chat_id: {e}")
+    # Fallback: campo directo en el portafolio
+    cid = portafolio.get("telegram_chat_id", "").strip()
+    if cid:
+        return cid
+    print(f"⚠️ Sin chat_id para portafolio: {portafolio.get('nombre','?')}")
+    return ""
+
+# ─────────────────────────────────────────────────────────────
+# CICLO PRINCIPAL DE UN PORTAFOLIO
+# ─────────────────────────────────────────────────────────────
+
+def ciclo_portafolio(archivo, portafolio):
+    """
+    Analiza todos los activos del portafolio.
+    Emite alertas si hay entradas. Guarda estado.
+    """
+    composicion = portafolio.get("composicion", {})
+    tickers     = list(composicion.keys())
+    if not tickers:
+        return
+
+    print(f"  🔍 Analizando {len(tickers)} activos de {portafolio['nombre']}...")
+    resultados = []
+    for tk in tickers:
+        r = analizar_activo(tk)
+        if r:
+            resultados.append(r)
+        time.sleep(0.5)  # respetar rate limits de yfinance
+
+    if not resultados:
+        return
+
+    estado    = leer_estado(archivo)
+    chat_id   = chat_id_de(portafolio)
+    ahora_str = hora_colombia().strftime("%Y-%m-%d %H:%M")
+    hoy_str   = hora_colombia().strftime("%Y-%m-%d")
+
+    entradas = [r for r in resultados if r["senal"] == "ENTRAR"]
+    vigilar  = [r for r in resultados if r["senal"] == "VIGILAR"]
+
+    # ── Alertas de entrada ──────────────────────────────────
+    if entradas:
+        ia_txt = analisis_ia(resultados, portafolio, tipo="ciclo")
+        for r in entradas:
+            msg = (
+                f"🟢 <b>POSIBLE ENTRADA — {r['ticker']}</b>\n"
+                f"📊 Score: <b>{r['score']}/10</b> | RSI: {r['rsi']}\n"
+                f"💵 Precio: ${r['precio']:,} | MA20: ${r['ma20']:,} | MA50: ${r['ma50']:,}\n"
+                f"📈 Tendencia 20d: {r['tendencia']:+.1f}% | Vol ratio: {r['vol_ratio']}x\n"
+                f"🕐 {ahora_str}\n"
+            )
+            if ia_txt:
+                msg += f"\n💬 <i>{ia_txt}</i>"
+            telegram(chat_id, msg)
+            print(f"  ✅ Alerta ENTRAR enviada: {r['ticker']}")
+
+        # Registrar último día con señal
+        estado["ultimo_dia_con_senal"] = hoy_str
+        estado["dias_consecutivos_sin_senal"] = 0
+    else:
+        # Contar días hábiles sin señal
+        ultimo = estado.get("ultimo_dia_con_senal")
+        if ultimo:
+            try:
+                dias = sum(1 for i in range(
+                    (datetime.strptime(hoy_str, "%Y-%m-%d") -
+                     datetime.strptime(ultimo, "%Y-%m-%d")).days
+                ) if (datetime.strptime(ultimo, "%Y-%m-%d") + timedelta(days=i+1)).weekday() < 5)
+                estado["dias_consecutivos_sin_senal"] = dias
+            except:
+                estado["dias_consecutivos_sin_senal"] = estado.get("dias_consecutivos_sin_senal", 0)
+        else:
+            estado["dias_consecutivos_sin_senal"] = estado.get("dias_consecutivos_sin_senal", 0) + 1
+
+    # Guardar resultados del ciclo
+    estado["resultados"]        = resultados
+    estado["timestamp"]         = ahora_str
+    estado["prediccion"]        = (f"🟢 {len(entradas)} entrada(s) detectada(s)" if entradas
+                                   else f"👁 {len(vigilar)} en vigilancia" if vigilar
+                                   else "⚪ Sin señales este ciclo")
+    estado["justificacion"]     = analisis_ia(resultados, portafolio, tipo="ciclo") if not entradas else ""
+    estado["nombre_portafolio"] = portafolio["nombre"]
+
+    guardar_estado(archivo, estado)
+    return estado
+
+# ─────────────────────────────────────────────────────────────
+# REPORTE DE CIERRE (4:30pm)
+# ─────────────────────────────────────────────────────────────
+
+def reporte_cierre(archivo, portafolio, estado):
+    """Emite el reporte numérico + hablado al cierre del mercado."""
+    resultados = estado.get("resultados", [])
+    if not resultados:
+        return
+
+    chat_id = chat_id_de(portafolio)
+    hoy_str = hora_colombia().strftime("%A %d de %B de %Y")
+    dias_sin = estado.get("dias_consecutivos_sin_senal", 0)
+
+    # ── Tabla numérica ──────────────────────────────────────
+    lineas = [f"📋 <b>REPORTE DE CIERRE — {portafolio['nombre']}</b>",
+              f"📅 {hoy_str}\n"]
+    for r in sorted(resultados, key=lambda x: x["score"], reverse=True):
+        emoji = {"ENTRAR": "🟢", "VIGILAR": "🟡", "NEUTRAL": "⚪"}.get(r["senal"], "⚪")
+        lineas.append(
+            f"{emoji} <b>{r['ticker']}</b>  ${r['precio']:,}\n"
+            f"   Score {r['score']}/10 | RSI {r['rsi']} | {r['tendencia']:+.1f}% | Vol {r['vol_ratio']}x"
+        )
+
+    entradas = [r for r in resultados if r["senal"] == "ENTRAR"]
+    if entradas:
+        lineas.append(f"\n🎯 Señales de entrada: {', '.join(r['ticker'] for r in entradas)}")
+    else:
+        lineas.append(f"\n⚪ Sin señales de entrada hoy")
+
+    if dias_sin > 0:
+        lineas.append(f"📆 Días hábiles sin señal: {dias_sin}")
+
+    msg_numerico = "\n".join(lineas)
+
+    # ── Análisis hablado ────────────────────────────────────
+    ia_cierre = analisis_ia(resultados, portafolio, tipo="cierre")
+
+    msg_final = msg_numerico
+    if ia_cierre:
+        msg_final += f"\n\n💬 <b>Análisis:</b>\n<i>{ia_cierre}</i>"
+
+    # ── Recomendación subóptima si aplica ──────────────────
+    if dias_sin >= DIAS_SIN_SENAL_MAX and es_viernes():
+        ia_sub = analisis_ia(resultados, portafolio, tipo="suboptimal")
+        sub_msg = (
+            f"\n\n⚠️ <b>ALERTA: {dias_sin} días sin señal ideal</b>\n"
+            f"El mercado podría estar encareciendo. Considera una entrada parcial.\n"
+        )
+        if ia_sub:
+            sub_msg += f"<i>{ia_sub}</i>"
+        msg_final += sub_msg
+
+    telegram(chat_id, msg_final)
+    print(f"  📋 Reporte de cierre enviado: {portafolio['nombre']}")
+
+    # Guardar en el estado de la app
+    estado["reporte_cierre"]       = msg_final
+    estado["reporte_cierre_fecha"] = hora_colombia().strftime("%Y-%m-%d")
+    estado["cierre_enviado_hoy"]   = hora_colombia().strftime("%Y-%m-%d")
+    guardar_estado(archivo, estado)
+
+# ─────────────────────────────────────────────────────────────
+# RECOMENDACIÓN SUBÓPTIMA (si aplica fuera del viernes)
+# ─────────────────────────────────────────────────────────────
+
+def verificar_alerta_suboptimal(archivo, portafolio, estado):
+    """
+    Si llevan DIAS_SIN_SENAL_MAX días sin señal y es viernes,
+    ya se envía dentro del reporte de cierre.
+    Para otros días: solo registra en estado para mostrarlo en la app.
+    """
+    dias_sin = estado.get("dias_consecutivos_sin_senal", 0)
+    if dias_sin < DIAS_SIN_SENAL_MAX:
+        return
+    resultados = estado.get("resultados", [])
+    if not resultados:
+        return
+    if not estado.get("alerta_suboptimal_semana") == hora_colombia().strftime("%Y-W%W"):
+        ia_sub = analisis_ia(resultados, portafolio, tipo="suboptimal")
+        estado["alerta_suboptimal"]        = ia_sub
+        estado["alerta_suboptimal_semana"] = hora_colombia().strftime("%Y-W%W")
+        estado["dias_sin_senal_display"]   = dias_sin
+        guardar_estado(archivo, estado)
+
+# ─────────────────────────────────────────────────────────────
+# HILO PRINCIPAL DEL MONITOR
+# ─────────────────────────────────────────────────────────────
+
+_monitor_activo = False
+
+def iniciar_monitor():
+    global _monitor_activo
+    if _monitor_activo:
+        return
+    _monitor_activo = True
+    t = threading.Thread(target=_loop_monitor, daemon=True)
+    t.start()
+    print("🚀 Monitor iniciado")
+
+def _loop_monitor():
+    """
+    Loop principal:
+    - Durante mercado abierto: ciclo cada INTERVALO_MINUTOS minutos
+    - Al cierre (4:00-4:45pm): reporte de cierre (solo una vez por día)
+    - Fuera de horario: duerme hasta la próxima apertura
+    """
+    ultimo_ciclo       = {}   # archivo -> datetime del último ciclo
+    cierre_enviado     = {}   # archivo -> fecha en que se envió el cierre
+
+    while True:
+        try:
+            portafolios = leer_portafolios_activos()
+
+            if mercado_abierto():
+                ahora = hora_colombia()
+                for archivo, portafolio in portafolios:
+                    # ── Ciclo de análisis ──────────────────────────
+                    ultimo = ultimo_ciclo.get(archivo)
+                    if ultimo is None or (ahora - ultimo).total_seconds() >= INTERVALO_MINUTOS * 60:
+                        try:
+                            estado = ciclo_portafolio(archivo, portafolio)
+                            if estado:
+                                verificar_alerta_suboptimal(archivo, portafolio, estado)
+                        except Exception as e:
+                            print(f"❌ Error ciclo {archivo}: {e}")
+                        ultimo_ciclo[archivo] = ahora
+
+                time.sleep(60)  # chequea cada minuto si toca correr el siguiente ciclo
+
+            elif es_hora_cierre():
+                hoy = hora_colombia().strftime("%Y-%m-%d")
+                for archivo, portafolio in portafolios:
+                    # ── Reporte de cierre (solo una vez por día) ───
+                    if cierre_enviado.get(archivo) != hoy:
+                        estado = leer_estado(archivo)
+                        if estado:
+                            try:
+                                reporte_cierre(archivo, portafolio, estado)
+                            except Exception as e:
+                                print(f"❌ Error reporte cierre {archivo}: {e}")
+                        cierre_enviado[archivo] = hoy
+                time.sleep(60)
+
+            else:
+                # Mercado cerrado — dormir hasta la próxima apertura
+                segs = segundos_hasta_apertura()
+                print(f"💤 Mercado cerrado. Próxima apertura en {segs/3600:.1f}h")
+                # Dormir en bloques de 5 min para poder reaccionar a cambios
+                time.sleep(min(segs, 300))
+
+        except Exception as e:
+            print(f"❌ Error loop monitor: {e}")
+            time.sleep(60)
+import json
+import os
+import hashlib
+from datetime import datetime
+
+CARPETA_PORTAFOLIOS = "datos/portafolios"
+os.makedirs(CARPETA_PORTAFOLIOS, exist_ok=True)
+
+# ============================================================
+# UTILIDADES
+# ============================================================
+
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def _leer(ruta):
+    with open(ruta, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+def _escribir(ruta, data):
+    with open(ruta, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+# ============================================================
+# LISTAR PORTAFOLIOS
+# ============================================================
+
+def listar_portafolios():
+    archivos = [f for f in os.listdir(CARPETA_PORTAFOLIOS)
+                if f.endswith('.json') and not f.startswith('monitor_')]
+    portafolios = []
+    for archivo in archivos:
+        try:
+            data = _leer(f"{CARPETA_PORTAFOLIOS}/{archivo}")
+
+            # Leer último análisis del monitor si existe
+            ruta_monitor = f"{CARPETA_PORTAFOLIOS}/monitor_{archivo}"
+            ultimo_monitor = None
+            ultima_senal   = '—'
+            ultimo_ts      = '—'
+            if os.path.exists(ruta_monitor):
+                try:
+                    m = _leer(ruta_monitor)
+                    ultimo_ts    = m.get('timestamp', '—')
+                    resultados   = m.get('resultados', [])
+                    if resultados:
+                        senales = [r.get('senal','') for r in resultados]
+                        if 'ENTRAR'  in senales: ultima_senal = '🟢 ENTRAR'
+                        elif 'VIGILAR' in senales: ultima_senal = '🟡 VIGILAR'
+                        else: ultima_senal = '⚪ NEUTRAL'
+                except:
+                    pass
+
+            portafolios.append({
+                'archivo':          archivo,
+                'nombre':           data.get('nombre', archivo),
+                'perfil':           data.get('perfil', 'desconocido'),
+                'propietario':      data.get('propietario', ''),
+                'fecha_inicio':     data.get('fecha_inicio', ''),
+                'activo':           data.get('activo', False),
+                'owner':            data.get('owner', '—'),
+                'monitoreo_activo': data.get('monitoreo_activo', False),
+                'ultima_senal':     ultima_senal,
+                'ultimo_analisis':  ultimo_ts,
+            })
+        except:
+            continue
+    return portafolios
+
+# ============================================================
+# CREAR PORTAFOLIO
+# ============================================================
+
+def crear_portafolio(nombre, perfil, propietario, inversion_inicial,
+                     aporte_dca=0, frecuencia_meses=0,
+                     password='1234', email='', telegram_chat_id=''):
+    nombre_archivo = (nombre.lower()
+        .replace(' ', '_')
+        .replace('á','a').replace('é','e').replace('í','i')
+        .replace('ó','o').replace('ú','u'))
+    archivo = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}.json"
+
+    if os.path.exists(archivo):
+        print(f"⚠️ Ya existe un portafolio con ese nombre.")
+        return None
+
+    portafolio = {
+        "nombre":            nombre,
+        "perfil":            perfil,
+        "propietario":       propietario,
+        "password_hash":     hash_password(password),
+        "email":             email,
+        "telegram_chat_id":  telegram_chat_id,
+        "fecha_inicio":      datetime.now().strftime("%Y-%m-%d"),
+        "inversion_inicial": inversion_inicial,
+        "aporte_dca":        aporte_dca,
+        "frecuencia_meses":  frecuencia_meses,
+        "activo":            False,
+        "monitoreo_activo":  False,
+        "composicion":       {},
+        "aportes":           [],
+        "historial":         []
+    }
+
+    _escribir(archivo, portafolio)
+    print(f"✅ Portafolio '{nombre}' creado para {propietario}.")
+    return archivo
+
+# ============================================================
+# LEER PORTAFOLIO
+# ============================================================
+
+def leer_portafolio(nombre_archivo):
+    ruta = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}"
+    if not os.path.exists(ruta):
+        print(f"❌ No existe el portafolio {nombre_archivo}")
+        return None
+    try:
+        return _leer(ruta)
+    except Exception as e:
+        # Intentar con latin-1 como fallback
+        try:
+            with open(ruta, 'r', encoding='latin-1') as f:
+                data = json.load(f)
+            # Re-guardar en utf-8 limpio
+            _escribir(ruta, data)
+            print(f"⚠️ Portafolio {nombre_archivo} re-guardado en UTF-8.")
+            return data
+        except:
+            print(f"❌ Error leyendo {nombre_archivo}: {e}")
+            return None
+
+# ============================================================
+# LEER PORTAFOLIO ACTIVO
+# ============================================================
+
+def leer_portafolio_activo():
+    for archivo in os.listdir(CARPETA_PORTAFOLIOS):
+        if archivo.endswith('.json') and not archivo.startswith('monitor_'):
+            try:
+                data = _leer(f"{CARPETA_PORTAFOLIOS}/{archivo}")
+                if data.get('activo', False):
+                    return data
+            except:
+                continue
+    print("⚠️ No hay portafolio activo.")
+    return None
+
+# ============================================================
+# VERIFICAR PASSWORD
+# ============================================================
+
+def verificar_password(nombre_archivo, password):
+    ruta = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}"
+    try:
+        data = _leer(ruta)
+        return data.get('password_hash') == hash_password(password)
+    except:
+        return False
+
+# ============================================================
+# BUSCAR PORTAFOLIOS POR PASSWORD
+# ============================================================
+
+def buscar_portafolios_por_password(password):
+    ph = hash_password(password)
+    resultados = []
+    for archivo in os.listdir(CARPETA_PORTAFOLIOS):
+        if not archivo.endswith('.json') or archivo.startswith('monitor_'):
+            continue
+        try:
+            data = _leer(f"{CARPETA_PORTAFOLIOS}/{archivo}")
+            if data.get('password_hash') == ph:
+                resultados.append({
+                    'archivo':     archivo,
+                    'nombre':      data['nombre'],
+                    'perfil':      data['perfil'],
+                    'propietario': data['propietario']
+                })
+        except:
+            continue
+    return resultados
+
+# ============================================================
+# ACTIVAR PORTAFOLIO
+# ============================================================
+
+def activar_portafolio(nombre_archivo):
+    # Solo activa el monitoreo_activo del seleccionado — no toca los demás
+    ruta = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}"
+    data = _leer(ruta)
+    data['activo'] = True
+    data['monitoreo_activo'] = True
+    _escribir(ruta, data)
+    print(f"✅ Portafolio '{data['nombre']}' activado para monitoreo.")
+    return data
+
+# ============================================================
+# GUARDAR COMPOSICIÓN
+# ============================================================
+
+def guardar_composicion(nombre_archivo, pesos_dict):
+    ruta = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}"
+    if not os.path.exists(ruta):
+        print(f"❌ No existe el portafolio {nombre_archivo}")
+        return
+    data = _leer(ruta)
+    data['composicion'] = pesos_dict
+    data['fecha_ultima_actualizacion'] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    _escribir(ruta, data)
+    print(f"✅ Composición guardada en '{data['nombre']}'.")
+
+# ============================================================
+# GUARDAR APORTE
+# ============================================================
+
+def guardar_aporte(nombre_archivo, aporte):
+    ruta = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}"
+    data = _leer(ruta)
+    data['aportes'].append(aporte)
+    _escribir(ruta, data)
+
+# ============================================================
+# GUARDAR REGISTRO HISTÓRICO DIARIO
+# ============================================================
+
+def guardar_registro_diario(nombre_archivo, registro):
+    ruta = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}"
+    data = _leer(ruta)
+    hoy = datetime.now().strftime("%Y-%m-%d")
+    if hoy in [r['fecha'] for r in data.get('historial', [])]:
+        return False
+    data['historial'].append(registro)
+    _escribir(ruta, data)
+    return True
+
+# ============================================================
+# MENÚ INTERACTIVO
+# ============================================================
+
+def menu_portafolios():
+    print("\n" + "="*50)
+    print("  GESTOR DE PORTAFOLIOS")
+    print("="*50)
+
+    portafolios = listar_portafolios()
+
+    if portafolios:
+        print(f"\n📋 Portafolios disponibles ({len(portafolios)}):")
+        for i, p in enumerate(portafolios, 1):
+            estado = "🟢 ACTIVO" if p['activo'] else "⚪"
+            print(f"   {i}. {estado} {p['nombre']} ({p['perfil']}) — {p['propietario']}")
+    else:
+        print("\n📭 No hay portafolios creados aún.")
+
+    print("\n¿Qué quieres hacer?")
+    print("   1. Crear portafolio nuevo")
+    print("   2. Activar un portafolio")
+    print("   3. Salir")
+
+    opcion = input("\nEscribe 1, 2 o 3: ").strip()
+
+    if opcion == '1':
+        print("\n📝 CREAR PORTAFOLIO NUEVO")
+        nombre      = input("   Nombre (ej: Agresivo Andrea 2026): ")
+        propietario = input("   Propietario (ej: Andrea): ")
+        print("   Perfil: 1=Conservador | 2=Agresivo")
+        perfil_op   = input("   Escribe 1 o 2: ")
+        perfil      = 'conservador' if perfil_op == '1' else 'agresivo'
+        inv_str     = input("   Inversión inicial en COP: ")
+        inv         = float(inv_str.replace(',', '').replace('.', ''))
+        tiene_dca   = input("   ¿Tendrá DCA periódico? (SI/NO): ").upper()
+        if tiene_dca == 'SI':
+            ap_str = input("   ¿Cuánto por aporte en COP? ")
+            aporte = float(ap_str.replace(',', '').replace('.', ''))
+            print("   Frecuencia: 1=Mensual | 3=Trimestral | 12=Anual")
+            freq   = int(input("   Escribe 1, 3 o 12: "))
+        else:
+            aporte = 0
+            freq   = 0
+        password = input("   Contraseña: ")
+        crear_portafolio(nombre, perfil, propietario, inv, aporte, freq, password)
+
+    elif opcion == '2':
+        if not portafolios:
+            print("❌ No hay portafolios para activar.")
+            return
+        num = int(input("\n   ¿Cuál número quieres activar? ")) - 1
+        if 0 <= num < len(portafolios):
+            activar_portafolio(portafolios[num]['archivo'])
+        else:
+            print("❌ Número inválido.")
+
+if __name__ == "__main__":
+    menu_portafolios()
+
+# ============================================================
+# GESTIÓN DE USUARIOS (NUEVO)
+# ============================================================
+
+ARCHIVO_USUARIOS = "datos/usuarios.json"
+
+def _leer_usuarios():
+    if not os.path.exists(ARCHIVO_USUARIOS):
+        # Admin por defecto
+        usuarios = {
+            "admin": {
+                "username": "admin",
+                "email": "admin@portafolio.com",
+                "password_hash": hash_password("admin123"),
+                "telegram_chat_id": "",
+                "fecha_registro": datetime.now().strftime("%Y-%m-%d"),
+                "es_admin": True
+            }
+        }
+        _escribir(ARCHIVO_USUARIOS, usuarios)
+        return usuarios
+    return _leer(ARCHIVO_USUARIOS)
+
+def _escribir_usuarios(usuarios):
+    _escribir(ARCHIVO_USUARIOS, usuarios)
+
+def registrar_usuario(username, email, password, telegram_chat_id=""):
+    """Registra un nuevo usuario. Retorna True si ok, string de error si falla."""
+    usuarios = _leer_usuarios()
+    if username in usuarios:
+        return "Ese nombre de usuario ya existe."
+    for u in usuarios.values():
+        if u["email"] == email:
+            return "Ese email ya está registrado."
+    usuarios[username] = {
+        "username": username,
+        "email": email,
+        "password_hash": hash_password(password),
+        "telegram_chat_id": telegram_chat_id,
+        "fecha_registro": datetime.now().strftime("%Y-%m-%d"),
+        "es_admin": False
+    }
+    _escribir_usuarios(usuarios)
+    return True
+
+def login_usuario(email, password):
+    from datetime import datetime, timedelta
+    usuarios = _leer_usuarios()
+    ph = hash_password(password)
+
+    # Buscar usuario por email
+    usuario_key = None
+    for key, u in usuarios.items():
+        if u["email"] == email:
+            usuario_key = key
+            break
+
+    if not usuario_key:
+        return None
+
+    u = usuarios[usuario_key]
+
+    # Verificar si está bloqueado
+    bloqueado_hasta = u.get("bloqueado_hasta")
+    if bloqueado_hasta:
+        hasta = datetime.strptime(bloqueado_hasta, "%Y-%m-%d %H:%M:%S")
+        if datetime.now() < hasta:
+            minutos = int((hasta - datetime.now()).total_seconds() / 60) + 1
+            return {"bloqueado": True, "minutos": minutos, "username": u["username"]}
+        else:
+            # Desbloquear automáticamente si ya pasó el tiempo
+            usuarios[usuario_key]["bloqueado_hasta"] = None
+            usuarios[usuario_key]["intentos_fallidos"] = 0
+            _escribir_usuarios(usuarios)
+
+    # Verificar contraseña
+    if u["password_hash"] == ph:
+        # Login exitoso — resetear intentos
+        usuarios[usuario_key]["intentos_fallidos"] = 0
+        usuarios[usuario_key]["bloqueado_hasta"]   = None
+        usuarios[usuario_key]["ultimo_login"]       = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        _escribir_usuarios(usuarios)
+        return u
+
+    # Contraseña incorrecta — sumar intento
+    intentos = u.get("intentos_fallidos", 0) + 1
+    usuarios[usuario_key]["intentos_fallidos"] = intentos
+
+    if intentos >= 5:
+        hasta = datetime.now() + timedelta(minutes=15)
+        usuarios[usuario_key]["bloqueado_hasta"] = hasta.strftime("%Y-%m-%d %H:%M:%S")
+        _escribir_usuarios(usuarios)
+        return {"bloqueado": True, "minutos": 15, "username": u["username"]}
+
+    _escribir_usuarios(usuarios)
+    return None
+
+
+def desbloquear_usuario(username):
+    usuarios = _leer_usuarios()
+    if username not in usuarios:
+        return False
+    usuarios[username]["intentos_fallidos"] = 0
+    usuarios[username]["bloqueado_hasta"]   = None
+    _escribir_usuarios(usuarios)
+    return True
+
+def get_usuario(username):
+    usuarios = _leer_usuarios()
+    return usuarios.get(username)
+
+def resetear_password(username, nueva_password="cambiar123"):
+    usuarios = _leer_usuarios()
+    if username not in usuarios:
+        return False
+    usuarios[username]["password_hash"] = hash_password(nueva_password)
+    _escribir_usuarios(usuarios)
+    return True
+
+def actualizar_usuario(username, campos):
+    """Actualiza campos del usuario (email, telegram_chat_id, password_hash)."""
+    usuarios = _leer_usuarios()
+    if username not in usuarios:
+        return False
+    usuarios[username].update(campos)
+    _escribir_usuarios(usuarios)
+    return True
+
+def listar_portafolios_de_usuario(username):
+    """Lista solo los portafolios que pertenecen a este usuario."""
+    archivos = [f for f in os.listdir(CARPETA_PORTAFOLIOS)
+                if f.endswith('.json') and not f.startswith('monitor_')]
+    resultado = []
+    for archivo in archivos:
+        try:
+            data = _leer(f"{CARPETA_PORTAFOLIOS}/{archivo}")
+            if data.get("owner") == username:
+                resultado.append({
+                    'archivo':      archivo,
+                    'nombre':       data.get('nombre', archivo),
+                    'perfil':       data.get('perfil', 'desconocido'),
+                    'propietario':  data.get('propietario', ''),
+                    'fecha_inicio': data.get('fecha_inicio', ''),
+                    'activo':       data.get('activo', False),
+                    'monitoreo_activo': data.get('monitoreo_activo', False),
+                })
+        except:
+            continue
+    return resultado
+
+def crear_portafolio_para_usuario(username, nombre, perfil, propietario,
+                                   inversion_inicial, aporte_dca=0,
+                                   frecuencia_meses=0):
+    """Igual que crear_portafolio pero agrega el campo owner."""
+    nombre_archivo = (nombre.lower()
+        .replace(' ', '_')
+        .replace('á','a').replace('é','e').replace('í','i')
+        .replace('ó','o').replace('ú','u'))
+    archivo = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}.json"
+    if os.path.exists(archivo):
+        return None  # ya existe
+
+    portafolio = {
+        "owner":             username,       # ← CAMPO NUEVO
+        "nombre":            nombre,
+        "perfil":            perfil,
+        "propietario":       propietario,
+        "password_hash":     "",             # ya no se usa para auth
+        "email":             "",
+        "telegram_chat_id":  "",
+        "fecha_inicio":      datetime.now().strftime("%Y-%m-%d"),
+        "inversion_inicial": inversion_inicial,
+        "aporte_dca":        aporte_dca,
+        "frecuencia_meses":  frecuencia_meses,
+        "activo":            False,
+        "monitoreo_activo":  False,
+        "composicion":       {},
+        "aportes":           [],
+        "historial":         []
+    }
+    _escribir(archivo, portafolio)
+    return archivo
+
+# ============================================================
+# LOGS DE ACTIVIDAD (NUEVO)
+# ============================================================
+
+ARCHIVO_LOGS_ACTIVIDAD = "datos/logs_actividad.json"
+
+def _leer_logs():
+    if not os.path.exists(ARCHIVO_LOGS_ACTIVIDAD):
+        return []
+    try:
+        return _leer(ARCHIVO_LOGS_ACTIVIDAD)
+    except:
+        return []
+
+def registrar_actividad(tipo, username, email="", detalle="", ip="", dispositivo=""):
+    """
+    tipo: 'login_ok', 'login_fail', 'registro_nuevo', 'logout'
+    """
+    logs = _leer_logs()
+    logs.append({
+        "tipo":        tipo,
+        "username":    username,
+        "email":       email,
+        "detalle":     detalle,
+        "ip":          ip,
+        "dispositivo": dispositivo,
+        "fecha":       datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    })
+    # Mantener solo los últimos 500 registros
+    if len(logs) > 500:
+        logs = logs[-500:]
+    _escribir(ARCHIVO_LOGS_ACTIVIDAD, logs)
+
+def eliminar_usuario(username):
+    """Elimina el usuario y todos sus portafolios."""
+    usuarios = _leer_usuarios()
+    if username not in usuarios:
+        return False
+    # Eliminar portafolios del usuario
+    if os.path.exists(CARPETA_PORTAFOLIOS):
+        for archivo in os.listdir(CARPETA_PORTAFOLIOS):
+            if archivo.endswith('.json') and not archivo.startswith('monitor_'):
+                try:
+                    data = _leer(f"{CARPETA_PORTAFOLIOS}/{archivo}")
+                    if data.get('owner') == username:
+                        os.remove(f"{CARPETA_PORTAFOLIOS}/{archivo}")
+                        # Eliminar monitor si existe
+                        monitor = f"{CARPETA_PORTAFOLIOS}/monitor_{archivo}"
+                        if os.path.exists(monitor):
+                            os.remove(monitor)
+                except:
+                    continue
+    # Eliminar usuario
+    del usuarios[username]
+    _escribir_usuarios(usuarios)
+    return True
+import pandas as pd
+import numpy as np
+from scipy.optimize import minimize
+from datetime import datetime
+import warnings
+warnings.filterwarnings('ignore')
+
+# ============================================================
+# CONFIGURACIÓN
+# ============================================================
+
+CARPETA_PRECIOS  = "datos/precios"
+CARPETA_MACRO    = "datos/macro"
+CARPETA_REPORTES = "datos/reportes"
+
+import os
+os.makedirs(CARPETA_REPORTES, exist_ok=True)
+
+# ============================================================
+# PASO 1 — CARGAR DATOS
+# ============================================================
+
+def cargar_datos():
+    print("📂 Cargando datos del Recolector...")
+    precios   = pd.read_parquet(f"{CARPETA_PRECIOS}/precios.parquet")
+    trm       = pd.read_parquet(f"{CARPETA_MACRO}/trm.parquet")
+    inf_usa   = pd.read_parquet(f"{CARPETA_MACRO}/inflacion_usa.parquet")
+    inf_col   = pd.read_parquet(f"{CARPETA_MACRO}/inflacion_col.parquet")
+    risk_free = pd.read_parquet(f"{CARPETA_MACRO}/risk_free.parquet")
+    tasa_banrep = pd.read_parquet(f"{CARPETA_MACRO}/tasa_banrep.parquet")
+    tasa_banrep_actual = float(tasa_banrep['Tasa_Banrep'].iloc[-1])
+    # CDT típico = Banrep - 0.75% (spread promedio bancos grandes)
+    tasa_cdt = tasa_banrep_actual - 0.75
+
+    print(f"✅ Tasa Banrep: {tasa_banrep_actual:.2f}% | CDT estimado: {tasa_cdt:.2f}%")
+    print(f"✅ Precios: {precios.shape[0]} días, {precios.shape[1]} activos")
+    print(f"✅ TRM: {trm.index.max().date()}")
+    print(f"✅ Inflación USA: {inf_usa['Inflacion_USA'].iloc[-1]:.2f}%")
+    print(f"✅ Inflación COL: {inf_col['Inflacion_COL'].iloc[-1]:.2f}%")
+    print(f"✅ Tasa Libre de Riesgo: {risk_free['Risk_Free'].iloc[-1]:.2f}%")
+
+    return precios, trm, inf_usa, inf_col, risk_free, tasa_cdt
+
+# ============================================================
+# PASO 2 — PANEL MAESTRO
+# ============================================================
+
+def construir_panel(precios, trm, inf_usa, inf_col, risk_free):
+    print("\n🔧 Construyendo panel maestro mensual...")
+
+    precios_m = precios.resample('ME').last()
+    trm_m     = trm.resample('ME').last()
+
+    panel = precios_m.join(trm_m, how='inner')
+    panel = panel.join(inf_col.reindex(panel.index, method='ffill'), how='left')
+    panel = panel.join(inf_usa.reindex(panel.index, method='ffill'), how='left')
+    panel = panel.join(risk_free.reindex(panel.index, method='ffill'), how='left')
+
+    panel['Inflacion_COL'] = panel['Inflacion_COL'].ffill().fillna(5.0)
+    panel['Inflacion_USA'] = panel['Inflacion_USA'].ffill().fillna(3.5)
+    panel['Risk_Free']     = panel['Risk_Free'].ffill().fillna(3.7)
+
+    panel['Spread_Inflacion'] = panel['Inflacion_COL'] - panel['Inflacion_USA']
+
+    def clasificar_tasa(rf):
+        if rf < 2.0:   return -1
+        elif rf < 4.0: return  0
+        else:          return  1
+
+    panel['Regimen_Tasas'] = panel['Risk_Free'].apply(clasificar_tasa)
+    panel['TRM_Momentum']  = panel['TRM'].pct_change(3)
+
+    ultimo = panel.iloc[-1]
+    print(f"\n🌍 CONTEXTO MACRO ACTUAL:")
+    print(f"   TRM hoy              : ${ultimo['TRM']:,.0f} COP/USD")
+    print(f"   Inflación Colombia   : {ultimo['Inflacion_COL']:.2f}%")
+    print(f"   Inflación USA        : {ultimo['Inflacion_USA']:.2f}%")
+    print(f"   Spread (COL-USA)     : {ultimo['Spread_Inflacion']:.2f}% "
+          f"{'⚠️ Alto — peso presionado' if ultimo['Spread_Inflacion'] > 3 else '✅ Normal'}")
+    print(f"   Tasa libre de riesgo : {ultimo['Risk_Free']:.2f}% "
+          f"({'📈 Alta — bonos atractivos' if ultimo['Regimen_Tasas'] == 1 else '⚖️ Normal' if ultimo['Regimen_Tasas'] == 0 else '📉 Baja — acciones atractivas'})")
+    print(f"   TRM últimos 3 meses  : {ultimo['TRM_Momentum']*100:.1f}% "
+          f"({'💵 Dólar subiendo' if ultimo['TRM_Momentum'] > 0 else '💵 Dólar bajando'})")
+    print(f"\n✅ Panel: {panel.shape[0]} meses | "
+          f"{panel.index.min().date()} → {panel.index.max().date()}")
+
+    return panel
+
+# ============================================================
+# PASO 3 — RETORNOS REALES
+# ============================================================
+
+def calcular_retornos_reales(panel, activos):
+    print("\n📊 Calculando retornos reales con peso en momentum reciente...")
+
+    precios_cop = panel[activos].multiply(panel['TRM'], axis=0)
+    ret_nom     = precios_cop.pct_change()
+    inf_mensual = (1 + panel['Inflacion_COL'] / 100) ** (1/12) - 1
+    ret_real    = ((1 + ret_nom).divide((1 + inf_mensual), axis=0)) - 1
+    ret_real    = ret_real.dropna(how='all').fillna(0)
+
+    ultimos_12    = ret_real.iloc[-12:]
+    ret_ponderado = pd.concat([ret_real, ultimos_12], axis=0)
+
+    print(f"   Historia total  : {len(ret_real)} meses")
+    print(f"   Con momentum    : {len(ret_ponderado)} meses "
+          f"(últimos 12 meses cuentan doble)")
+
+    return ret_ponderado
+
+# ============================================================
+# PASO 4 — OPTIMIZACIÓN
+# ============================================================
+
+def optimizar_portafolio(ret_real, panel, perfil, risk_free, inversion_inicial):
+    print(f"\n🧠 Optimizando portafolio {perfil.upper()}...")
+
+    rf = risk_free['Risk_Free'].iloc[-1] / 100
+
+    tech_volatil    = ['XLK', 'QQQ', 'NVDA', 'BTC-USD', 'ETH-USD', 'SOL-USD']
+    cripto          = ['BTC-USD', 'ETH-USD', 'SOL-USD']
+    defensivos      = ['GLD', 'TLT', 'KO', 'WMT', 'JNJ']
+    agresivos_macro = ['NVDA', 'MSFT', 'GOOGL', 'AMZN', 'AAPL']
+
+    spread_inflacion = panel['Spread_Inflacion'].iloc[-1]
+    trm_momentum     = panel['TRM_Momentum'].iloc[-1]
+    regimen          = panel['Regimen_Tasas'].iloc[-1]
+
+    def ajustar_media(media, regimen, spread, trm_mom):
+        media_ajustada = media.copy()
+        for activo in media.index:
+            if regimen == 1:
+                if activo in defensivos:
+                    media_ajustada[activo] *= 1.10
+                elif activo in agresivos_macro:
+                    media_ajustada[activo] *= 0.92
+            if spread > 3:
+                media_ajustada[activo] *= 1.05
+            if trm_mom > 0.02:
+                media_ajustada[activo] *= 1.03
+        return media_ajustada
+
+    # Excluir criptos en conservador
+    if perfil == 'conservador':
+        ret_real = ret_real[[a for a in ret_real.columns if a not in cripto]]
+        print(f"   🚫 Criptos excluidas del perfil conservador")
+
+    # Filtro de correlación
+    print(f"   Eliminando activos redundantes por alta correlación...")
+    corr_matrix    = ret_real.corr()
+    activos_unicos = list(ret_real.columns)
+    sharpe_simple  = (ret_real.mean() * 12) / (ret_real.std() * np.sqrt(12))
+    eliminados     = []
+
+    for i in range(len(activos_unicos)):
+        for j in range(i+1, len(activos_unicos)):
+            a1 = activos_unicos[i]
+            a2 = activos_unicos[j]
+            if a1 in eliminados or a2 in eliminados:
+                continue
+            if corr_matrix.loc[a1, a2] > 0.85:
+                if sharpe_simple[a1] >= sharpe_simple[a2]:
+                    eliminados.append(a2)
+                    print(f"   ⚠️  {a2} eliminado — correlación {corr_matrix.loc[a1,a2]:.2f} con {a1}")
+                else:
+                    eliminados.append(a1)
+                    print(f"   ⚠️  {a1} eliminado — correlación {corr_matrix.loc[a1,a2]:.2f} con {a2}")
+
+    activos_limpios = [a for a in activos_unicos if a not in eliminados]
+    ret_real        = ret_real[activos_limpios]
+    print(f"   Activos tras filtro de correlación: {len(activos_limpios)}")
+
+    # Filtro de consistencia
+    n_filas    = len(ret_real)
+    tercio     = n_filas // 3
+    retorno_p1 = ret_real.iloc[:tercio].mean() * 12
+    retorno_p2 = ret_real.iloc[tercio:tercio*2].mean() * 12
+    retorno_p3 = ret_real.iloc[tercio*2:].mean() * 12
+
+    consistencia = (
+        (retorno_p1 > 0).astype(int) +
+        (retorno_p2 > 0).astype(int) +
+        (retorno_p3 > 0).astype(int)
+    )
+    activos_consistentes = consistencia[consistencia >= 2].index.tolist()
+    print(f"   Activos que pasaron filtro de consistencia: {len(activos_consistentes)}")
+
+    if len(activos_consistentes) < 3:
+        activos_consistentes = ret_real.columns.tolist()
+
+    ret_filtrado = ret_real[activos_consistentes]
+
+    # Top 8 por Sharpe
+    media_f  = ret_filtrado.mean() * 12
+    vol_f    = ret_filtrado.std() * np.sqrt(12)
+    sharpe_f = (media_f - rf) / vol_f
+    top_8    = sharpe_f.nlargest(8).index.tolist()
+    ret_top  = ret_real[top_8]
+    print(f"   Top 8 seleccionados: {top_8}")
+
+    # Optimización
+    media = ret_top.mean() * 12
+    cov   = ret_top.cov() * 12
+    n     = len(media)
+    media = ajustar_media(media, regimen, spread_inflacion, trm_momentum)
+
+    if perfil == 'conservador':
+        peso_max = 0.25
+        peso_min = 0.05
+        def objetivo(w):
+            return np.sqrt(np.dot(w.T, np.dot(cov, w)))
+        idx_tech = [i for i, a in enumerate(top_8) if a in tech_volatil]
+        if idx_tech:
+            idx_fijo = list(idx_tech)
+            restricciones = [
+                {'type': 'eq',   'fun': lambda w: np.sum(w) - 1},
+                {'type': 'ineq', 'fun': lambda w, idx=idx_fijo: 0.20 - np.sum(w[idx])}
+            ]
+        else:
+            restricciones = [{'type': 'eq', 'fun': lambda w: np.sum(w) - 1}]
+    else:
+        peso_max = 0.30
+        peso_min = 0.05
+        def objetivo(w):
+            ret_p = np.sum(media * w)
+            vol_p = np.sqrt(np.dot(w.T, np.dot(cov, w)))
+            return -(ret_p - rf) / vol_p + 0.3 * np.sum(w ** 2)
+        restricciones = [{'type': 'eq', 'fun': lambda w: np.sum(w) - 1}]
+
+    limites = [(peso_min, peso_max)] * n
+    np.random.seed(42)
+    w0 = np.array([1/n] * n)
+
+    resultado = minimize(objetivo, w0, method='SLSQP',
+                        bounds=limites, constraints=restricciones,
+                        options={'maxiter': 1000, 'ftol': 1e-9})
+
+    pesos = pd.Series(resultado.x, index=top_8)
+    top_5 = pesos.nlargest(5)
+    top_5 = top_5 / top_5.sum()
+
+    # Límite tech post-normalización en conservador
+    if perfil == 'conservador':
+        tech_en_top5     = [a for a in top_5.index if a in tech_volatil]
+        peso_tech_actual = top_5[tech_en_top5].sum()
+        if peso_tech_actual > 0.20:
+            exceso = peso_tech_actual - 0.20
+            for activo in tech_en_top5:
+                top_5[activo] -= exceso * (top_5[activo] / peso_tech_actual)
+            no_tech = [a for a in top_5.index if a not in tech_volatil]
+            for activo in no_tech:
+                top_5[activo] += exceso / len(no_tech)
+            print(f"   ✅ Límite tech: {peso_tech_actual*100:.1f}% → 20%")
+        top_5 = top_5 / top_5.sum()
+
+    return top_5, inversion_inicial
+
+# ============================================================
+# PASO 5 — PROYECCIÓN CON DCA
+# ============================================================
+
+def proyectar_con_dca(ret_port, inversion_inicial, aporte_periodico,
+                      frecuencia_meses, horizonte_años, inflacion_col,
+                      tasa_cdt, n_sim=500):
+    """
+    Proyecta riqueza con y sin DCA.
+    Todos los valores se expresan en PESOS DE HOY (deflactados).
+    Compara contra CDT.
+    """
+    mu_m    = ret_port.mean()
+    sigma_m = ret_port.std()
+    meses   = horizonte_años * 12
+
+    # Inflación mensual para deflactar
+    inf_anual    = inflacion_col / 100
+    inf_mensual  = (1 + inf_anual) ** (1/12) - 1
+
+    # Tasa CDT mensual
+    tasa_cdt_mensual = (1 + tasa_cdt/100) ** (1/12) - 1
+
+    np.random.seed(42)
+    resultados_global = []
+    resultados_dca    = []
+    resultados_cdt    = []
+
+    for _ in range(n_sim):
+        # ── SUMA GLOBAL (portafolio) ──
+        retornos = np.random.normal(mu_m, sigma_m, meses)
+        valor    = inversion_inicial
+        for r in retornos:
+            valor *= (1 + r)
+        # Deflactar a pesos de hoy
+        valor_real = valor / (1 + inf_anual) ** horizonte_años
+        resultados_global.append(valor_real)
+
+        # ── DCA (portafolio con aportes) ──
+        retornos = np.random.normal(mu_m, sigma_m, meses)
+        valor    = inversion_inicial
+        for i, r in enumerate(retornos):
+            valor *= (1 + r)
+            if aporte_periodico > 0 and i % frecuencia_meses == 0 and i > 0:
+                valor += aporte_periodico
+        valor_real = valor / (1 + inf_anual) ** horizonte_años
+        resultados_dca.append(valor_real)
+
+        # ── CDT (sin aportes adicionales) ──
+        valor_cdt = inversion_inicial
+        for _ in range(meses):
+            valor_cdt *= (1 + tasa_cdt_mensual)
+        # CDT también se deflacta
+        valor_cdt_real = valor_cdt / (1 + inf_anual) ** horizonte_años
+        resultados_cdt.append(valor_cdt_real)
+
+    def percentiles(res):
+        r = sorted(res)
+        return (r[int(n_sim * 0.10)],
+                r[int(n_sim * 0.50)],
+                r[int(n_sim * 0.90)])
+
+    return (percentiles(resultados_global),
+            percentiles(resultados_dca),
+            percentiles(resultados_cdt))
+
+# ============================================================
+# PASO 6 — REPORTE FINAL
+# ============================================================
+
+def generar_reporte(pesos, inversion_inicial, ret_real, perfil, horizonte,
+                    risk_free, inflacion_col, tasa_cdt,
+                    aporte_periodico=0, frecuencia_meses=1):
+
+    rf           = risk_free['Risk_Free'].iloc[-1] / 100
+    activos_port = pesos.index.tolist()
+    ret_port     = ret_real[activos_port].dot(pesos)
+    ret_anual    = ret_port.mean() * 12
+    vol_anual    = ret_port.std() * np.sqrt(12)
+    sharpe       = (ret_anual - rf) / vol_anual
+    cumprod      = (ret_port + 1).cumprod()
+    max_dd       = (cumprod / cumprod.cummax() - 1).min()
+
+    freq_texto = {1: "mensual", 3: "trimestral", 12: "anual"}
+
+    print(f"\n{'='*65}")
+    print(f"  PORTAFOLIO {perfil.upper()} — HORIZONTE {horizonte} AÑOS")
+    print(f"{'='*65}")
+
+    print(f"\n📊 COMPOSICIÓN:")
+    for activo, peso in pesos.sort_values(ascending=False).items():
+        barra = "█" * int(peso * 30)
+        print(f"   {activo:<12} {peso*100:5.1f}%  {barra}")
+
+    print(f"\n📈 MÉTRICAS:")
+    print(f"   Retorno anual esperado : {ret_anual*100:.2f}%")
+    print(f"   Volatilidad anual      : {vol_anual*100:.2f}%")
+    print(f"   Sharpe ratio           : {sharpe:.2f}")
+    print(f"   Max Drawdown           : {max_dd*100:.2f}%")
+
+    print(f"\n💡 NOTA: Todos los valores están en PESOS DE HOY")
+    print(f"   (deflactados con inflación Colombia {inflacion_col:.1f}% anual)")
+    print(f"   CDT de referencia: {tasa_cdt:.2f}% anual")
+
+    años_proyeccion = sorted(set([3, 5, horizonte]))
+
+    print(f"\n💰 PROYECCIÓN (inversión inicial ${inversion_inicial:,.0f} COP):")
+
+    for años in años_proyeccion:
+        sin_dca, con_dca, cdt_p = proyectar_con_dca(
+            ret_port, inversion_inicial, aporte_periodico,
+            frecuencia_meses, años, inflacion_col, tasa_cdt
+        )
+
+        total_aportado = inversion_inicial + (
+            aporte_periodico * (años * 12 // frecuencia_meses)
+            if aporte_periodico > 0 else 0
+        )
+
+        # CDT con aportes (simple — suma directa deflactada)
+        cdt_nominal = inversion_inicial * (1 + tasa_cdt/100) ** años
+        cdt_real    = cdt_nominal / (1 + inflacion_col/100) ** años
+        cdt_real_dca = cdt_real + (
+            aporte_periodico * (años * 12 // frecuencia_meses)
+            if aporte_periodico > 0 else 0
+        ) / (1 + inflacion_col/100) ** años
+
+        print(f"\n   📅 En {años} años"
+              f"{f' (total aportado: ${total_aportado:,.0f})' if aporte_periodico > 0 else ''}:")
+        print(f"   {'─'*60}")
+        print(f"   {'Escenario':<28} {'Pesimista':>12} {'Base':>12} {'Optimista':>12}")
+        print(f"   {'─'*60}")
+        print(f"   {'Portafolio (sin aportes)':<28} "
+              f"${sin_dca[0]:>10,.0f} "
+              f"${sin_dca[1]:>10,.0f} "
+              f"${sin_dca[2]:>10,.0f}")
+
+        if aporte_periodico > 0:
+            freq = freq_texto.get(frecuencia_meses, f"c/{frecuencia_meses}m")
+            print(f"   {'Portafolio + DCA '+freq:<28} "
+                  f"${con_dca[0]:>10,.0f} "
+                  f"${con_dca[1]:>10,.0f} "
+                  f"${con_dca[2]:>10,.0f}")
+
+        print(f"   {'CDT (referencia)':<28} "
+              f"{'':>12} "
+              f"${cdt_real:>10,.0f} "
+              f"{'':>12}")
+
+        if aporte_periodico > 0:
+            print(f"   {'CDT + aportes':<28} "
+                  f"{'':>12} "
+                  f"${cdt_real_dca:>10,.0f} "
+                  f"{'':>12}")
+
+        # Ventaja vs CDT
+        ventaja = sin_dca[1] - cdt_real
+        ventaja_dca = con_dca[1] - cdt_real_dca if aporte_periodico > 0 else 0
+        print(f"   {'─'*60}")
+        print(f"   💡 Ventaja portafolio vs CDT (base): ${ventaja:>10,.0f}")
+        if aporte_periodico > 0:
+            print(f"   💡 Ventaja DCA vs CDT+aportes (base): ${ventaja_dca:>10,.0f}")
+
+    # Guardar reporte
+    fecha   = datetime.now().strftime("%Y%m%d")
+    archivo = f"{CARPETA_REPORTES}/reporte_{perfil}_{fecha}.csv"
+    pd.DataFrame({
+        'Activo': pesos.index,
+        'Peso_%': (pesos * 100).round(2),
+    }).to_csv(archivo, index=False)
+    print(f"\n💾 Reporte guardado: {archivo}")
+
+# ============================================================
+# EJECUCIÓN PRINCIPAL
+# ============================================================
+
+if __name__ == "__main__":
+    print("=" * 55)
+    print("🤖 ANALISTA — INICIANDO")
+    print(f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("=" * 55)
+
+# ── ACTUALIZAR DATOS ANTES DE ANALIZAR ──
+    print("\n🔄 Actualizando datos del mercado...")
+    import subprocess
+    subprocess.run(["python", "recolector.py"], check=False)
+    print("✅ Datos actualizados.\n")
+
+    # ── LEER PORTAFOLIO ACTIVO ──
+    from gestor_portafolio import leer_portafolio_activo, guardar_composicion
+
+    portafolio_activo = leer_portafolio_activo()
+    if not portafolio_activo:
+        print("❌ No hay portafolio activo.")
+        print("   Corre primero: python gestor_portafolio.py")
+        exit()
+
+    perfil_activo = portafolio_activo['perfil']
+    nombre        = portafolio_activo['nombre']
+    propietario   = portafolio_activo['propietario']
+    archivo       = portafolio_activo.get('archivo') or \
+                    nombre.lower().replace(' ', '_') \
+                          .replace('á','a').replace('é','e') \
+                          .replace('í','i').replace('ó','o') \
+                          .replace('ú','u') + '.json'
+
+    print(f"\n📋 Portafolio activo: {nombre} ({perfil_activo}) — {propietario}")
+
+    # ── INVERSIÓN INTERACTIVA ──
+    inv_inicial = portafolio_activo.get('inversion_inicial', 0)
+    aporte_dca  = portafolio_activo.get('aporte_dca', 0)
+    freq_dca    = portafolio_activo.get('frecuencia_meses', 1)
+
+    print(f"\n💰 CONFIGURACIÓN DE INVERSIÓN")
+    print(f"─" * 40)
+    print(f"   (del portafolio activo)")
+    print(f"   Inversión inicial : ${inv_inicial:,.0f} COP")
+    if aporte_dca > 0:
+        freq_texto = {1: "mensual", 3: "trimestral", 12: "anual"}
+        print(f"   Aporte DCA        : ${aporte_dca:,.0f} COP "
+              f"({freq_texto.get(freq_dca, 'periódico')})")
+
+    # Permitir cambiar montos si se quiere simular diferente
+    cambiar = input("\n   ¿Quieres simular con montos diferentes? (SI/NO): ").upper()
+    if cambiar == 'SI':
+        inv_str     = input("   Inversión inicial en COP: ")
+        inv_inicial = float(inv_str.replace(',', '').replace('.', ''))
+        tiene_dca   = input("   ¿Con DCA? (SI/NO): ").upper()
+        if tiene_dca == 'SI':
+            ap_str  = input("   ¿Cuánto por aporte? ")
+            aporte_dca = float(ap_str.replace(',', '').replace('.', ''))
+            print("   1=Mensual | 3=Trimestral | 12=Anual")
+            freq_dca = int(input("   Frecuencia: "))
+        else:
+            aporte_dca = 0
+            freq_dca   = 1
+
+    inversion_inicial = inv_inicial
+    aporte_periodico  = aporte_dca
+    frecuencia_meses  = freq_dca if freq_dca > 0 else 1
+
+    # ── CARGAR DATOS ──
+    precios, trm, inf_usa, inf_col, risk_free, tasa_cdt = cargar_datos()
+    activos = [c for c in precios.columns if c not in ['JPMV', 'META']]
+    panel   = construir_panel(precios, trm, inf_usa, inf_col, risk_free)
+    ret_real = calcular_retornos_reales(panel, activos)
+
+    inflacion_col_actual = float(
+        pd.read_parquet(f"{CARPETA_MACRO}/inflacion_col.parquet")['Inflacion_COL'].iloc[-1]
+    )
+
+    # ── OPTIMIZAR SOLO EL PERFIL ACTIVO ──
+    horizonte = 5 if perfil_activo == 'conservador' else 10
+
+    pesos, inv = optimizar_portafolio(
+        ret_real, panel, perfil_activo, risk_free, inversion_inicial)
+
+    generar_reporte(pesos, inversion_inicial, ret_real, perfil_activo,
+                    horizonte=horizonte, risk_free=risk_free,
+                    inflacion_col=inflacion_col_actual,
+                    tasa_cdt=tasa_cdt,
+                    aporte_periodico=aporte_periodico,
+                    frecuencia_meses=frecuencia_meses)
+
+    # ── GUARDAR COMPOSICIÓN AUTOMÁTICAMENTE ──
+    guardar_composicion(archivo, pesos.to_dict())
+    print(f"\n✅ Composición guardada automáticamente en '{nombre}'.")
+    print("\n✅ ANÁLISIS COMPLETO")
+"""
+Scheduler de tareas programadas — corre en background junto a la app.
+"""
+import threading
+import time
+import os
+import json
+from datetime import datetime
+import requests
+
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8332465511:AAH-PlentkDhWWNenLGOdvJCLC6OXNEnrA8")
+CARPETA_PORTAFOLIOS = "datos/portafolios"
+
+
+def enviar_telegram(chat_id, mensaje):
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={"chat_id": chat_id, "text": mensaje, "parse_mode": "HTML"},
+            timeout=10
+        )
+    except Exception as e:
+        print(f"❌ Error Telegram scheduler: {e}")
+
+
+def construir_mensaje_portafolio(portafolio, datos_tr, nombre_usuario, total_portafolios):
+    """Construye el mensaje de resumen para un portafolio."""
+    nombre = portafolio.get("nombre", "Mi Portafolio")
+    perfil = portafolio.get("perfil", "").upper()
+
+    # Encabezado — si tiene varios portafolios lo indica
+    if total_portafolios > 1:
+        encabezado = (
+            f"📊 <b>Resumen diario — {nombre_usuario}</b>\n"
+            f"📁 Portafolio: <b>{nombre}</b> · {perfil}\n"
+        )
+    else:
+        encabezado = (
+            f"📊 <b>Resumen diario — {nombre_usuario}</b>\n"
+            f"📁 {nombre} · {perfil}\n"
+        )
+
+    if not datos_tr:
+        return (
+            encabezado +
+            f"\n⏳ Sin inversiones registradas aún.\n"
+            f"Entra al sistema para registrar tu primera compra.\n\n"
+            f"<i>Sistema de Portafolio · {datetime.now().strftime('%d %b %Y')}</i>"
+        )
+
+    gl = datos_tr["ganancia_total"]
+    gl_pct = datos_tr["rentabilidad_total"]
+    emoji_gl = "📈" if gl >= 0 else "📉"
+    signo = "+" if gl >= 0 else ""
+
+    lineas_activos = ""
+    for pos in datos_tr["posiciones"]:
+        emoji_pos = "🟢" if pos["ganancia"] >= 0 else "🔴"
+        signo_pos = "+" if pos["rentabilidad"] >= 0 else ""
+        lineas_activos += (
+            f"  {emoji_pos} <b>{pos['activo']}</b> — "
+            f"${pos['valor_hoy']:,.0f} COP "
+            f"({signo_pos}{pos['rentabilidad']}%)\n"
+        )
+
+    # Señal del monitor si existe
+    senal_html = ""
+    archivo = portafolio.get("_archivo", "")
+    ruta_monitor = f"{CARPETA_PORTAFOLIOS}/monitor_{archivo}"
+    if os.path.exists(ruta_monitor):
+        try:
+            with open(ruta_monitor, 'r', encoding='utf-8') as f:
+                m = json.load(f)
+            resultados = m.get("resultados", [])
+            entrar  = [r["ticker"] for r in resultados if r.get("senal") == "ENTRAR"]
+            vigilar = [r["ticker"] for r in resultados if r.get("senal") == "VIGILAR"]
+            if entrar:
+                senal_html += f"\n🟢 <b>Señal ENTRAR:</b> {', '.join(entrar)}"
+            if vigilar:
+                senal_html += f"\n🟡 <b>Vigilar:</b> {', '.join(vigilar)}"
+        except:
+            pass
+
+    return (
+        encabezado +
+        f"\n💰 <b>Valor total:</b> ${datos_tr['total_valor']:,.0f} COP\n"
+        f"📥 <b>Invertido:</b> ${datos_tr['total_invertido']:,.0f} COP\n"
+        f"{emoji_gl} <b>Ganancia real:</b> {signo}${gl:,.0f} COP ({signo}{gl_pct}%)\n"
+        f"\n<b>Posiciones:</b>\n{lineas_activos}"
+        + senal_html +
+        f"\n\n<i>Sistema de Portafolio · {datetime.now().strftime('%d %b %Y')}</i>"
+    )
+
+
+def calcular_tiempo_real_simple(portafolio):
+    """Versión simplificada de calcular_tiempo_real para el scheduler."""
+    try:
+        import pandas as pd
+        import yfinance as yf
+        from datetime import timedelta
+
+        if not portafolio.get('aportes'):
+            return None
+
+        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+        trm_path = os.path.join(BASE_DIR, "datos", "macro", "trm.parquet")
+        try:
+            trm_actual = float(pd.read_parquet(trm_path)['TRM'].iloc[-1])
+        except:
+            trm_actual = 4000
+
+        inf_anual = portafolio.get('inflacion_col', 4.90)
+        pos_raw = {}
+        for a in portafolio['aportes']:
+            tk = a['activo']
+            if tk not in pos_raw:
+                pos_raw[tk] = {'fracciones': 0, 'invertido': 0, 'fecha_inicio': a['fecha']}
+            pos_raw[tk]['fracciones'] += a['fracciones']
+            pos_raw[tk]['invertido']  += a['monto_cop']
+
+        resultados = []
+        total_inv = total_val = 0
+
+        for tk, d in pos_raw.items():
+            try:
+                hoy = datetime.now()
+                df  = yf.download(tk, start=(hoy - timedelta(days=5)).strftime("%Y-%m-%d"),
+                                  end=hoy.strftime("%Y-%m-%d"), interval="1d",
+                                  auto_adjust=True, progress=False)
+                if df.empty:
+                    continue
+                if hasattr(df.columns, 'get_level_values'):
+                    df.columns = df.columns.get_level_values(0)
+                precio = float(df['Close'].iloc[-1])
+            except:
+                continue
+
+            val   = d['fracciones'] * precio * trm_actual
+            años  = (datetime.now() - datetime.strptime(d['fecha_inicio'], "%Y-%m-%d")).days / 365.25
+            inv_r = d['invertido'] / (1 + inf_anual / 100) ** años
+            gan   = val - inv_r
+
+            resultados.append({
+                'activo':       tk,
+                'valor_hoy':    round(val, 0),
+                'ganancia':     round(gan, 0),
+                'rentabilidad': round((gan / inv_r * 100) if inv_r > 0 else 0, 2)
+            })
+            total_inv += inv_r
+            total_val += val
+
+        if not resultados:
+            return None
+
+        return {
+            'posiciones':         resultados,
+            'total_invertido':    round(total_inv, 0),
+            'total_valor':        round(total_val, 0),
+            'ganancia_total':     round(total_val - total_inv, 0),
+            'rentabilidad_total': round((total_val - total_inv) / total_inv * 100 if total_inv > 0 else 0, 2)
+        }
+    except Exception as e:
+        print(f"❌ Error calcular tiempo real scheduler: {e}")
+        return None
+
+
+def enviar_resumenes_diarios():
+    """Envía resumen diario a todos los usuarios con Telegram configurado."""
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 📨 Enviando resúmenes diarios...")
+
+    try:
+        BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+        usuarios_path = os.path.join(BASE_DIR, "datos", "usuarios.json")
+
+        if not os.path.exists(usuarios_path):
+            print("❌ No existe usuarios.json")
+            return
+
+        with open(usuarios_path, 'r', encoding='utf-8') as f:
+            usuarios = json.load(f)
+
+        for username, usuario in usuarios.items():
+            chat_id = usuario.get("telegram_chat_id", "").strip()
+            if not chat_id:
+                continue
+
+            # Buscar todos los portafolios de este usuario
+            portafolios_usuario = []
+            if os.path.exists(CARPETA_PORTAFOLIOS):
+                for archivo in os.listdir(CARPETA_PORTAFOLIOS):
+                    if archivo.endswith('.json') and not archivo.startswith('monitor_'):
+                        try:
+                            ruta = f"{CARPETA_PORTAFOLIOS}/{archivo}"
+                            with open(ruta, 'r', encoding='utf-8') as f:
+                                data = json.load(f)
+                            if data.get('owner') == username:
+                                data['_archivo'] = archivo
+                                portafolios_usuario.append(data)
+                        except:
+                            continue
+
+            if not portafolios_usuario:
+                continue
+
+            total = len(portafolios_usuario)
+
+            # Si tiene varios portafolios, mandar intro primero
+            if total > 1:
+                enviar_telegram(chat_id,
+                    f"☀️ <b>Buenos días, {username}!</b>\n"
+                    f"Tienes <b>{total} portafolios</b> activos. "
+                    f"Aquí va el resumen de cada uno 👇"
+                )
+                time.sleep(1)
+
+            for portafolio in portafolios_usuario:
+                datos_tr = calcular_tiempo_real_simple(portafolio)
+                mensaje  = construir_mensaje_portafolio(portafolio, datos_tr, username, total)
+                enviar_telegram(chat_id, mensaje)
+                time.sleep(1)
+
+            print(f"✅ Resumen enviado a {username} ({total} portafolios)")
+
+    except Exception as e:
+        print(f"❌ Error en enviar_resumenes_diarios: {e}")
+
+
+def loop_scheduler():
+    """Bucle principal — verifica cada minuto si es hora de enviar."""
+    print("⏰ Scheduler iniciado")
+    enviado_hoy = None
+
+    while True:
+        try:
+            from datetime import timezone, timedelta
+            utc_minus5 = timezone(timedelta(hours=-5))
+            ahora = datetime.now(utc_minus5)
+            # 8:00 AM hora Colombia (UTC-5)
+            if ahora.hour == 8 and ahora.minute == 0:
+                hoy = ahora.date()
+                if enviado_hoy != hoy:
+                    enviar_resumenes_diarios()
+                    enviado_hoy = hoy
+        except Exception as e:
+            print(f"❌ Error en scheduler loop: {e}")
+        time.sleep(60)  # Revisar cada minuto
+
+
+def iniciar_scheduler():
+    t = threading.Thread(target=loop_scheduler, daemon=True, name="scheduler")
+    t.start()
+    return t
+import yfinance as yf
+import pandas as pd
+import requests
+import json
+import io
+import os
+from datetime import datetime, timedelta
+
+# ============================================================
+# RUTAS ABSOLUTAS — funciona igual en local y en Railway
+# ============================================================
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATOS_DIR = os.path.join(BASE_DIR, "datos")
+
+CARPETA_PRECIOS = os.path.join(DATOS_DIR, "precios")
+CARPETA_MACRO   = os.path.join(DATOS_DIR, "macro")
+CARPETA_LOGS    = os.path.join(DATOS_DIR, "Logs")
+
+# ============================================================
+# CONFIGURACIÓN — activos
+# ============================================================
+
+ACTIVOS = [
+    'AAPL', 'MSFT', 'GOOGL', 'NVDA', 'META',
+    'JPM', 'V', 'MA',
+    'JNJ', 'LLY',
+    'AMZN', 'WMT', 'KO',
+    'XOM', 'CVX',
+    'GLD', 'TLT',
+    'VOO', 'VTI', 'VWO',
+    'QQQ', 'XLK',
+    'BTC-USD', 'ETH-USD', 'SOL-USD'
+]
+
+# ============================================================
+# UTILIDADES
+# ============================================================
+
+def crear_carpetas():
+    for carpeta in [
+        CARPETA_PRECIOS, CARPETA_MACRO, CARPETA_LOGS,
+        os.path.join(DATOS_DIR, "portafolios"),
+        os.path.join(DATOS_DIR, "Reportes"),
+        os.path.join(DATOS_DIR, "seguimiento"),
+        os.path.join(DATOS_DIR, "historico"),
+    ]:
+        os.makedirs(carpeta, exist_ok=True)
+
+def registrar(mensaje, tipo="INFO"):
+    hoy  = datetime.now().strftime("%Y-%m-%d")
+    hora = datetime.now().strftime("%H:%M:%S")
+    linea = f"[{hora}][{tipo}]{mensaje}\n"
+    print(linea.strip())
+    try:
+        with open(os.path.join(CARPETA_LOGS, f"Log_{hoy}.txt"), "a", encoding="utf-8") as f:
+            f.write(linea)
+    except Exception:
+        pass
+
+# ============================================================
+# RECOLECTOR 1 — PRECIOS DE ACCIONES
+# ============================================================
+
+def recolectar_precios():
+    registrar("Iniciando descarga de precios...")
+    archivo = os.path.join(CARPETA_PRECIOS, "precios.parquet")
+
+    if os.path.exists(archivo):
+        df_existente = pd.read_parquet(archivo)
+        ultima_fecha = df_existente.index.max()
+        inicio = ultima_fecha + timedelta(days=1)
+        registrar(f"Datos existentes hasta {ultima_fecha.date()}. Descargando desde {inicio.date()}...")
+    else:
+        df_existente = pd.DataFrame()
+        inicio = datetime.now() - timedelta(days=365 * 10)
+        registrar("Primera descarga — obteniendo 10 años de historia...")
+
+    fin = datetime.now()
+
+    try:
+        df_nuevo = yf.download(ACTIVOS, start=inicio, end=fin, auto_adjust=True)['Close']
+        df_nuevo = df_nuevo.dropna(how='all')
+
+        if df_nuevo.empty:
+            registrar("No hay datos nuevos hoy (mercado cerrado o fin de semana).", "AVISO")
+            return
+
+        if not df_existente.empty:
+            df_final = pd.concat([df_existente, df_nuevo])
+            df_final = df_final[~df_final.index.duplicated(keep='last')]
+        else:
+            df_final = df_nuevo
+
+        df_final.sort_index(inplace=True)
+        df_final.to_parquet(archivo)
+        registrar(f"✅ Precios guardados. {len(df_nuevo)} días nuevos. Total: {len(df_final)} días.")
+
+    except Exception as e:
+        registrar(f"❌ Error descargando precios: {e}", "ERROR")
+
+# ============================================================
+# RECOLECTOR 2 — TRM COLOMBIA
+# ============================================================
+
+def recolectar_trm():
+    registrar("Iniciando descarga de TRM...")
+    archivo = os.path.join(CARPETA_MACRO, "trm.parquet")
+
+    try:
+        url = "https://www.datos.gov.co/resource/ceyp-9c7c.csv?$limit=10000"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        response = requests.get(url, headers=headers, timeout=15)
+
+        df = pd.read_csv(io.StringIO(response.text))
+        df['Fecha'] = pd.to_datetime(df['vigenciadesde'])
+        df = df.set_index('Fecha').sort_index()
+        df = df[['valor']].rename(columns={'valor': 'TRM'})
+        df = df[~df.index.duplicated(keep='first')]
+
+        df.to_parquet(archivo)
+        registrar(f"✅ TRM guardada. Último valor: ${df['TRM'].iloc[-1]:,.2f}")
+
+    except Exception as e:
+        registrar(f"❌ Error descargando TRM: {e}", "ERROR")
+
+# ============================================================
+# RECOLECTOR 3 — INFLACIÓN USA
+# ============================================================
+
+def recolectar_inflacion_usa():
+    registrar("Iniciando descarga de inflación USA...")
+    archivo = os.path.join(CARPETA_MACRO, "inflacion_usa.parquet")
+
+    try:
+        url = 'https://api.bls.gov/publicAPI/v2/timeseries/data/'
+        payload = {
+            "seriesid": ["CUUR0000SA0"],
+            "startyear": "2015",
+            "endyear": str(datetime.now().year),
+            "registrationkey": "267979a140dc42af90f378bbdf482785"
+        }
+        response = requests.post(url, data=json.dumps(payload),
+                                 headers={'Content-type': 'application/json'}, timeout=15)
+        json_data = response.json()
+
+        data_list = []
+        for row in json_data['Results']['series'][0]['data']:
+            if row['value'] in ['-', '']:
+                continue
+            mes = row['period'][1:]
+            data_list.append({
+                'Fecha': pd.to_datetime(f"{row['year']}-{mes}-01"),
+                'CPI': float(row['value'])
+            })
+
+        df = pd.DataFrame(data_list).set_index('Fecha').sort_index()
+        df['Inflacion_USA'] = df['CPI'].pct_change(12) * 100
+        df = df[['Inflacion_USA']].dropna()
+
+        df.to_parquet(archivo)
+        registrar(f"✅ Inflación USA guardada. Último dato: {df['Inflacion_USA'].iloc[-1]:.2f}%")
+
+    except Exception as e:
+        registrar(f"❌ Error descargando inflación USA: {e}", "ERROR")
+
+# ============================================================
+# RECOLECTOR 4 — INFLACIÓN COLOMBIA
+# ============================================================
+
+def recolectar_inflacion_col():
+    registrar("Iniciando descarga de inflación Colombia...")
+    archivo = os.path.join(CARPETA_MACRO, "inflacion_col.parquet")
+
+    try:
+        url = "https://api.db.nomics.world/v22/series/IMF/CPI/M.CO.PCPI_PC_CP_A_PT.csv"
+        response = requests.get(url, timeout=15)
+        df = pd.read_csv(io.StringIO(response.text))
+
+        df = df.rename(columns={'period': 'Fecha'})
+        col_valor = [c for c in df.columns if c not in
+                     ['Fecha', 'series_code', 'series_name']][-1]
+        df = df.rename(columns={col_valor: 'Inflacion_COL'})
+        df['Fecha'] = pd.to_datetime(df['Fecha'])
+        df = df.set_index('Fecha').sort_index()
+        df = df[['Inflacion_COL']].dropna()
+
+        df.to_parquet(archivo)
+        registrar(f"✅ Inflación COL guardada. Último dato: {df['Inflacion_COL'].iloc[-1]:.2f}%")
+
+    except Exception as e:
+        registrar(f"❌ Error descargando inflación COL: {e}", "ERROR")
+
+# ============================================================
+# RECOLECTOR 5 — TASA LIBRE DE RIESGO
+# ============================================================
+
+def recolectar_tasa_libre_riesgo():
+    registrar("Iniciando descarga de tasa libre de riesgo...")
+    archivo = os.path.join(CARPETA_MACRO, "risk_free.parquet")
+
+    try:
+        url = (
+            "https://api.fiscaldata.treasury.gov/services/api/fiscal_service"
+            "/v2/accounting/od/avg_interest_rates"
+            "?filter=security_desc:eq:Treasury Bills,record_date:gte:2015-01-01"
+            "&page[size]=10000&sort=-record_date"
+        )
+        response = requests.get(url, timeout=15)
+        data = response.json()
+
+        df = pd.DataFrame(data['data'])
+        df['Fecha'] = pd.to_datetime(df['record_date'])
+        df['Risk_Free'] = pd.to_numeric(df['avg_interest_rate_amt'], errors='coerce')
+        df = df.set_index('Fecha')[['Risk_Free']].sort_index().dropna()
+
+        df.to_parquet(archivo)
+        registrar(f"✅ Tasa libre de riesgo guardada. Último dato: {df['Risk_Free'].iloc[-1]:.2f}%")
+
+    except Exception as e:
+        registrar(f"❌ Error descargando tasa libre de riesgo: {e}", "ERROR")
+
+# ============================================================
+# RECOLECTOR 6 — TASA BANCO DE LA REPÚBLICA
+# ============================================================
+
+def recolectar_tasa_banrep():
+    registrar("Iniciando descarga de tasa Banrep...")
+    archivo = os.path.join(CARPETA_MACRO, "tasa_banrep.parquet")
+    tasa = None
+
+    if os.path.exists(archivo):
+        try:
+            df_prev = pd.read_parquet(archivo)
+            ultima  = df_prev.index.max()
+            if ultima.date() == datetime.now().date():
+                tasa_hoy = float(df_prev['Tasa_Banrep'].iloc[-1])
+                registrar(f"✅ Tasa Banrep ya descargada hoy: {tasa_hoy:.2f}%")
+                return
+        except Exception:
+            pass
+
+        try:
+            url = "https://www.banrep.gov.co/es/estadisticas/tasas-de-interes-del-banco-de-la-republica"
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            response = requests.get(url, headers=headers, timeout=15)
+
+            import re
+            matches = re.findall(r'(\d+[.,]\d+)\s*%', response.text)
+            registrar(f"DEBUG todos los porcentajes encontrados: {matches[:20]}", "INFO")
+
+            if matches:
+                tasa = float(matches[0].replace(',', '.'))
+                registrar(f"✅ Tasa Banrep extraída del sitio web: {tasa:.2f}%")
+            else:
+                raise ValueError("No se encontró la tasa en el HTML")
+
+        except Exception:
+            tasa = 11.25
+            registrar(f"⚠️ Usando tasa Banrep de respaldo: {tasa}%", "AVISO")
+
+    df = pd.DataFrame({'Tasa_Banrep': [tasa]}, index=[pd.Timestamp.now()])
+
+    if os.path.exists(archivo):
+        df_existente = pd.read_parquet(archivo)
+        df = pd.concat([df_existente, df])
+        df = df[~df.index.duplicated(keep='last')]
+
+    df.sort_index(inplace=True)
+    df.to_parquet(archivo)
+    registrar(f"✅ Tasa Banrep guardada: {tasa:.2f}%")
+
+# ============================================================
+# EJECUCIÓN PRINCIPAL
+# ============================================================
+
+if __name__ == "__main__":
+    print("=" * 50)
+    print("🤖 RECOLECTOR DE DATOS — INICIANDO")
+    print(f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("=" * 50)
+
+    crear_carpetas()
+    recolectar_precios()
+    recolectar_trm()
+    recolectar_inflacion_usa()
+    recolectar_inflacion_col()
+    recolectar_tasa_libre_riesgo()
+    recolectar_tasa_banrep()
+
+    print("=" * 50)
+    print("✅ RECOLECCIÓN COMPLETA")
+    print("=" * 50)
+CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300&display=swap');
+
+:root {
+    --bg:           #000000;
+    --bg-1:         #0a0a0a;
+    --bg-2:         #111111;
+    --bg-3:         #1a1a1a;
+    --border:       rgba(255,255,255,0.08);
+    --border-hover: rgba(255,255,255,0.16);
+    --text:         #f5f5f7;
+    --text-2:       #a1a1a6;
+    --text-3:       #6e6e73;
+    --accent:       #0071e3;
+    --green:        #30d158;
+    --red:          #ff453a;
+    --yellow:       #ffd60a;
+    --glass:        rgba(255,255,255,0.04);
+    --glass-border: rgba(255,255,255,0.07);
+    --radius:       18px;
+    --radius-sm:    12px;
+    --radius-xs:    8px;
+    --shadow:       0 4px 24px rgba(0,0,0,0.6);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 16px;
+    line-height: 1.5;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+}
+
+.container { max-width: 1100px; margin: 0 auto; padding: 40px 24px; }
+
+.header {
+    text-align: center;
+    padding: 56px 40px 48px;
+    margin-bottom: 40px;
+    border-bottom: 1px solid var(--border);
+}
+
+h1 {
+    font-size: clamp(2rem, 5vw, 3.2rem);
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    color: var(--text);
+    margin-bottom: 8px;
+    line-height: 1.1;
+}
+
+h2 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    color: var(--text);
+    margin-bottom: 24px;
+}
+
+.subtitle {
+    color: var(--text-3);
+    font-size: 0.9rem;
+    font-weight: 400;
+}
+
+.card {
+    background: var(--glass);
+    border: 1px solid var(--glass-border);
+    border-radius: var(--radius);
+    padding: 24px;
+    margin-bottom: 16px;
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    transition: border-color 0.2s ease;
+}
+
+.card:hover { border-color: var(--border-hover); }
+
+.card h3 {
+    font-size: 0.72rem;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-3);
+    margin-bottom: 12px;
+}
+
+.grid-2 { display: grid; grid-template-columns: repeat(2,1fr); gap: 12px; margin-bottom: 16px; }
+.grid-3 { display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; margin-bottom: 16px; }
+.grid-4 { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; margin-bottom: 16px; }
+
+@media (max-width: 768px) {
+    .grid-4 { grid-template-columns: repeat(2,1fr); }
+    .grid-3 { grid-template-columns: repeat(2,1fr); }
+    .grid-2 { grid-template-columns: 1fr; }
+}
+
+.metric-value {
+    font-size: 2rem;
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    line-height: 1;
+    margin-bottom: 4px;
+}
+
+.metric-sub { font-size: 0.8rem; color: var(--text-3); font-weight: 400; }
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 10px 20px;
+    border-radius: 980px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    border: none;
+    transition: all 0.2s ease;
+    text-decoration: none;
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+    font-family: inherit;
+}
+
+.btn:hover { opacity: 0.86; transform: scale(0.98); }
+.btn:active { transform: scale(0.96); }
+
+.btn-primary {
+    background: var(--accent);
+    color: #fff;
+    width: 100%;
+    padding: 14px 20px;
+    font-size: 0.95rem;
+    border-radius: var(--radius-sm);
+}
+
+.btn-secondary {
+    background: var(--bg-3);
+    color: var(--text);
+    border: 1px solid var(--border);
+}
+
+.btn-ghost {
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid rgba(0,113,227,0.3);
+}
+
+.badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 10px;
+    border-radius: 980px;
+    font-size: 0.7rem;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+}
+
+.badge-green  { background: rgba(48,209,88,0.12);  color: var(--green);  border: 1px solid rgba(48,209,88,0.2); }
+.badge-yellow { background: rgba(255,214,10,0.12); color: var(--yellow); border: 1px solid rgba(255,214,10,0.2); }
+.badge-blue   { background: rgba(0,113,227,0.12);  color: #4da3ff;       border: 1px solid rgba(0,113,227,0.2); }
+.badge-red    { background: rgba(255,69,58,0.12);  color: var(--red);    border: 1px solid rgba(255,69,58,0.2); }
+.badge-gray   { background: rgba(255,255,255,0.06); color: var(--text-3); border: 1px solid var(--border); }
+
+.section-title {
+    font-size: 0.72rem;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-3);
+    margin: 36px 0 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.section-title::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+}
+
+.positivo { color: var(--green); font-weight: 500; }
+.negativo { color: var(--red);   font-weight: 500; }
+
+.form-group { margin-bottom: 20px; }
+
+.form-group label {
+    display: block;
+    font-size: 0.8rem;
+    color: var(--text-3);
+    margin-bottom: 8px;
+    font-weight: 400;
+}
+
+.form-input, .form-select {
+    width: 100%;
+    padding: 12px 16px;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-size: 0.9rem;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.2s;
+    appearance: none;
+    -webkit-appearance: none;
+}
+
+.form-input:focus, .form-select:focus {
+    border-color: var(--accent);
+    background: var(--bg-3);
+}
+
+.form-input::placeholder { color: var(--text-3); }
+
+.alert {
+    padding: 14px 18px;
+    border-radius: var(--radius-sm);
+    margin-bottom: 20px;
+    font-size: 0.875rem;
+    line-height: 1.5;
+}
+
+.alert-error   { background: rgba(255,69,58,0.08);  border: 1px solid rgba(255,69,58,0.2);  color: #ff6961; }
+.alert-success { background: rgba(48,209,88,0.08);  border: 1px solid rgba(48,209,88,0.2);  color: #34c759; }
+.alert-info    { background: rgba(0,113,227,0.08);  border: 1px solid rgba(0,113,227,0.2);  color: #4da3ff; }
+
+.nav {
+    display: flex;
+    gap: 2px;
+    margin-bottom: 32px;
+    background: var(--bg-2);
+    padding: 4px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    width: fit-content;
+}
+
+.nav a {
+    padding: 8px 18px;
+    border-radius: var(--radius-xs);
+    font-size: 0.85rem;
+    font-weight: 400;
+    color: var(--text-3);
+    text-decoration: none;
+    transition: all 0.15s ease;
+}
+
+.nav a:hover { color: var(--text); background: var(--bg-3); }
+
+.nav a.active {
+    background: var(--bg-3);
+    color: var(--text);
+    font-weight: 500;
+    border: 1px solid var(--border);
+}
+
+.tabs {
+    display: flex;
+    gap: 2px;
+    margin-bottom: 28px;
+    background: var(--bg-2);
+    padding: 4px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    width: fit-content;
+}
+
+.tab {
+    padding: 8px 22px;
+    border-radius: var(--radius-xs);
+    cursor: pointer;
+    font-size: 0.875rem;
+    font-weight: 400;
+    color: var(--text-3);
+    border: none;
+    background: transparent;
+    transition: all 0.15s ease;
+    font-family: inherit;
+}
+
+.tab:hover { color: var(--text); background: var(--bg-3); }
+
+.tab.active {
+    background: var(--bg-3);
+    color: var(--text);
+    font-weight: 500;
+    border: 1px solid var(--border);
+}
+
+.tab-content { display: none; }
+.tab-content.active { display: block; }
+
+.tabla { width: 100%; border-collapse: collapse; }
+
+.tabla th {
+    font-size: 0.7rem;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-3);
+    padding: 10px 16px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+}
+
+.tabla td {
+    padding: 14px 16px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    font-size: 0.875rem;
+    color: var(--text-2);
+}
+
+.tabla tr:last-child td { border-bottom: none; }
+.tabla tbody tr:hover td { background: rgba(255,255,255,0.02); color: var(--text); }
+</style>
+"""
+
+CSS_SAFE = CSS

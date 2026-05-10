@@ -4,7 +4,8 @@ monitor.py — Motor de monitoreo de mercado
 - Corre en hilo daemon independiente
 - Analiza portafolios con monitoreo_activo = True
 - Alertas cada 15-20 min si hay posible entrada (Telegram + app)
-- Reporte de cierre a las 4:30pm Colombia (Telegram + app)
+- Buenos días a las 9:15am Colombia (antes de abrir)
+- Reporte de cierre a las 4:00-4:45pm Colombia (Telegram + app)
 - Recomendación de entrada subóptima si pasa 1 semana sin señal
 """
 
@@ -41,6 +42,15 @@ def mercado_abierto():
     cierre   = ahora.replace(hour=16, minute=0, second=0, microsecond=0)
     return apertura <= ahora <= cierre
 
+def es_hora_buenos_dias():
+    """True entre 9:00am y 9:25am Colombia — ventana de saludo pre-apertura."""
+    ahora = hora_colombia()
+    if ahora.weekday() >= 5:
+        return False
+    inicio = ahora.replace(hour=9, minute=0, second=0, microsecond=0)
+    fin    = ahora.replace(hour=9, minute=25, second=0, microsecond=0)
+    return inicio <= ahora <= fin
+
 def es_hora_cierre():
     """True entre 4:00pm y 4:45pm Colombia (ventana de reporte de cierre)."""
     ahora = hora_colombia()
@@ -57,13 +67,13 @@ def segundos_hasta_apertura():
     ahora = hora_colombia()
     if ahora.weekday() >= 5:
         dias = 7 - ahora.weekday()
-        prox = (ahora + timedelta(days=dias)).replace(hour=9, minute=35, second=0, microsecond=0)
+        prox = (ahora + timedelta(days=dias)).replace(hour=9, minute=0, second=0, microsecond=0)
     else:
-        hoy_apertura = ahora.replace(hour=9, minute=35, second=0, microsecond=0)
+        hoy_apertura = ahora.replace(hour=9, minute=0, second=0, microsecond=0)
         if ahora < hoy_apertura:
             prox = hoy_apertura
         else:
-            prox = (ahora + timedelta(days=1)).replace(hour=9, minute=35, second=0, microsecond=0)
+            prox = (ahora + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
             while prox.weekday() >= 5:
                 prox += timedelta(days=1)
     return max(0, (prox - ahora).total_seconds())
@@ -89,15 +99,6 @@ def telegram(chat_id, texto):
 # ─────────────────────────────────────────────────────────────
 
 def analizar_activo(ticker):
-    """
-    Descarga datos recientes y calcula:
-    - Precio actual, MA20, MA50
-    - RSI (14)
-    - Tendencia (retorno últimos 20d)
-    - Volumen relativo (ratio vs media 20d)
-    - Score de entrada 0-10
-    - Señal: ENTRAR / VIGILAR / NEUTRAL
-    """
     try:
         hoy    = datetime.utcnow()
         inicio = (hoy - timedelta(days=90)).strftime("%Y-%m-%d")
@@ -117,50 +118,30 @@ def analizar_activo(ticker):
         tend    = round(((precio - float(close.iloc[-20])) / float(close.iloc[-20])) * 100, 2)
         vol_r   = round(float(volume.iloc[-1]) / float(volume.rolling(20).mean().iloc[-1]), 2) if float(volume.rolling(20).mean().iloc[-1]) > 0 else 1.0
 
-        # RSI
         delta = close.diff()
         gain  = delta.clip(lower=0).rolling(14).mean()
         loss  = (-delta.clip(upper=0)).rolling(14).mean()
         rs    = gain / loss.replace(0, 1e-9)
         rsi   = round(float(100 - (100 / (1 + rs.iloc[-1]))), 1)
 
-        # Score de entrada (0-10)
         score = 0.0
-        # RSI: ideal entre 30-50 para largo plazo
-        if rsi < 30:
-            score += 3.0
-        elif rsi < 45:
-            score += 2.5
-        elif rsi < 55:
-            score += 1.5
-        elif rsi < 65:
-            score += 0.5
-        # Precio vs medias
-        if precio < ma20:
-            score += 2.0
-        elif precio < ma50:
-            score += 1.0
-        # Tendencia reciente (quiere retroceso o lateral)
-        if -10 <= tend <= -3:
-            score += 2.5
-        elif -3 < tend <= 0:
-            score += 1.5
-        elif 0 < tend <= 3:
-            score += 1.0
-        elif tend < -10:
-            score += 1.5   # caída fuerte, más riesgo pero oportunidad
-        # Volumen
-        if vol_r > 1.5:
-            score += 0.5   # actividad inusual
+        if rsi < 30:       score += 3.0
+        elif rsi < 45:     score += 2.5
+        elif rsi < 55:     score += 1.5
+        elif rsi < 65:     score += 0.5
+        if precio < ma20:  score += 2.0
+        elif precio < ma50: score += 1.0
+        if -10 <= tend <= -3:   score += 2.5
+        elif -3 < tend <= 0:    score += 1.5
+        elif 0 < tend <= 3:     score += 1.0
+        elif tend < -10:        score += 1.5
+        if vol_r > 1.5:    score += 0.5
 
         score = round(min(score, 10.0), 1)
 
-        if score >= UMBRAL_ENTRADA:
-            senal = "ENTRAR"
-        elif score >= 4.5:
-            senal = "VIGILAR"
-        else:
-            senal = "NEUTRAL"
+        if score >= UMBRAL_ENTRADA:   senal = "ENTRAR"
+        elif score >= 4.5:            senal = "VIGILAR"
+        else:                         senal = "NEUTRAL"
 
         return {
             "ticker":    ticker,
@@ -179,16 +160,13 @@ def analizar_activo(ticker):
         return None
 
 # ─────────────────────────────────────────────────────────────
-# ANÁLISIS IA (Groq)
+# ANÁLISIS IA (Claude)
 # ─────────────────────────────────────────────────────────────
 
 def analisis_ia(resultados, portafolio, tipo="ciclo"):
-    """
-    tipo: 'ciclo' | 'cierre' | 'subtimal'
-    """
     try:
-        from groq import Groq
-        GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
+        import anthropic
+        client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
 
         resumen = ""
         for r in resultados:
@@ -221,9 +199,20 @@ def analisis_ia(resultados, portafolio, tipo="ciclo"):
                 f"4. Recomendación final: ¿entrar parcialmente, esperar, o DCA?\n"
                 f"Sin asteriscos. Con criterio propio. Directo."
             )
+        elif tipo == "buenos_dias":
+            tickers = list(portafolio.get("composicion", {}).keys())
+            prompt = (
+                f"Eres el analista de portafolio de {portafolio['propietario']}. "
+                f"Son las 9:15am en Colombia, el mercado NYSE abre en 15 minutos.\n\n"
+                f"PORTAFOLIO MONITOREADO: {', '.join(tickers)}\n\n"
+                f"Escribe UN párrafo corto de buenos días (máximo 3 oraciones):\n"
+                f"- Saluda brevemente\n"
+                f"- Menciona qué vas a monitorear hoy\n"
+                f"- Di que avisarás si encuentras algo\n"
+                f"Tono: profesional pero cercano. Sin asteriscos. En español."
+            )
         else:
             entradas = [r for r in resultados if r['senal'] == 'ENTRAR']
-            vigilar  = [r for r in resultados if r['senal'] == 'VIGILAR']
             prompt = (
                 f"Analista de {portafolio['propietario']}. Ciclo de monitoreo {hora_colombia().strftime('%H:%M')}.\n\n"
                 f"SEÑALES DETECTADAS:\n{resumen}\n\n"
@@ -231,13 +220,13 @@ def analisis_ia(resultados, portafolio, tipo="ciclo"):
                 f"2-3 oraciones máximo. Solo lo importante. Sin asteriscos."
             )
 
-        resp = Groq(api_key=GROQ_API_KEY).chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=500 if tipo in ("cierre", "suboptimal") else 200,
-            temperature=0.3
+        resp = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=500 if tipo in ("cierre", "suboptimal") else 150,
+            messages=[{"role": "user", "content": prompt}]
         )
-        return resp.choices[0].message.content.strip()
+        return resp.content[0].text.strip()
+
     except Exception as e:
         print(f"❌ IA error: {e}")
         return ""
@@ -265,7 +254,6 @@ def guardar_estado(archivo, estado):
         print(f"❌ Error guardando estado monitor: {e}")
 
 def leer_portafolios_activos():
-    """Devuelve lista de (archivo, portafolio_dict) con monitoreo_activo=True."""
     activos = []
     if not os.path.exists(PORTS_DIR):
         print(f"⚠️ Directorio no existe: {PORTS_DIR}")
@@ -292,8 +280,6 @@ def leer_portafolios_activos():
     return activos
 
 def chat_id_de(portafolio):
-    """Obtiene el telegram_chat_id del dueño del portafolio."""
-    # Primero intenta desde el perfil del usuario
     try:
         import sys
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -308,7 +294,6 @@ def chat_id_de(portafolio):
                     return cid
     except Exception as e:
         print(f"⚠️ No pudo leer usuario para chat_id: {e}")
-    # Fallback: campo directo en el portafolio
     cid = portafolio.get("telegram_chat_id", "").strip()
     if cid:
         return cid
@@ -316,14 +301,47 @@ def chat_id_de(portafolio):
     return ""
 
 # ─────────────────────────────────────────────────────────────
+# MENSAJE DE BUENOS DÍAS
+# ─────────────────────────────────────────────────────────────
+
+def enviar_buenos_dias(archivo, portafolio):
+    """Saludo pre-apertura con resumen de lo que se va a monitorear."""
+    chat_id = chat_id_de(portafolio)
+    if not chat_id:
+        return
+
+    tickers     = list(portafolio.get("composicion", {}).keys())
+    nombre_port = portafolio.get("nombre", "tu portafolio")
+    ahora       = hora_colombia()
+    dia_semana  = ["lunes", "martes", "miércoles", "jueves", "viernes"][ahora.weekday()]
+
+    # Mensaje base sin IA
+    msg_base = (
+        f"☀️ <b>Buenos días — {dia_semana} {ahora.strftime('%d/%m')}</b>\n\n"
+        f"📋 Portafolio: <b>{nombre_port}</b>\n"
+        f"🔍 Monitoreando: <b>{', '.join(tickers)}</b>\n\n"
+        f"El mercado NYSE abre a las 9:30am. "
+        f"Estaré analizando cada 18 minutos y te aviso si encuentro señales de entrada.\n\n"
+        f"<i>Si no recibes alertas durante el día, significa que el mercado no ofrece "
+        f"condiciones óptimas para entrar hoy.</i>"
+    )
+
+    # Enriquecer con IA si está disponible
+    try:
+        ia_saludo = analisis_ia([], portafolio, tipo="buenos_dias")
+        if ia_saludo:
+            msg_base += f"\n\n💬 <i>{ia_saludo}</i>"
+    except:
+        pass
+
+    telegram(chat_id, msg_base)
+    print(f"  ☀️ Buenos días enviado: {portafolio['nombre']}")
+
+# ─────────────────────────────────────────────────────────────
 # CICLO PRINCIPAL DE UN PORTAFOLIO
 # ─────────────────────────────────────────────────────────────
 
 def ciclo_portafolio(archivo, portafolio):
-    """
-    Analiza todos los activos del portafolio.
-    Emite alertas si hay entradas. Guarda estado.
-    """
     composicion = portafolio.get("composicion", {})
     tickers     = list(composicion.keys())
     if not tickers:
@@ -335,7 +353,7 @@ def ciclo_portafolio(archivo, portafolio):
         r = analizar_activo(tk)
         if r:
             resultados.append(r)
-        time.sleep(0.5)  # respetar rate limits de yfinance
+        time.sleep(0.5)
 
     if not resultados:
         return
@@ -348,7 +366,6 @@ def ciclo_portafolio(archivo, portafolio):
     entradas = [r for r in resultados if r["senal"] == "ENTRAR"]
     vigilar  = [r for r in resultados if r["senal"] == "VIGILAR"]
 
-    # ── Alertas de entrada ──────────────────────────────────
     if entradas:
         ia_txt = analisis_ia(resultados, portafolio, tipo="ciclo")
         for r in entradas:
@@ -364,11 +381,9 @@ def ciclo_portafolio(archivo, portafolio):
             telegram(chat_id, msg)
             print(f"  ✅ Alerta ENTRAR enviada: {r['ticker']}")
 
-        # Registrar último día con señal
         estado["ultimo_dia_con_senal"] = hoy_str
         estado["dias_consecutivos_sin_senal"] = 0
     else:
-        # Contar días hábiles sin señal
         ultimo = estado.get("ultimo_dia_con_senal")
         if ultimo:
             try:
@@ -382,7 +397,6 @@ def ciclo_portafolio(archivo, portafolio):
         else:
             estado["dias_consecutivos_sin_senal"] = estado.get("dias_consecutivos_sin_senal", 0) + 1
 
-    # Guardar resultados del ciclo
     estado["resultados"]        = resultados
     estado["timestamp"]         = ahora_str
     estado["prediccion"]        = (f"🟢 {len(entradas)} entrada(s) detectada(s)" if entradas
@@ -395,20 +409,18 @@ def ciclo_portafolio(archivo, portafolio):
     return estado
 
 # ─────────────────────────────────────────────────────────────
-# REPORTE DE CIERRE (4:30pm)
+# REPORTE DE CIERRE (4:00–4:45pm)
 # ─────────────────────────────────────────────────────────────
 
 def reporte_cierre(archivo, portafolio, estado):
-    """Emite el reporte numérico + hablado al cierre del mercado."""
     resultados = estado.get("resultados", [])
     if not resultados:
         return
 
-    chat_id = chat_id_de(portafolio)
-    hoy_str = hora_colombia().strftime("%A %d de %B de %Y")
+    chat_id  = chat_id_de(portafolio)
+    hoy_str  = hora_colombia().strftime("%A %d de %B de %Y")
     dias_sin = estado.get("dias_consecutivos_sin_senal", 0)
 
-    # ── Tabla numérica ──────────────────────────────────────
     lineas = [f"📋 <b>REPORTE DE CIERRE — {portafolio['nombre']}</b>",
               f"📅 {hoy_str}\n"]
     for r in sorted(resultados, key=lambda x: x["score"], reverse=True):
@@ -428,15 +440,12 @@ def reporte_cierre(archivo, portafolio, estado):
         lineas.append(f"📆 Días hábiles sin señal: {dias_sin}")
 
     msg_numerico = "\n".join(lineas)
-
-    # ── Análisis hablado ────────────────────────────────────
-    ia_cierre = analisis_ia(resultados, portafolio, tipo="cierre")
+    ia_cierre    = analisis_ia(resultados, portafolio, tipo="cierre")
 
     msg_final = msg_numerico
     if ia_cierre:
         msg_final += f"\n\n💬 <b>Análisis:</b>\n<i>{ia_cierre}</i>"
 
-    # ── Recomendación subóptima si aplica ──────────────────
     if dias_sin >= DIAS_SIN_SENAL_MAX and es_viernes():
         ia_sub = analisis_ia(resultados, portafolio, tipo="suboptimal")
         sub_msg = (
@@ -450,22 +459,16 @@ def reporte_cierre(archivo, portafolio, estado):
     telegram(chat_id, msg_final)
     print(f"  📋 Reporte de cierre enviado: {portafolio['nombre']}")
 
-    # Guardar en el estado de la app
     estado["reporte_cierre"]       = msg_final
     estado["reporte_cierre_fecha"] = hora_colombia().strftime("%Y-%m-%d")
     estado["cierre_enviado_hoy"]   = hora_colombia().strftime("%Y-%m-%d")
     guardar_estado(archivo, estado)
 
 # ─────────────────────────────────────────────────────────────
-# RECOMENDACIÓN SUBÓPTIMA (si aplica fuera del viernes)
+# ALERTA SUBÓPTIMA
 # ─────────────────────────────────────────────────────────────
 
 def verificar_alerta_suboptimal(archivo, portafolio, estado):
-    """
-    Si llevan DIAS_SIN_SENAL_MAX días sin señal y es viernes,
-    ya se envía dentro del reporte de cierre.
-    Para otros días: solo registra en estado para mostrarlo en la app.
-    """
     dias_sin = estado.get("dias_consecutivos_sin_senal", 0)
     if dias_sin < DIAS_SIN_SENAL_MAX:
         return
@@ -496,22 +499,36 @@ def iniciar_monitor():
 
 def _loop_monitor():
     """
-    Loop principal:
-    - Durante mercado abierto: ciclo cada INTERVALO_MINUTOS minutos
-    - Al cierre (4:00-4:45pm): reporte de cierre (solo una vez por día)
-    - Fuera de horario: duerme hasta la próxima apertura
+    Estados del loop:
+    - 9:00–9:25am  → buenos días (una vez por día)
+    - 9:30am–4:00pm → ciclo de análisis cada 18 min
+    - 4:00–4:45pm  → reporte de cierre (una vez por día)
+    - resto        → duerme hasta próxima apertura
     """
-    ultimo_ciclo       = {}   # archivo -> datetime del último ciclo
-    cierre_enviado     = {}   # archivo -> fecha en que se envió el cierre
+    ultimo_ciclo    = {}   # archivo -> datetime del último ciclo
+    cierre_enviado  = {}   # archivo -> fecha
+    buenos_enviado  = {}   # archivo -> fecha
 
     while True:
         try:
             portafolios = leer_portafolios_activos()
+            ahora       = hora_colombia()
+            hoy         = ahora.strftime("%Y-%m-%d")
 
-            if mercado_abierto():
-                ahora = hora_colombia()
+            # ── Buenos días ────────────────────────────────
+            if es_hora_buenos_dias():
                 for archivo, portafolio in portafolios:
-                    # ── Ciclo de análisis ──────────────────────────
+                    if buenos_enviado.get(archivo) != hoy:
+                        try:
+                            enviar_buenos_dias(archivo, portafolio)
+                        except Exception as e:
+                            print(f"❌ Error buenos días {archivo}: {e}")
+                        buenos_enviado[archivo] = hoy
+                time.sleep(60)
+
+            # ── Mercado abierto: ciclos de análisis ────────
+            elif mercado_abierto():
+                for archivo, portafolio in portafolios:
                     ultimo = ultimo_ciclo.get(archivo)
                     if ultimo is None or (ahora - ultimo).total_seconds() >= INTERVALO_MINUTOS * 60:
                         try:
@@ -521,13 +538,11 @@ def _loop_monitor():
                         except Exception as e:
                             print(f"❌ Error ciclo {archivo}: {e}")
                         ultimo_ciclo[archivo] = ahora
+                time.sleep(60)
 
-                time.sleep(60)  # chequea cada minuto si toca correr el siguiente ciclo
-
+            # ── Reporte de cierre ──────────────────────────
             elif es_hora_cierre():
-                hoy = hora_colombia().strftime("%Y-%m-%d")
                 for archivo, portafolio in portafolios:
-                    # ── Reporte de cierre (solo una vez por día) ───
                     if cierre_enviado.get(archivo) != hoy:
                         estado = leer_estado(archivo)
                         if estado:
@@ -538,11 +553,10 @@ def _loop_monitor():
                         cierre_enviado[archivo] = hoy
                 time.sleep(60)
 
+            # ── Mercado cerrado: dormir ────────────────────
             else:
-                # Mercado cerrado — dormir hasta la próxima apertura
                 segs = segundos_hasta_apertura()
                 print(f"💤 Mercado cerrado. Próxima apertura en {segs/3600:.1f}h")
-                # Dormir en bloques de 5 min para poder reaccionar a cambios
                 time.sleep(min(segs, 300))
 
         except Exception as e:
