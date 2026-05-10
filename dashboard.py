@@ -207,32 +207,89 @@ def grafica_trm(trm_hist):
     try:
         import xml.etree.ElementTree as ET
         noticias = []
-        for termino in ["dolar peso colombiano TRM","tasa cambio Colombia hoy"]:
+        for termino in ["dolar peso colombiano TRM", "tasa cambio Colombia hoy"]:
             try:
-                r = requests.get(f"https://news.google.com/rss/search?q={termino.replace(' ','+')}&hl=es&gl=CO&ceid=CO:es",
-                    headers={'User-Agent':'Mozilla/5.0'}, timeout=6)
+                r = requests.get(
+                    f"https://news.google.com/rss/search?q={termino.replace(' ','+')}&hl=es&gl=CO&ceid=CO:es",
+                    headers={'User-Agent': 'Mozilla/5.0'}, timeout=6)
                 for item in ET.fromstring(r.content).findall('.//item')[:2]:
                     t = item.find('title'); d = item.find('pubDate')
-                    if t is not None: noticias.append(f"- {t.text[:100]} ({d.text[:16] if d is not None else ''})")
-            except: continue
-        trm_hoy = float(trm_values[-1]); trm_mes = float(trm_values[-22]) if len(trm_values)>22 else trm_hoy
-        cambio  = ((trm_hoy-trm_mes)/trm_mes)*100
-        noticias_txt = '\n'.join(noticias) if noticias else 'Sin noticias recientes.'
+                    if t is not None:
+                        noticias.append(f"- {t.text[:120]} ({d.text[:16] if d is not None else ''})")
+            except:
+                continue
+        noticias_txt = '\n'.join(noticias) if noticias else 'Sin noticias recientes disponibles.'
+
+        # ── Análisis técnico de la serie ──────────────────────────
+        trm_series = pd.Series(trm_values)
+        trm_hoy    = float(trm_values[-1])
+        trm_ayer   = float(trm_values[-2]) if len(trm_values) > 1 else trm_hoy
+        trm_7d     = float(trm_values[-7]) if len(trm_values) > 7 else trm_hoy
+        trm_30d    = float(trm_values[-30]) if len(trm_values) > 30 else trm_hoy
+        trm_90d    = float(trm_values[0])
+        trm_max90  = max(trm_values)
+        trm_min90  = min(trm_values)
+        trm_ma7    = float(trm_series.rolling(7).mean().iloc[-1])
+        trm_ma30   = float(trm_series.rolling(30).mean().iloc[-1])
+
+        cambio_diario  = ((trm_hoy - trm_ayer) / trm_ayer) * 100
+        cambio_7d      = ((trm_hoy - trm_7d) / trm_7d) * 100
+        cambio_30d     = ((trm_hoy - trm_30d) / trm_30d) * 100
+        cambio_90d     = ((trm_hoy - trm_90d) / trm_90d) * 100
+        distancia_max  = ((trm_hoy - trm_max90) / trm_max90) * 100
+        distancia_min  = ((trm_hoy - trm_min90) / trm_min90) * 100
+
+        # Tendencia: precio vs medias móviles
+        tendencia = "alcista" if trm_hoy > trm_ma7 > trm_ma30 else \
+                    "bajista" if trm_hoy < trm_ma7 < trm_ma30 else "lateral"
+
+        # Volatilidad: desviación estándar últimos 30d
+        volatilidad = float(trm_series.tail(30).std())
+        vol_nivel   = "alta" if volatilidad > 80 else "moderada" if volatilidad > 40 else "baja"
+
+        # Posición relativa en el rango de 90 días (0% = mínimo, 100% = máximo)
+        rango_90d   = trm_max90 - trm_min90
+        posicion_rango = ((trm_hoy - trm_min90) / rango_90d * 100) if rango_90d > 0 else 50
+
         analisis_trm = groq_chat(
-    [{'role': 'user', 'content':
-      f'TRM hoy: ${trm_hoy:,.0f} COP/USD. Cambio vs hace un mes: {cambio:+.1f}%.\n\n'
-      f'NOTICIAS ECONÓMICAS REALES (últimas 48h):\n{noticias_txt}\n\n'
-      f'Como analista cambiario especializado en Colombia, escribe 3 oraciones precisas:\n'
-      f'1. Qué está pasando con el peso HOY y por qué (basándote en las noticias).\n'
-      f'2. Qué factor macro explica la tendencia reciente ({cambio:+.1f}% en 30 días).\n'
-      f'3. Qué debe vigilar un inversionista colombiano con exposición en USD esta semana.\n\n'
-      f'Solo habla de lo que está en las noticias. Sin asteriscos. Español directo.'}],
-    system=(
-        'Eres analista cambiario senior del mercado colombiano. Directo, nunca genérico. '
-        'Si no tienes información suficiente para afirmar algo, lo dices. Nunca inventas.'
-    ),
-    max_tokens=200, temperature=0.2)
-    except: pass
+            [{'role': 'user', 'content':
+              f'Eres analista cambiario senior del mercado colombiano. '
+              f'Tienes los datos reales de la TRM de los últimos 90 días. Interprétalos.\n\n'
+
+              f'DATOS TÉCNICOS DE LA TRM:\n'
+              f'- Hoy: ${trm_hoy:,.0f} COP/USD\n'
+              f'- Ayer: ${trm_ayer:,.0f} | Cambio diario: {cambio_diario:+.2f}%\n'
+              f'- Hace 7 días: ${trm_7d:,.0f} | Cambio 7d: {cambio_7d:+.2f}%\n'
+              f'- Hace 30 días: ${trm_30d:,.0f} | Cambio 30d: {cambio_30d:+.2f}%\n'
+              f'- Hace 90 días: ${trm_90d:,.0f} | Cambio 90d: {cambio_90d:+.2f}%\n'
+              f'- Máximo 90d: ${trm_max90:,.0f} ({distancia_max:+.1f}% vs hoy)\n'
+              f'- Mínimo 90d: ${trm_min90:,.0f} ({distancia_min:+.1f}% vs hoy)\n'
+              f'- Media móvil 7d: ${trm_ma7:,.0f} | Media móvil 30d: ${trm_ma30:,.0f}\n'
+              f'- Tendencia: {tendencia}\n'
+              f'- Volatilidad 30d: {vol_nivel} (σ = {volatilidad:,.0f} COP)\n'
+              f'- Posición en rango 90d: {posicion_rango:.0f}% '
+              f'(0% = mínimo histórico, 100% = máximo histórico)\n\n'
+
+              f'NOTICIAS RECIENTES:\n{noticias_txt}\n\n'
+
+              f'Escribe exactamente 4 oraciones, en este orden:\n'
+              f'1. SITUACIÓN ACTUAL: dónde está el peso HOY dentro de su rango de 90 días y qué señala esa posición.\n'
+              f'2. TENDENCIA: qué dice la relación entre precio actual y medias móviles sobre la dirección del dólar.\n'
+              f'3. CAUSA: basándote en las noticias, qué factor concreto está dominando el movimiento reciente.\n'
+              f'4. IMPLICACIÓN: qué significa esto para alguien que invierte en acciones americanas desde Colombia '
+              f'(comprar dólares ahora vs esperar, impacto en retornos en COP).\n\n'
+              f'Reglas: usa los números exactos del análisis técnico. '
+              f'Sin frases genéricas. Sin asteriscos. Español directo. '
+              f'Si las noticias no aportan contexto, concéntrate en los datos técnicos.'}],
+            system=(
+                'Eres analista cambiario senior del mercado colombiano con 15 años de experiencia. '
+                'Das interpretaciones técnicas precisas, no descripciones de datos. '
+                'Cuando ves una tendencia, dices qué significa para el inversionista, no solo que existe. '
+                'Nunca inventas causas que no están en los datos o noticias.'
+            ),
+            max_tokens=280, temperature=0.2)
+    except:
+        pass
 
     import json as jm
     grafica_html = f"""
