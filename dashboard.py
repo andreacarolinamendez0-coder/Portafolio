@@ -1113,7 +1113,7 @@ def analista_view(archivo):
         f'    historial.push({{role:"assistant",content:cleaned}});'
         f'    let esJSON=false;'
         f'    try{{'
-        f'      const cleaned=resp.trim().replace(/^```json\s*/,'').replace(/^```\s*/,'').replace(/\s*```$/,'');'
+        f'      const cleaned=resp.trim().replace(/^```json/,"").replace(/^```/,"").replace(/```$/,"").trim();'
         f'      const p=JSON.parse(cleaned);'
         f'      if(p.accion==="analizar"){{'
         f'        esJSON=true; propuestaActual=p;'
