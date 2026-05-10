@@ -1814,6 +1814,7 @@ def leer_estado_monitor(archivo):
             pass
     return {}
 
+from monitor import mercado_abierto, hora_colombia, chat_id_de
 
 @app.route('/monitor/<archivo>')
 def monitor_view(archivo):
@@ -2054,7 +2055,15 @@ def monitor_view(archivo):
         f'<span style="font-size:12px;color:#6e6e73">📋 Cierre <strong style="color:#a1a1a6">4:30pm Colombia</strong></span>'
         f'<span style="font-size:12px;color:#6e6e73">⚠️ Alerta subóptima <strong style="color:#a1a1a6">≥ 5 días sin señal</strong></span>'
         f'<span style="font-size:12px;color:#6e6e73">📲 Notificaciones <strong style="color:#a1a1a6">Telegram + app</strong></span>'
-        '</div>'
+        + (
+    '<div style="width:100%;margin-top:8px;padding:8px 10px;background:rgba(255,214,10,0.06);'
+    'border-radius:8px;border:1px solid rgba(255,214,10,0.15)">'
+    '<p style="font-size:11px;color:#ffd60a;margin:0">⚠️ Sin Telegram configurado — '
+    've a <a href="/settings" style="color:#ffd60a">Mi Perfil</a> para activar las alertas</p>'
+    '</div>'
+    if not portafolio.get('telegram_chat_id') and not chat_id_de(portafolio) else ''
+)
++ '</div>'
     )
 
     contenido = (
@@ -2670,7 +2679,13 @@ def settings():
         f'<input type="email" id="p-email" class="form-input" value="{u.get("email","")}" placeholder="tu@email.com"></div>'
         f'<div class="form-group"><label>Telegram Chat ID</label>'
         f'<input type="text" id="p-telegram" class="form-input" value="{u.get("telegram_chat_id","")}" placeholder="ej: 3002443898">'
-        '<p style="font-size:11px;color:#3d3d3f;margin-top:4px">Envía /start a @userinfobot en Telegram para obtener tu ID</p></div>'
+       '<div style="margin-top:8px;padding:12px 14px;background:rgba(0,113,227,0.06);border:1px solid rgba(0,113,227,0.15);border-radius:10px">'
+'<p style="font-size:12px;color:#4da3ff;font-weight:500;margin:0 0 6px">📲 Cómo activar las alertas de Telegram</p>'
+'<p style="font-size:11px;color:#a1a1a6;margin:0 0 4px">1. Abre Telegram y busca <strong style="color:#f5f5f7">@Miportafolio_andrea_bot</strong></p>'
+'<p style="font-size:11px;color:#a1a1a6;margin:0 0 4px">2. Presiona <strong style="color:#f5f5f7">Iniciar / Start</strong></p>'
+'<p style="font-size:11px;color:#a1a1a6;margin:0 0 4px">3. El bot te enviará tu Chat ID automáticamente</p>'
+'<p style="font-size:11px;color:#a1a1a6;margin:0">4. Pega ese número aquí arriba y guarda</p>'
+'</div></div>'
         '<button onclick="guardarPerfil()" class="btn btn-primary">Guardar cambios</button>'
         '<div id="msg-perfil" style="margin-top:12px;font-size:13px;display:none"></div>'
         '</div>'

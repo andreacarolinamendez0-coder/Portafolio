@@ -268,6 +268,7 @@ def leer_portafolios_activos():
     """Devuelve lista de (archivo, portafolio_dict) con monitoreo_activo=True."""
     activos = []
     if not os.path.exists(PORTS_DIR):
+        print(f"⚠️ Directorio no existe: {PORTS_DIR}")
         return activos
     for fn in os.listdir(PORTS_DIR):
         if not fn.endswith(".json") or fn.startswith("monitor_"):
@@ -276,24 +277,43 @@ def leer_portafolios_activos():
         try:
             with open(ruta, "r", encoding="utf-8") as f:
                 p = json.load(f)
-            if p.get("monitoreo_activo") and p.get("composicion"):
+            tiene_monitor = p.get("monitoreo_activo", False)
+            tiene_comp    = bool(p.get("composicion"))
+            if tiene_monitor and tiene_comp:
+                print(f"✅ Portafolio activo: {p.get('nombre','?')} — {len(p['composicion'])} activos")
                 activos.append((fn, p))
-        except:
+            elif tiene_monitor and not tiene_comp:
+                print(f"⚠️ {p.get('nombre','?')} tiene monitoreo ON pero SIN composición — no se monitorea")
+        except Exception as e:
+            print(f"❌ Error leyendo {fn}: {e}")
             continue
+    if not activos:
+        print("💤 Sin portafolios activos para monitorear")
     return activos
 
 def chat_id_de(portafolio):
     """Obtiene el telegram_chat_id del dueño del portafolio."""
+    # Primero intenta desde el perfil del usuario
     try:
+        import sys
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from gestor_portafolio import get_usuario
         owner = portafolio.get("owner", "")
         if owner:
             u = get_usuario(owner)
             if u:
-                return u.get("telegram_chat_id", "")
-    except:
-        pass
-    return portafolio.get("telegram_chat_id", "")
+                cid = u.get("telegram_chat_id", "").strip()
+                if cid:
+                    print(f"📲 chat_id encontrado para {owner}: {cid}")
+                    return cid
+    except Exception as e:
+        print(f"⚠️ No pudo leer usuario para chat_id: {e}")
+    # Fallback: campo directo en el portafolio
+    cid = portafolio.get("telegram_chat_id", "").strip()
+    if cid:
+        return cid
+    print(f"⚠️ Sin chat_id para portafolio: {portafolio.get('nombre','?')}")
+    return ""
 
 # ─────────────────────────────────────────────────────────────
 # CICLO PRINCIPAL DE UN PORTAFOLIO
