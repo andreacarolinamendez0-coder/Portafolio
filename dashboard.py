@@ -1362,15 +1362,23 @@ def analista_view(archivo):
         '</div>'
     )
     return pagina(f'Analista — {portafolio["nombre"]}', contenido)
-
 @app.route('/api/analista-chat/<archivo>', methods=['POST'])
 def api_analista_chat(archivo):
     if verificar_acceso(archivo): return jsonify({'respuesta':'No autorizado'})
     try:
         data = request.get_json()
-        resp = groq_chat(data.get('historial',[]), system=data.get('sistema',''), max_tokens=300, temperature=0.5)
+        if not data:
+            return jsonify({'respuesta': 'Error: no se recibieron datos'})
+        resp = groq_chat(
+            data.get('historial', []),
+            system=data.get('sistema', ''),
+            max_tokens=600,
+            temperature=0.5
+        )
         return jsonify({'respuesta': resp})
-    except Exception as e: return jsonify({'respuesta': f'Error: {str(e)}'})
+    except Exception as e:
+        print(f"❌ api_analista_chat error: {e}")
+        return jsonify({'respuesta': f'Error: {str(e)}'})
 
 @app.route('/api/generar-propuesta/<archivo>', methods=['POST'])
 def api_generar_propuesta(archivo):
