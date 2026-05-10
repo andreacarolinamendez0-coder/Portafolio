@@ -1,4 +1,4 @@
-from flask import Flask, request, session, redirect, url_for, jsonify
+﻿from flask import Flask, request, session, redirect, url_for, jsonify
 import pandas as pd
 import json, os, requests, subprocess
 from datetime import datetime, timedelta
@@ -287,7 +287,7 @@ def grafica_trm(trm_hist):
                 'Cuando ves una tendencia, dices qué significa para el inversionista, no solo que existe. '
                 'Nunca inventas causas que no están en los datos o noticias.'
             ),
-            max_tokens=280, temperature=0.2)
+            max_tokens=400, temperature=0.2)
     except:
         pass
 
@@ -1044,6 +1044,8 @@ def analista_view(archivo):
         f'"frecuencia_meses":1,"horizonte":10,"es_nuevo":false,'
         f'"activos":{{"WMT":0.265,"LLY":0.212,"XLK":0.159,"GOOGL":0.154,"MSFT":0.110,"VTI":0.100}}}}\n\n'
         f'REGLAS: Una pregunta por mensaje. JSON solo y sin texto adicional. Español. Sin asteriscos. Horizonte entre 1 y 30, nunca 0.'
+        f'FORMATO: Texto plano únicamente. Cero asteriscos, cero markdown, cero bullets. '
+        f'Si usas asteriscos o markdown, estás fallando en tu trabajo.'
     )
 
     contenido = (
@@ -1118,7 +1120,12 @@ def analista_view(archivo):
         f'        await generarPropuesta(p);'
         f'      }}'
         f'    }}catch(e){{}}'
-        f'    if(!esJSON)document.getElementById(tid).innerHTML=resp;'
+        'function mdToHtml(t){return t'
+        '.replace(/\\*\\*(.+?)\\*\\*/g,"<strong>$1</strong>")'
+        '.replace(/\\*(.+?)\\*/g,"<em>$1</em>")'
+        '.replace(/\\n\\n/g,"<br><br>")'
+        '.replace(/\\n/g,"<br>");}'
+        f'    if(!esJSON)document.getElementById(tid).innerHTML=mdToHtml(resp);'
         f'  }}catch(e){{document.getElementById(tid).innerHTML="Error de conexión.";}}'
         f'}}'
 
@@ -1730,6 +1737,11 @@ def bot_view(archivo):
         '<button onclick="enviar()" style="padding:10px 20px;background:#0071e3;color:white;border:none;border-radius:980px;font-size:13px;font-family:DM Sans,sans-serif;cursor:pointer;font-weight:500">Enviar</button>'
         '</div></div>'
         f'<script>'
+        'function mdToHtml(t){return t'
+        '.replace(/\\*\\*(.+?)\\*\\*/g,"<strong>$1</strong>")'
+        '.replace(/\\*(.+?)\\*/g,"<em>$1</em>")'
+        '.replace(/\\n\\n/g,"<br><br>")'
+        '.replace(/\\n/g,"<br>");}'
         f'const pInfo={pj};'
         f'const logoSVG=`{LOGO_SM}`;'
         f'function preguntar(txt){{document.getElementById("msg-input").value=txt;enviar();}}'
@@ -1763,7 +1775,7 @@ def bot_view(archivo):
         f'  try{{'
         f'    const r=await fetch("/api/bot/{archivo}",{{method:"POST",headers:{{"Content-Type":"application/json"}},body:JSON.stringify({{mensaje:t,portafolio:pInfo}})}});'
         f'    const d=await r.json();'
-        f'    if(bd)bd.textContent=d.respuesta;'
+        f'    if(bd)bd.innerHTML=mdToHtml(d.respuesta);'
         f'  }}catch(e){{if(bd)bd.textContent="Error de conexión.";}}'
         f'  chat.scrollTop=chat.scrollHeight;'
         f'}}'
