@@ -221,7 +221,7 @@ def analisis_ia(resultados, portafolio, tipo="ciclo"):
             )
 
         resp = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5",
             max_tokens=500 if tipo in ("cierre", "suboptimal") else 150,
             messages=[{"role": "user", "content": prompt}]
         )

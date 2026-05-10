@@ -91,7 +91,7 @@ def groq_chat(messages, system='', max_tokens=300, temperature=0.5):
     import anthropic
     client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
     kwargs = {
-        "model": "claude-sonnet-4-20250514",
+        "model": "claude-sonnet-4-5",
         "max_tokens": max_tokens,
         "messages": messages
     }
