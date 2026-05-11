@@ -19,7 +19,7 @@ warnings.filterwarnings('ignore')
 BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
 DATOS_DIR = os.path.join(BASE_DIR, "datos")
 PORTS_DIR = os.path.join(DATOS_DIR, "portafolios")
-BOT_TOKEN = "8332465511:AAH-PlentkDhWWNenLGOdvJCLC6OXNEnrA8"
+BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
 INTERVALO_MINUTOS   = 18   # cada cuántos minutos se analiza durante el día
 UMBRAL_ENTRADA      = 6.5  # score mínimo para emitir alerta de entrada

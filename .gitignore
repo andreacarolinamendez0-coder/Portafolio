@@ -11,3 +11,6 @@ datos/historico/
 instance/
 logs/
 *.parquet
+datos/portafolios/
+datos/usuarios.json
+datos/logs_actividad.json

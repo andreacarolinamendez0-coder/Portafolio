@@ -29,8 +29,8 @@ def notificar_url_ngrok():
     try:
         r = requests.get("http://localhost:4040/api/tunnels").json()
         url = r['tunnels'][0]['public_url']
-        requests.post(f"https://api.telegram.org/bot8332465511:AAH-PlentkDhWWNenLGOdvJCLC6OXNEnrA8/sendMessage",
-            json={"chat_id":"6999614895","text":f"🌐 URL del sistema:\n{url}"})
+        requests.post(f"https://api.telegram.org/bot{os.environ.get('TELEGRAM_BOT_TOKEN', '')}/sendMessage",
+            json={"chat_id": os.environ.get("ADMIN_CHAT_ID", ""), "text": f"🌐 URL del sistema:\n{url}"})
     except: pass
 
 threading.Thread(target=notificar_url_ngrok, daemon=True).start()
@@ -180,7 +180,7 @@ def calcular_tiempo_real(portafolio):
 def enviar_notificacion(portafolio, asunto, mensaje):
     if portafolio.get('telegram_chat_id'):
         try:
-            requests.post(f"https://api.telegram.org/bot8332465511:AAH-PlentkDhWWNenLGOdvJCLC6OXNEnrA8/sendMessage",
+            requests.post(f"https://api.telegram.org/bot{os.environ.get('TELEGRAM_BOT_TOKEN', '')}/sendMessage",
                 json={"chat_id":portafolio['telegram_chat_id'],"text":mensaje,"parse_mode":"HTML"},timeout=10)
         except: pass
     if portafolio.get('email'):
