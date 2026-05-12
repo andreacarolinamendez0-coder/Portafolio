@@ -2668,16 +2668,14 @@ def api_ticker_listo(ticker):
 def api_test_telegram():
     if not session.get('es_admin'):
         return jsonify({'error': 'No autorizado'})
-    from gestor_portafolio import _leer_usuarios
-    from scheduler import enviar_resumenes_diarios
-    usuarios = _leer_usuarios()
-    info = []
-    for username, u in usuarios.items():
-        chat_id = u.get('telegram_chat_id', '').strip()
-        info.append({
-            'username': username,
-            'chat_id': chat_id if chat_id else '— sin configurar —'
-        })
+    from scheduler import enviar_resumenes_diarios, enviar_buenos_dias_monitor, enviar_cierre_monitor
+    enviar_resumenes_diarios()
+    enviar_buenos_dias_monitor()
+    enviar_cierre_monitor()
+    return jsonify({
+        'ok': True,
+        'mensaje': 'Los 3 mensajes fueron disparados. Revisa Telegram.'
+    })
     # Intentar enviar
     enviar_resumenes_diarios()
     return jsonify({
