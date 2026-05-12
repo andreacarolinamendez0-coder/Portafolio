@@ -547,21 +547,9 @@ def _loop_monitor():
                         ultimo_ciclo[archivo] = ahora
                     time.sleep(60)
 
-            # ── Reporte de cierre ──────────────────────────
+            # ── Hora de cierre: el scheduler lo maneja ────
             elif es_hora_cierre():
-                for archivo, portafolio in portafolios:
-                    if cierre_enviado.get(archivo) != hoy:
-                       estado = leer_estado(archivo)
-                       if estado:
-                        try:
-                            # Releer portafolio fresco para tener owner y chat_id actualizados
-                            ruta_fresca = os.path.join(PORTS_DIR, archivo)
-                            with open(ruta_fresca, 'r', encoding='utf-8') as f:
-                                portafolio_fresco = json.load(f)
-                            reporte_cierre(archivo, portafolio_fresco, estado)
-                        except Exception as e:
-                            print(f"❌ Error reporte cierre {archivo}: {e}")
-                        cierre_enviado[archivo] = (hoy)
+                print("📋 Ventana de cierre — el scheduler envía el reporte.")
                 time.sleep(60)
 
             # ── Mercado cerrado: dormir ────────────────────
