@@ -8,7 +8,7 @@ import json
 from datetime import datetime
 import requests
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8332465511:AAH-PlentkDhWWNenLGOdvJCLC6OXNEnrA8")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 CARPETA_PORTAFOLIOS = "datos/portafolios"
 
 
