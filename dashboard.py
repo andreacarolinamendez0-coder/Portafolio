@@ -286,6 +286,9 @@ def grafica_trm(trm_hist):
                 'Das interpretaciones técnicas precisas, no descripciones de datos. '
                 'Cuando ves una tendencia, dices qué significa para el inversionista, no solo que existe. '
                 'Nunca inventas causas que no están en los datos o noticias.'
+                f'CRÍTICO: Cuando tengas TODOS los datos necesarios, responde ÚNICA Y EXCLUSIVAMENTE con el JSON. '
+                f'Ni una sola palabra antes ni después del JSON. Solo el JSON. '
+                f'Si incluyes cualquier texto junto al JSON, el sistema falla.'
             ),
             max_tokens=400, temperature=0.2)
     except:
@@ -1620,6 +1623,42 @@ def api_aplicar_propuesta(archivo):
 
     except Exception as e: return jsonify({'ok':False,'error':str(e)})
 
+@app.route('/api/borrar-aporte/<archivo>/<int:idx>', methods=['POST'])
+def api_borrar_aporte(archivo, idx):
+    redir = verificar_acceso(archivo)
+    if redir: return jsonify({'ok': False, 'error': 'No autorizado'})
+    try:
+        from gestor_portafolio import leer_portafolio
+        import json
+        ruta = f'datos/portafolios/{archivo}'
+        with open(ruta, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if idx < 0 or idx >= len(data.get('aportes', [])):
+            return jsonify({'ok': False, 'error': 'Índice inválido'})
+        data['aportes'].pop(idx)
+        with open(ruta, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
+
+@app.route('/api/borrar-aportes/<archivo>', methods=['POST'])
+def api_borrar_aportes(archivo):
+    redir = verificar_acceso(archivo)
+    if redir: return jsonify({'ok': False, 'error': 'No autorizado'})
+    try:
+        import json
+        ruta = f'datos/portafolios/{archivo}'
+        with open(ruta, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        data['aportes'] = []
+        with open(ruta, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
 # ============================================================
 # SEGUIMIENTO
 # ============================================================
@@ -1630,34 +1669,59 @@ def seguimiento_view(archivo):
     if redir: return redir
     from gestor_portafolio import leer_portafolio, guardar_aporte
     portafolio  = leer_portafolio(archivo)
-    composicion = portafolio.get('composicion',{})
-    mensaje=''; error=''
-    if request.method=='POST':
-        try:
-            activo    = request.form.get('activo','').upper()
-            fecha     = request.form.get('fecha', datetime.now().strftime('%Y-%m-%d'))
-            monto_cop = float(request.form.get('monto','0').replace(',','').replace('.',''))
-            precio_usd= float(request.form.get('precio','0').replace(',','.'))
-            try:
-                trm_df=pd.read_parquet("datos/macro/trm.parquet")
-                idx=trm_df.index.get_indexer([pd.to_datetime(fecha)],method='nearest')[0]
-                trm_dia=float(trm_df['TRM'].iloc[idx])
-            except: trm_dia=4000
-            fracciones = monto_cop/(precio_usd*trm_dia)
-            guardar_aporte(archivo,{"fecha":fecha,"activo":activo,"monto_cop":round(monto_cop,0),
-                "precio_usd":precio_usd,"trm_dia":trm_dia,"fracciones":round(fracciones,6),"tipo":"manual"})
-            mensaje=f'Compra de {activo} registrada — {fracciones:.4f} fracciones.'
-            portafolio=leer_portafolio(archivo)
-        except Exception as e: error=f'Error: {str(e)}'
+    composicion = portafolio.get('composicion', {})
+    mensaje = ''; error = ''
 
-    aportes   = portafolio.get('aportes',[])
-    entrados  = set(a['activo'] for a in aportes)
-    pendientes= [a for a in composicion if a not in entrados]
-    activo_pre= request.args.get('activo','')
-    total_a=len(composicion); total_e=len(entrados)
-    pct=int(total_e/total_a*100) if total_a>0 else 0
-    msg_html=f'<div class="alert alert-success">{mensaje}</div>' if mensaje else ''
-    err_html=f'<div class="alert alert-error">{error}</div>' if error else ''
+    if request.method == 'POST':
+        try:
+            activo      = request.form.get('activo', '').upper()
+            fecha       = request.form.get('fecha', datetime.now().strftime('%Y-%m-%d'))
+            monto_usd   = float(request.form.get('monto_usd', '0').replace(',', '.'))
+            fracciones  = float(request.form.get('fracciones', '0').replace(',', '.'))
+
+            if monto_usd <= 0 or fracciones <= 0:
+                error = 'El monto y las fracciones deben ser mayores a 0.'
+            else:
+                # Precio implícito por fracción
+                precio_usd = round(monto_usd / fracciones, 4)
+
+                # TRM del día
+                try:
+                    trm_df  = pd.read_parquet("datos/macro/trm.parquet")
+                    idx     = trm_df.index.get_indexer([pd.to_datetime(fecha)], method='nearest')[0]
+                    trm_dia = float(trm_df['TRM'].iloc[idx])
+                except:
+                    trm_dia = 4000
+
+                monto_cop = round(monto_usd * trm_dia, 0)
+
+                guardar_aporte(archivo, {
+                    "fecha":      fecha,
+                    "activo":     activo,
+                    "monto_usd":  round(monto_usd, 2),
+                    "monto_cop":  monto_cop,
+                    "precio_usd": precio_usd,
+                    "trm_dia":    trm_dia,
+                    "fracciones": round(fracciones, 6),
+                    "tipo":       "manual"
+                })
+                mensaje = f'Compra de {activo} registrada — {fracciones} fracciones a ${precio_usd} USD.'
+                portafolio = leer_portafolio(archivo)
+        except Exception as e:
+            error = f'Error: {str(e)}'
+
+    aportes    = portafolio.get('aportes', [])
+    entrados   = set(a['activo'] for a in aportes)
+    pendientes = [a for a in composicion if a not in entrados]
+    activo_pre = request.args.get('activo', '')
+    total_a    = len(composicion)
+    total_e    = len(entrados)
+    pct        = int(total_e / total_a * 100) if total_a > 0 else 0
+
+    msg_html = f'<div class="alert alert-success">{mensaje}</div>' if mensaje else ''
+    err_html = f'<div class="alert alert-error">{error}</div>' if error else ''
+
+    # Progreso
     progreso = (
         '<div class="card" style="margin-bottom:16px">'
         '<div style="display:flex;justify-content:space-between;margin-bottom:12px">'
@@ -1665,45 +1729,128 @@ def seguimiento_view(archivo):
         f'<span style="color:#0071e3;font-weight:600">{total_e}/{total_a} activos</span></div>'
         '<div style="background:#1a1a1a;border-radius:980px;height:6px;overflow:hidden">'
         f'<div style="background:#0071e3;height:100%;width:{pct}%;transition:width 0.6s ease"></div></div>'
-        f'<div style="margin-top:8px;font-size:0.8rem;color:#6e6e73">{pct}% completado</div></div>')
-    pend_html=''
+        f'<div style="margin-top:8px;font-size:0.8rem;color:#6e6e73">{pct}% completado</div></div>'
+    )
+
+    # Pendientes
+    pend_html = ''
     if pendientes:
-        fp=''
+        fp = ''
         for a in pendientes:
-            p=composicion.get(a,0); pl=precio_actual_usd(a); ps=f'${pl:,.2f} USD' if pl else 'Cargando...'
-            fp+=(f'<div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.06)">'
-                 f'<div><strong style="color:#f5f5f7">{a}</strong><span style="color:#6e6e73;font-size:0.8rem;margin-left:8px">{p*100:.1f}% del portafolio</span></div>'
-                 f'<div style="text-align:right"><div style="font-size:0.85rem;color:#a1a1a6">{ps}</div>'
-                 f'<span class="badge badge-yellow">PENDIENTE</span></div></div>')
-        pend_html='<div class="section-title">Pendientes por Entrar</div><div class="card">'+fp+'</div>'
-    opciones=''
+            p  = composicion.get(a, 0)
+            pl = precio_actual_usd(a)
+            ps = f'${pl:,.2f} USD' if pl else 'Cargando...'
+            fp += (
+                f'<div style="display:flex;justify-content:space-between;align-items:center;'
+                f'padding:12px 0;border-bottom:1px solid rgba(255,255,255,0.06)">'
+                f'<div><strong style="color:#f5f5f7">{a}</strong>'
+                f'<span style="color:#6e6e73;font-size:0.8rem;margin-left:8px">{p*100:.1f}% del portafolio</span></div>'
+                f'<div style="text-align:right"><div style="font-size:0.85rem;color:#a1a1a6">{ps}</div>'
+                f'<span class="badge badge-yellow">PENDIENTE</span></div></div>'
+            )
+        pend_html = '<div class="section-title">Pendientes por Entrar</div><div class="card">' + fp + '</div>'
+
+    # Opciones del select
+    opciones = ''
     for a in pendientes:
-        sel='selected' if a==activo_pre else ''
-        opciones+=f'<option value="{a}" {sel}>{a} — pendiente</option>'
+        sel = 'selected' if a == activo_pre else ''
+        opciones += f'<option value="{a}" {sel}>{a} — pendiente</option>'
     for a in entrados:
-        sel='selected' if a==activo_pre else ''
-        opciones+=f'<option value="{a}" {sel}>{a} — agregar más</option>'
-    form_html=''
+        sel = 'selected' if a == activo_pre else ''
+        opciones += f'<option value="{a}" {sel}>{a} — agregar más</option>'
+
+    # Formulario de nueva compra
+    form_html = ''
     if composicion:
-        form_html=(
-            '<div class="section-title">Registrar Nueva Compra</div><div class="card"><form method="POST">'
+        form_html = (
+            '<div class="section-title">Registrar Nueva Compra</div>'
+            '<div class="card"><form method="POST">'
             '<div class="grid-2">'
-            f'<div class="form-group"><label>Activo</label><select name="activo" class="form-select">{opciones}</select></div>'
-            f'<div class="form-group"><label>Fecha</label><input type="date" name="fecha" class="form-input" value="{datetime.now().strftime("%Y-%m-%d")}"></div>'
-            '</div><div class="grid-2">'
-            '<div class="form-group"><label>Monto COP</label><input type="number" name="monto" class="form-input" placeholder="Ej: 500000" required></div>'
-            '<div class="form-group"><label>Precio USD</label><input type="number" name="precio" class="form-input" placeholder="Ej: 213.50" step="0.01" required></div>'
-            '</div><button type="submit" class="btn btn-primary">Registrar Compra</button></form></div>')
-    hist_html=''
+            f'<div class="form-group"><label>Activo</label>'
+            f'<select name="activo" class="form-select">{opciones}</select></div>'
+            f'<div class="form-group"><label>Fecha</label>'
+            f'<input type="date" name="fecha" class="form-input" value="{datetime.now().strftime("%Y-%m-%d")}"></div>'
+            '</div>'
+            '<div class="grid-2">'
+            '<div class="form-group"><label>Monto total pagado (USD)</label>'
+            '<input type="number" name="monto_usd" class="form-input" placeholder="Ej: 54.81" step="0.01" required>'
+            '<p style="color:#6e6e73;font-size:11px;margin-top:4px">Lo que pagaste en total, incluyendo fracciones</p></div>'
+            '<div class="form-group"><label>Fracciones compradas</label>'
+            '<input type="number" name="fracciones" class="form-input" placeholder="Ej: 0.2523" step="0.0001" required>'
+            '<p style="color:#6e6e73;font-size:11px;margin-top:4px">Cantidad de acciones que recibiste</p></div>'
+            '</div>'
+            '<div style="padding:12px 16px;background:rgba(0,113,227,0.06);border:1px solid rgba(0,113,227,0.15);'
+            'border-radius:10px;margin-bottom:16px">'
+            '<p style="color:#4da3ff;font-size:12px;margin:0">💡 El sistema calcula automáticamente el precio por acción '
+            'y convierte a COP usando la TRM del día de la compra.</p></div>'
+            '<button type="submit" class="btn btn-primary">Registrar Compra</button>'
+            '</form></div>'
+        )
+
+    # Historial con botón de borrar individual
+    hist_html = ''
     if aportes:
-        fh=''.join(f'<tr><td>{a["fecha"]}</td><td><strong style="color:#f5f5f7">{a["activo"]}</strong></td>'
-            f'<td>${a["monto_cop"]:,.0f}</td><td>${a["precio_usd"]:,.2f}</td>'
-            f'<td>{a["fracciones"]:.4f}</td><td>${a.get("trm_dia",0):,.0f}</td></tr>' for a in reversed(aportes))
-        hist_html=('<div class="section-title">Historial de Compras</div><div class="card"><table class="tabla">'
-            '<thead><tr><th>Fecha</th><th>Activo</th><th>Monto COP</th><th>Precio USD</th><th>Fracciones</th><th>TRM</th></tr></thead>'
-            f'<tbody>{fh}</tbody></table></div>')
-    contenido=('<div class="container">'+nav_html(archivo,'seguimiento')+'<h2>Seguimiento de Inversiones</h2>'
-        +msg_html+err_html+progreso+pend_html+form_html+hist_html+'</div>')
+        filas = ''
+        for i, a in enumerate(reversed(aportes)):
+            idx_real = len(aportes) - 1 - i
+            precio_str = f'${a.get("precio_usd", 0):,.4f}' if a.get("precio_usd") else '—'
+            monto_usd_str = f'${a.get("monto_usd", 0):,.2f}' if a.get("monto_usd") else '—'
+            filas += (
+                f'<tr>'
+                f'<td>{a["fecha"]}</td>'
+                f'<td><strong style="color:#f5f5f7">{a["activo"]}</strong></td>'
+                f'<td>{monto_usd_str} USD</td>'
+                f'<td>${a["monto_cop"]:,.0f} COP</td>'
+                f'<td>{a["fracciones"]:.6f}</td>'
+                f'<td>{precio_str} USD</td>'
+                f'<td>${a.get("trm_dia", 0):,.0f}</td>'
+                f'<td>'
+                f'<button onclick="borrarAporte({idx_real})" '
+                f'style="padding:3px 10px;border-radius:6px;font-size:11px;cursor:pointer;'
+                f'background:rgba(255,69,58,0.1);color:#ff453a;border:1px solid rgba(255,69,58,0.2);'
+                f'font-family:DM Sans,sans-serif">Borrar</button>'
+                f'</td>'
+                f'</tr>'
+            )
+
+        hist_html = (
+            '<div class="section-title" style="display:flex;justify-content:space-between;align-items:center">'
+            '<span>Historial de Compras</span>'
+            f'<button onclick="borrarTodo()" '
+            f'style="padding:5px 14px;border-radius:980px;font-size:11px;cursor:pointer;'
+            f'background:rgba(255,69,58,0.1);color:#ff453a;border:1px solid rgba(255,69,58,0.2);'
+            f'font-family:DM Sans,sans-serif">🗑 Borrar todo</button>'
+            '</div>'
+            '<div class="card"><table class="tabla">'
+            '<thead><tr><th>Fecha</th><th>Activo</th><th>Monto USD</th><th>Monto COP</th>'
+            '<th>Fracciones</th><th>Precio/acción</th><th>TRM</th><th></th></tr></thead>'
+            f'<tbody>{filas}</tbody></table></div>'
+            f'<script>'
+            f'async function borrarAporte(idx){{'
+            f'  if(!confirm("¿Borrar esta compra?")) return;'
+            f'  const r = await fetch("/api/borrar-aporte/{archivo}/"+idx, {{method:"POST"}});'
+            f'  const d = await r.json();'
+            f'  if(d.ok) location.reload();'
+            f'  else alert("Error: "+d.error);'
+            f'}}'
+            f'async function borrarTodo(){{'
+            f'  if(!confirm("¿Borrar TODAS las compras de este portafolio? No se puede deshacer.")) return;'
+            f'  if(!confirm("Segunda confirmación: ¿realmente quieres borrar todo el historial?")) return;'
+            f'  const r = await fetch("/api/borrar-aportes/{archivo}", {{method:"POST"}});'
+            f'  const d = await r.json();'
+            f'  if(d.ok) location.reload();'
+            f'  else alert("Error: "+d.error);'
+            f'}}'
+            f'</script>'
+        )
+
+    contenido = (
+        '<div class="container">'
+        + nav_html(archivo, 'seguimiento')
+        + '<h2>Seguimiento de Inversiones</h2>'
+        + msg_html + err_html + progreso + pend_html + form_html + hist_html
+        + '</div>'
+    )
     return pagina(f'Seguimiento — {portafolio["nombre"]}', contenido)
 
 # ============================================================
