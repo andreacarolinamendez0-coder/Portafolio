@@ -1597,6 +1597,11 @@ def api_aplicar_propuesta(archivo):
 
         if tipo == 'reemplazar':
             guardar_composicion(archivo, pesos)
+            # Resetear monitor automáticamente al cambiar composición
+            ruta_monitor = os.path.join(DATOS_DIR, "portafolios", f"monitor_{archivo}")
+        if os.path.exists(ruta_monitor):
+            os.remove(ruta_monitor)
+            print(f"🔄 Monitor reseteado automáticamente: {archivo}")
             ruta = f'datos/portafolios/{archivo}'
             with open(ruta,'r',encoding='utf-8') as f: dp = json.load(f)
             dp.update({'inversion_inicial':inv,'aporte_dca':aporte,'frecuencia_meses':freq,'perfil':perfil})
@@ -1619,6 +1624,10 @@ def api_aplicar_propuesta(archivo):
                 return jsonify({'ok':False,'error':'No se pudo crear el portafolio.'})
             nm = na.split('/')[-1].split('\\')[-1]
             guardar_composicion(nm, pesos)
+            # El portafolio nuevo empieza sin historial de monitor
+            ruta_monitor = os.path.join(DATOS_DIR, "portafolios", f"monitor_{nm}")
+            if os.path.exists(ruta_monitor):
+                os.remove(ruta_monitor)
             return jsonify({'ok':True,'mensaje':f'"{nombre_n}" creado exitosamente.','redirigir':f'/seguimiento/{nm}'})
 
     except Exception as e: return jsonify({'ok':False,'error':str(e)})
@@ -2281,6 +2290,15 @@ def monitor_view(archivo):
     '</div>'
     if not portafolio.get('telegram_chat_id') and not chat_id_de(portafolio) else ''
 )
++(
+    '<div style="width:100%;margin-top:12px">'
+    '<button onclick="resetearMonitor()" '
+    'style="padding:6px 16px;border-radius:980px;font-size:11px;cursor:pointer;'
+    'background:rgba(255,69,58,0.08);color:#ff453a;border:1px solid rgba(255,69,58,0.2);'
+    'font-family:DM Sans,sans-serif">🔄 Resetear historial del monitor</button>'
+    '<span style="color:#6e6e73;font-size:11px;margin-left:10px">'
+    'Úsalo si creaste un portafolio nuevo o cambiaste la composición</span>'
+)
 + '</div>'
     )
 
@@ -2313,6 +2331,15 @@ def monitor_view(archivo):
         '</div></div>'
         '<style>@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}</style>'
         '<script>setTimeout(()=>location.reload(),60000);</script>'
+        '<script>'
+'async function resetearMonitor(){'
+'  if(!confirm("¿Resetear el historial del monitor? Se borrarán los días sin señal y el estado acumulado.")) return;'
+f'  const r = await fetch("/api/reset-monitor/{archivo}", {{method:"POST"}});'
+'  const d = await r.json();'
+'  if(d.ok){ alert("✅ Monitor reseteado. Empezará desde cero."); location.reload(); }'
+'  else alert("Error: "+d.error);'
+'}'
+'</script>'
     )
     return pagina(f'Monitor — {portafolio["nombre"]}', contenido)
 
@@ -2366,6 +2393,17 @@ def api_toggle_monitor(archivo):
         print(f"❌ toggle-monitor error: {e}")
     return redirect(url_for('monitor_view', archivo=archivo))
  
+@app.route('/api/reset-monitor/<archivo>', methods=['POST'])
+def api_reset_monitor(archivo):
+    redir = verificar_acceso(archivo)
+    if redir: return jsonify({'ok': False, 'error': 'No autorizado'})
+    try:
+        ruta_monitor = os.path.join(DATOS_DIR, "portafolios", f"monitor_{archivo}")
+        if os.path.exists(ruta_monitor):
+            os.remove(ruta_monitor)
+        return jsonify({'ok': True})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
 
 
 # ============================================================
