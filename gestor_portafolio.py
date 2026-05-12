@@ -211,7 +211,7 @@ def guardar_composicion(nombre_archivo, pesos_dict):
     print(f"✅ Composición guardada en '{data['nombre']}'.")
 
 # ============================================================
-# GUARDAR APORTE
+# MANEJAR APORTES
 # ============================================================
 
 def guardar_aporte(nombre_archivo, aporte):
@@ -219,6 +219,13 @@ def guardar_aporte(nombre_archivo, aporte):
     data = _leer(ruta)
     data['aportes'].append(aporte)
     _escribir(ruta, data)
+
+def borrar_aportes(nombre_archivo):
+    ruta = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}"
+    data = _leer(ruta)
+    data['aportes'] = []
+    _escribir(ruta, data)
+    return True
 
 # ============================================================
 # GUARDAR REGISTRO HISTÓRICO DIARIO
