@@ -217,42 +217,177 @@ def enviar_resumenes_diarios():
         print(f"❌ Error en enviar_resumenes_diarios: {e}")
 
 
-def enviar_buenos_dias_monitor():
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] ☀️ Enviando buenos días del monitor...")
+def enviar_apertura():
+    """9:00am — valor actual + activos a monitorear hoy."""
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] ☀️ Enviando mensaje de apertura...")
     try:
-        from monitor import enviar_buenos_dias, leer_portafolios_activos
+        from monitor import leer_portafolios_activos, chat_id_de
         portafolios = leer_portafolios_activos()
+
         for archivo, portafolio in portafolios:
             try:
                 ruta = os.path.join(CARPETA_PORTAFOLIOS, archivo)
                 with open(ruta, 'r', encoding='utf-8') as f:
-                    portafolio_fresco = json.load(f)
-                enviar_buenos_dias(archivo, portafolio_fresco)
-            except Exception as e:
-                print(f"❌ Error buenos días {archivo}: {e}")
-    except Exception as e:
-        print(f"❌ Error general buenos días monitor: {e}")
+                    p = json.load(f)
 
+                chat_id = chat_id_de(p)
+                if not chat_id:
+                    continue
 
-def enviar_cierre_monitor():
-    print(f"[{datetime.now().strftime('%H:%M:%S')}] 📋 Enviando reportes de cierre...")
-    try:
-        from monitor import leer_portafolios_activos, leer_estado, reporte_cierre
-        portafolios = leer_portafolios_activos()
-        for archivo, portafolio in portafolios:
-            try:
-                ruta = os.path.join(CARPETA_PORTAFOLIOS, archivo)
-                with open(ruta, 'r', encoding='utf-8') as f:
-                    portafolio_fresco = json.load(f)
-                estado = leer_estado(archivo)
-                if estado:
-                    reporte_cierre(archivo, portafolio_fresco, estado)
+                # Valor actual del portafolio
+                datos_tr = calcular_tiempo_real_simple(p)
+                tickers  = list(p.get('composicion', {}).keys())
+
+                from datetime import datetime as dt
+                ahora     = dt.utcnow().replace(tzinfo=None) - __import__('datetime').timedelta(hours=5)
+                dia       = ["lunes","martes","miércoles","jueves","viernes"][ahora.weekday()]
+                fecha_str = ahora.strftime('%d/%m')
+
+                if datos_tr:
+                    gl     = datos_tr['ganancia_total']
+                    signo  = "+" if gl >= 0 else ""
+                    emoji  = "📈" if gl >= 0 else "📉"
+                    valor_html = (
+                        f"\n💰 Portafolio hoy: <b>${datos_tr['total_valor']:,.0f} COP</b>\n"
+                        f"{emoji} Ganancia real: <b>{signo}${gl:,.0f} ({signo}{datos_tr['rentabilidad_total']}%)</b>"
+                    )
                 else:
-                    print(f"⚠️ Sin estado de monitor para {archivo}")
+                    valor_html = "\n💰 Sin inversiones registradas aún."
+
+                msg = (
+                    f"☀️ <b>Buenos días — {dia} {fecha_str}</b>\n"
+                    f"📋 <b>{p.get('nombre','Portafolio')}</b>"
+                    f"{valor_html}\n\n"
+                    f"🔍 Monitoreando: <b>{', '.join(tickers)}</b>\n"
+                    f"⏰ En 30 min abre el NYSE. Te aviso si encuentro señales de entrada."
+                )
+
+                enviar_telegram(chat_id, msg)
+                print(f"  ☀️ Apertura enviada: {p.get('nombre')}")
+
+            except Exception as e:
+                print(f"❌ Error apertura {archivo}: {e}")
+
+    except Exception as e:
+        print(f"❌ Error general apertura: {e}")
+
+
+def enviar_cierre():
+    """4:05pm — valor de cierre + resumen del mercado + plan si es viernes."""
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] 📋 Enviando mensaje de cierre...")
+    try:
+        from monitor import leer_portafolios_activos, chat_id_de, leer_estado
+        import anthropic, os as _os
+
+        portafolios = leer_portafolios_activos()
+
+        for archivo, portafolio in portafolios:
+            try:
+                ruta = os.path.join(CARPETA_PORTAFOLIOS, archivo)
+                with open(ruta, 'r', encoding='utf-8') as f:
+                    p = json.load(f)
+
+                chat_id = chat_id_de(p)
+                if not chat_id:
+                    continue
+
+                datos_tr  = calcular_tiempo_real_simple(p)
+                estado    = leer_estado(archivo)
+                resultados = estado.get('resultados', [])
+
+                from datetime import datetime as dt
+                ahora      = dt.utcnow() - __import__('datetime').timedelta(hours=5)
+                es_viernes = ahora.weekday() == 4
+
+                # Valor de cierre
+                if datos_tr:
+                    gl    = datos_tr['ganancia_total']
+                    signo = "+" if gl >= 0 else ""
+                    emoji = "📈" if gl >= 0 else "📉"
+                    valor_html = (
+                        f"💰 Cierre: <b>${datos_tr['total_valor']:,.0f} COP</b>\n"
+                        f"{emoji} Ganancia real: <b>{signo}${gl:,.0f} ({signo}{datos_tr['rentabilidad_total']}%)</b>"
+                    )
+                else:
+                    valor_html = "💰 Sin inversiones registradas."
+
+                # Resumen de activos
+                resumen_activos = ""
+                if resultados:
+                    for r in sorted(resultados, key=lambda x: x['score'], reverse=True):
+                        em = {"ENTRAR":"🟢","VIGILAR":"🟡","NEUTRAL":"⚪"}.get(r['senal'],'⚪')
+                        resumen_activos += (
+                            f"{em} <b>{r['ticker']}</b> ${r['precio']:,.2f} · "
+                            f"Score {r['score']}/10 · RSI {r['rsi']}\n"
+                        )
+
+                # Análisis IA — corto y puntual
+                ia_txt = ""
+                try:
+                    client = anthropic.Anthropic(api_key=_os.environ.get("ANTHROPIC_API_KEY",""))
+                    resumen_data = "\n".join(
+                        f"- {r['ticker']}: ${r['precio']} | RSI {r['rsi']} | Score {r['score']}/10 | {r['senal']} | tendencia {r['tendencia']:+.1f}%"
+                        for r in resultados
+                    ) if resultados else "Sin datos de mercado hoy."
+
+                    entradas = [r['ticker'] for r in resultados if r['senal'] == 'ENTRAR']
+                    vigilar  = [r['ticker'] for r in resultados if r['senal'] == 'VIGILAR']
+
+                    prompt_base = (
+                        f"Eres el analista de {p.get('propietario','el inversor')}. "
+                        f"Hoy cerraron estos activos:\n{resumen_data}\n\n"
+                        f"Escribe exactamente 3 oraciones:\n"
+                        f"1. Cómo estuvo el mercado hoy en general (una frase).\n"
+                        f"2. El activo más destacado del día, positivo o negativo (una frase con número).\n"
+                        f"3. Qué vigilar mañana (una frase concreta).\n"
+                        f"Sin asteriscos. Sin bullets. Directo. Máximo 60 palabras en total."
+                    )
+
+                    if es_viernes:
+                        prompt_base += (
+                            f"\n\nAdemás agrega UN párrafo final de máximo 2 oraciones con el plan "
+                            f"para la semana que viene: qué activos priorizar y si el momento es "
+                            f"favorable para entrar o esperar. Muy puntual."
+                        )
+
+                    resp = client.messages.create(
+                        model="claude-sonnet-4-5",
+                        max_tokens=200,
+                        messages=[{"role":"user","content": prompt_base}]
+                    )
+                    ia_txt = resp.content[0].text.strip()
+                except Exception as e:
+                    print(f"❌ IA cierre error: {e}")
+
+                # Armar mensaje final
+                dias_sin = estado.get('dias_consecutivos_sin_senal', 0)
+                senal_resumen = ""
+                if entradas:
+                    senal_resumen = f"\n🎯 Señales de entrada hoy: <b>{', '.join(entradas)}</b>"
+                elif vigilar:
+                    senal_resumen = f"\n👁 En vigilancia: <b>{', '.join(vigilar)}</b>"
+                else:
+                    senal_resumen = f"\n⚪ Sin señales de entrada hoy"
+
+                if dias_sin > 0:
+                    senal_resumen += f" · {dias_sin} días hábiles sin señal"
+
+                msg = (
+                    f"📋 <b>Cierre de mercado — {p.get('nombre','Portafolio')}</b>\n\n"
+                    f"{valor_html}\n\n"
+                    f"<b>Activos hoy:</b>\n{resumen_activos}"
+                    f"{senal_resumen}\n\n"
+                    f"💬 {ia_txt}"
+                )
+
+                enviar_telegram(chat_id, msg)
+                print(f"  📋 Cierre enviado: {p.get('nombre')}")
+
             except Exception as e:
                 print(f"❌ Error cierre {archivo}: {e}")
+
     except Exception as e:
-        print(f"❌ Error general cierre monitor: {e}")
+        print(f"❌ Error general cierre: {e}")
 
 
 def loop_scheduler():
@@ -269,20 +404,15 @@ def loop_scheduler():
             hoy   = ahora.date()
             es_dia_habil = ahora.weekday() < 5
 
-            # 8:00am o después — resumen diario de valor
-            if ahora.hour >= 8 and enviado_resumen != hoy:
-                enviar_resumenes_diarios()
-                enviado_resumen = hoy
-
-            # 9:00am o después — buenos días monitor (días hábiles)
+            # 9:00am o después — apertura (días hábiles)
             if ahora.hour >= 9 and es_dia_habil and enviado_buenos != hoy:
-                enviar_buenos_dias_monitor()
-                enviado_buenos = hoy
+                enviar_apertura()
+            enviado_buenos = hoy
 
-            # 4:05pm o después — reporte de cierre (días hábiles)
+            # 4:05pm o después — cierre (días hábiles)
             if (ahora.hour > 16 or (ahora.hour == 16 and ahora.minute >= 5)) and es_dia_habil and enviado_cierre != hoy:
-                enviar_cierre_monitor()
-                enviado_cierre = hoy
+                enviar_cierre()
+            enviado_cierre = hoy
 
         except Exception as e:
             print(f"❌ Error en scheduler loop: {e}")

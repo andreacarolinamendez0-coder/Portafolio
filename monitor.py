@@ -370,14 +370,14 @@ def ciclo_portafolio(archivo, portafolio):
         ia_txt = analisis_ia(resultados, portafolio, tipo="ciclo")
         for r in entradas:
             msg = (
-                f"🟢 <b>POSIBLE ENTRADA — {r['ticker']}</b>\n"
-                f"📊 Score: <b>{r['score']}/10</b> | RSI: {r['rsi']}\n"
-                f"💵 Precio: ${r['precio']:,} | MA20: ${r['ma20']:,} | MA50: ${r['ma50']:,}\n"
-                f"📈 Tendencia 20d: {r['tendencia']:+.1f}% | Vol ratio: {r['vol_ratio']}x\n"
-                f"🕐 {ahora_str}\n"
-            )
+                f"🟢 <b>SEÑAL DE ENTRADA — {r['ticker']}</b>\n\n"
+                f"💵 Precio: <b>${r['precio']:,} USD</b>\n"
+                f"📊 Score: <b>{r['score']}/10</b> · RSI: {r['rsi']} · "
+                f"Tendencia: {r['tendencia']:+.1f}%\n"
+                f"📈 MA20: ${r['ma20']:,} · MA50: ${r['ma50']:,}\n"
+        )
             if ia_txt:
-                msg += f"\n💬 <i>{ia_txt}</i>"
+                msg += f"\n💬 {ia_txt}"
             telegram(chat_id, msg)
             print(f"  ✅ Alerta ENTRAR enviada: {r['ticker']}")
 

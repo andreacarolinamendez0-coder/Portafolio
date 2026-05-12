@@ -2853,21 +2853,11 @@ def api_ticker_listo(ticker):
 def api_test_telegram():
     if not session.get('es_admin'):
         return jsonify({'error': 'No autorizado'})
-    from scheduler import enviar_resumenes_diarios, enviar_buenos_dias_monitor, enviar_cierre_monitor
+    from scheduler import enviar_resumenes_diarios, enviar_apertura, enviar_cierre
     enviar_resumenes_diarios()
-    enviar_buenos_dias_monitor()
-    enviar_cierre_monitor()
-    return jsonify({
-        'ok': True,
-        'mensaje': 'Los 3 mensajes fueron disparados. Revisa Telegram.'
-    })
-    # Intentar enviar
-    enviar_resumenes_diarios()
-    return jsonify({
-        'ok': True,
-        'mensaje': 'Resúmenes enviados. Revisa Telegram.',
-        'usuarios': info
-    })
+    enviar_apertura()
+    enviar_cierre()
+    return jsonify({'ok': True, 'mensaje': 'Los 3 mensajes fueron disparados. Revisa Telegram.'})
 
 @app.route('/api/profile', methods=['GET'])
 def get_profile():
