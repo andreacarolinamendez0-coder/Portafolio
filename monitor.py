@@ -418,6 +418,7 @@ def reporte_cierre(archivo, portafolio, estado):
         return
 
     chat_id  = chat_id_de(portafolio)
+    print(f"🔍 DEBUG cierre — archivo: {archivo} | owner: {portafolio.get('owner')} | chat_id: {chat_id}")  # ← agrega esta línea
     hoy_str  = hora_colombia().strftime("%A %d de %B de %Y")
     dias_sin = estado.get("dias_consecutivos_sin_senal", 0)
 
@@ -520,7 +521,10 @@ def _loop_monitor():
                 for archivo, portafolio in portafolios:
                     if buenos_enviado.get(archivo) != hoy:
                         try:
-                            enviar_buenos_dias(archivo, portafolio)
+                            ruta_fresca = os.path.join(PORTS_DIR, archivo)
+                            with open(ruta_fresca, 'r', encoding='utf-8') as f:
+                                portafolio_fresco = json.load(f)
+                            enviar_buenos_dias(archivo, portafolio_fresco)
                         except Exception as e:
                             print(f"❌ Error buenos días {archivo}: {e}")
                         buenos_enviado[archivo] = hoy
@@ -532,25 +536,32 @@ def _loop_monitor():
                     ultimo = ultimo_ciclo.get(archivo)
                     if ultimo is None or (ahora - ultimo).total_seconds() >= INTERVALO_MINUTOS * 60:
                         try:
-                            estado = ciclo_portafolio(archivo, portafolio)
+                            ruta_fresca = os.path.join(PORTS_DIR, archivo)
+                            with open(ruta_fresca, 'r', encoding='utf-8') as f:
+                                portafolio_fresco = json.load(f)
+                            estado = ciclo_portafolio(archivo, portafolio_fresco)
                             if estado:
-                                verificar_alerta_suboptimal(archivo, portafolio, estado)
+                                verificar_alerta_suboptimal(archivo, portafolio_fresco, estado)
                         except Exception as e:
                             print(f"❌ Error ciclo {archivo}: {e}")
                         ultimo_ciclo[archivo] = ahora
-                time.sleep(60)
+                    time.sleep(60)
 
             # ── Reporte de cierre ──────────────────────────
             elif es_hora_cierre():
                 for archivo, portafolio in portafolios:
                     if cierre_enviado.get(archivo) != hoy:
-                        estado = leer_estado(archivo)
-                        if estado:
-                            try:
-                                reporte_cierre(archivo, portafolio, estado)
-                            except Exception as e:
-                                print(f"❌ Error reporte cierre {archivo}: {e}")
-                        cierre_enviado[archivo] = hoy
+                       estado = leer_estado(archivo)
+                       if estado:
+                        try:
+                            # Releer portafolio fresco para tener owner y chat_id actualizados
+                            ruta_fresca = os.path.join(PORTS_DIR, archivo)
+                            with open(ruta_fresca, 'r', encoding='utf-8') as f:
+                                portafolio_fresco = json.load(f)
+                            reporte_cierre(archivo, portafolio_fresco, estado)
+                        except Exception as e:
+                            print(f"❌ Error reporte cierre {archivo}: {e}")
+                        cierre_enviado[archivo] = (hoy)
                 time.sleep(60)
 
             # ── Mercado cerrado: dormir ────────────────────
