@@ -2993,6 +2993,107 @@ def api_ultima_actualizacion():
         return jsonify({'timestamp':hora})
     except: return jsonify({'timestamp':'No disponible'})
 
+@app.route('/telegram-webhook', methods=['POST'])
+def telegram_webhook():
+    """
+    Recibe actualizaciones de Telegram (mensajes y callbacks de botones).
+    IBKR no tiene nada que ver aquí — esto es para los botones
+    "Ya entré / No voy a entrar / Sigue informando" del monitor.
+    """
+    try:
+        data = request.get_json(silent=True)
+        if not data:
+            return jsonify({'ok': True})
+ 
+        # ── Callback de botón inline ───────────────────────────
+        if 'callback_query' in data:
+            cb      = data['callback_query']
+            chat_id = str(cb['message']['chat']['id'])
+            cb_data = cb.get('data', '')
+ 
+            # Confirmar recepción a Telegram (evita que reenvíe)
+            try:
+                requests.post(
+                    f"https://api.telegram.org/bot{os.environ.get('TELEGRAM_BOT_TOKEN', '')}/answerCallbackQuery",
+                    json={"callback_query_id": cb['id']},
+                    timeout=5
+                )
+            except:
+                pass
+ 
+            # Procesar decisión del usuario
+            from monitor import procesar_callback_telegram
+            procesar_callback_telegram(cb_data, chat_id)
+            return jsonify({'ok': True})
+ 
+        # ── Mensaje de texto (comandos futuros) ────────────────
+        if 'message' in data:
+            msg     = data['message']
+            chat_id = str(msg['chat']['id'])
+            texto   = msg.get('text', '').strip().lower()
+ 
+            # Comando /start — respuesta básica
+            if texto == '/start':
+                requests.post(
+                    f"https://api.telegram.org/bot{os.environ.get('TELEGRAM_BOT_TOKEN', '')}/sendMessage",
+                    json={
+                        "chat_id":    chat_id,
+                        "text":       f"👋 Hola! Tu Chat ID es: <b>{chat_id}</b>\n\nCópialo y pégalo en tu perfil del sistema para activar las alertas.",
+                        "parse_mode": "HTML"
+                    },
+                    timeout=5
+                )
+ 
+        return jsonify({'ok': True})
+ 
+    except Exception as e:
+        print(f"❌ Error webhook Telegram: {e}")
+        return jsonify({'ok': True})  # Siempre devolver 200 a Telegram
+ 
+ 
+def registrar_webhook_telegram():
+    """
+    Registra la URL del webhook en Telegram automáticamente.
+    Llama esta función desde arrancar_monitor() en dashboard.py.
+    """
+    try:
+        # En Railway, la URL pública es la variable RAILWAY_STATIC_URL
+        # o puedes ponerla manualmente como variable de entorno WEBHOOK_URL
+        base_url = (
+            os.environ.get('WEBHOOK_URL') or
+            os.environ.get('RAILWAY_STATIC_URL') or
+            os.environ.get('RAILWAY_PUBLIC_DOMAIN')
+        )
+        if not base_url:
+            print("⚠️ Sin URL pública para webhook de Telegram — configura WEBHOOK_URL en Railway")
+            return
+ 
+        if not base_url.startswith('https://'):
+            base_url = f'https://{base_url}'
+ 
+        webhook_url = f"{base_url.rstrip('/')}/telegram-webhook"
+        token       = os.environ.get('TELEGRAM_BOT_TOKEN', '')
+ 
+        if not token:
+            print("⚠️ Sin TELEGRAM_BOT_TOKEN para registrar webhook")
+            return
+ 
+        r = requests.post(
+            f"https://api.telegram.org/bot{token}/setWebhook",
+            json={"url": webhook_url},
+            timeout=10
+        )
+        result = r.json()
+        if result.get('ok'):
+            print(f"✅ Webhook de Telegram registrado: {webhook_url}")
+        else:
+            print(f"⚠️ Error registrando webhook: {result.get('description')}")
+ 
+    except Exception as e:
+        print(f"❌ Error registrando webhook Telegram: {e}")
+ 
+ 
+
 # ============================================================
 # MAIN
 # ============================================================
