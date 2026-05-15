@@ -16,6 +16,7 @@ def arrancar_monitor():
     from scheduler import iniciar_scheduler
     iniciar_monitor()
     iniciar_scheduler()
+    registrar_webhook_telegram()
 
 threading.Thread(target=arrancar_monitor, daemon=True).start()
 
@@ -2166,9 +2167,9 @@ def monitor_view(archivo):
 
                 # Precio grande
                 f'<div style="margin-bottom:12px">'
-                f'<span style="color:#f5f5f7;font-size:22px;font-weight:600">${r["precio"]:,.2f}</span>'
-                f'<span style="color:{"#30d158" if r["tendencia"]>0 else "#ff453a"};font-size:13px;margin-left:8px">'
-                f'{r["tendencia"]:+.1f}% (20d)</span>'
+                f'<span id="precio-{r["ticker"]}" style="color:#f5f5f7;font-size:22px;font-weight:600">${r["precio"]:,.2f}</span>'
+                f'<span id="cambio-{r["ticker"]}" style="color:{"#30d158" if r.get("cambio_dia",0)>=0 else "#ff453a"};font-size:13px;margin-left:8px">'
+                f'{r.get("cambio_dia", r["tendencia"]):+.2f}% hoy</span>'
                 f'</div>'
 
                 # Score bar
@@ -2326,11 +2327,42 @@ def monitor_view(archivo):
         'font-size:12px;font-family:DM Sans,sans-serif;cursor:pointer;'
         'background:rgba(255,255,255,0.05);color:#6e6e73;border:1px solid rgba(255,255,255,0.08)">'
         'Actualizar</button>'
-        '<p style="color:#3d3d3f;font-size:11px;margin-top:8px">'
-        'Se actualiza automáticamente cada 60 segundos</p>'
+        f'<p id="rt-timestamp" style="color:#3d3d3f;font-size:11px;margin-top:8px">'
+        f'{"⚡ Actualizando cada 15s" if mercado_abierto() else "🔒 Mercado cerrado"}</p>'  
         '</div></div>'
         '<style>@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}</style>'
-        '<script>setTimeout(()=>location.reload(),60000);</script>'
+        f'<script>'
+        f'const MERCADO_ABIERTO = {"true" if mercado_abierto() else "false"};'
+        f'const ARCHIVO = "{archivo}";'
+        f'async function actualizarPreciosRT(){{'
+        f'  try{{'
+        f'    const r = await fetch("/api/precios-rt/" + ARCHIVO);'
+        f'    const d = await r.json();'
+        f'    if(!d.ok) return;'
+        f'    Object.entries(d.precios).forEach(([ticker, data]) => {{'
+        f'      const elP = document.getElementById("precio-" + ticker);'
+        f'      if(elP) elP.textContent = "$" + data.precio.toLocaleString("en-US", {{minimumFractionDigits:2, maximumFractionDigits:2}});'
+        f'      const elC = document.getElementById("cambio-" + ticker);'
+        f'      if(elC){{'
+        f'        const signo = data.cambio_dia >= 0 ? "+" : "";'
+        f'        elC.textContent = signo + data.cambio_dia.toFixed(2) + "% hoy";'
+        f'        elC.style.color = data.cambio_dia >= 0 ? "#30d158" : "#ff453a";'
+        f'      }}'
+        f'    }});'
+        f'    const ts = document.getElementById("rt-timestamp");'
+        f'    if(ts){{'
+        f'      const h = new Date().toLocaleTimeString("es-CO", {{hour:"2-digit",minute:"2-digit",second:"2-digit"}});'
+        f'      ts.textContent = "⚡ Actualizado: " + h;'
+        f'    }}'
+        f'  }}catch(e){{ console.error("RT error:", e); }}'
+        f'}}'
+        f'if(MERCADO_ABIERTO){{'
+        f'  actualizarPreciosRT();'
+        f'  setInterval(actualizarPreciosRT, 15000);'
+        f'}} else {{'
+        f'  setTimeout(()=>location.reload(), 60000);'
+        f'}}'
+        f'</script>'
         '<script>'
 'async function resetearMonitor(){'
 '  if(!confirm("¿Resetear el historial del monitor? Se borrarán los días sin señal y el estado acumulado.")) return;'
@@ -2985,6 +3017,38 @@ def api_recolector():
     try: subprocess.run(["python","recolector.py"],check=False,timeout=120); return jsonify({'ok':True})
     except Exception as e: return jsonify({'ok':False,'error':str(e)})
 
+@app.route('/api/precios-rt/<archivo>')
+def api_precios_rt(archivo):
+    redir = verificar_acceso(archivo)
+    if redir:
+        return jsonify({'error': 'No autorizado'})
+    try:
+        from gestor_portafolio import leer_portafolio
+        portafolio  = leer_portafolio(archivo)
+        tickers     = list(portafolio.get('composicion', {}).keys())
+        finnhub_key = os.environ.get('FINNHUB_API_KEY', '')
+        precios     = {}
+        for tk in tickers:
+            try:
+                r = requests.get(
+                    'https://finnhub.io/api/v1/quote',
+                    params={'symbol': tk, 'token': finnhub_key},
+                    timeout=5
+                )
+                d = r.json()
+                if d.get('c'):
+                    precios[tk] = {
+                        'precio':     round(float(d['c']), 2),
+                        'cambio_dia': round(float(d.get('dp', 0)), 2),
+                        'maximo':     round(float(d.get('h', 0)), 2),
+                        'minimo':     round(float(d.get('l', 0)), 2),
+                    }
+            except:
+                continue
+        return jsonify({'ok': True, 'precios': precios})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
 @app.route('/api/ultima-actualizacion')
 def api_ultima_actualizacion():
     try:
@@ -2992,6 +3056,10 @@ def api_ultima_actualizacion():
         hora=datetime.fromtimestamp(mtime).strftime("%d %b %Y · %I:%M %p")
         return jsonify({'timestamp':hora})
     except: return jsonify({'timestamp':'No disponible'})
+
+# ============================================================
+# WEBHOOK DE TELEGRAM
+# ============================================================
 
 @app.route('/telegram-webhook', methods=['POST'])
 def telegram_webhook():
@@ -3091,7 +3159,6 @@ def registrar_webhook_telegram():
  
     except Exception as e:
         print(f"❌ Error registrando webhook Telegram: {e}")
- 
  
 
 # ============================================================
