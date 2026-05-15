@@ -48,16 +48,50 @@ DIAS_SIN_SENAL_MAX = 5
 # TIEMPO
 # ─────────────────────────────────────────────────────────────
 
+from datetime import datetime
+import pytz
+
+TZ_COLOMBIA = pytz.timezone("America/Bogota")
+TZ_NUEVA_YORK = pytz.timezone("America/New_York")
+
 def hora_colombia():
-    return datetime.utcnow() - timedelta(hours=5)
+    """Hora actual en Colombia."""
+    return datetime.now(TZ_COLOMBIA)
+
+def hora_nueva_york():
+    """Hora actual en Nueva York (maneja DST automáticamente)."""
+    return datetime.now(TZ_NUEVA_YORK)
 
 def mercado_abierto():
-    ahora = hora_colombia()
-    if ahora.weekday() >= 5:
+    """
+    NYSE abre 9:30am–4:00pm hora Nueva York, lunes a viernes.
+    Usar hora NY directamente elimina el problema del DST.
+    """
+    ahora_ny = hora_nueva_york()
+    if ahora_ny.weekday() >= 5:
         return False
-    apertura = ahora.replace(hour=9, minute=30, second=0, microsecond=0)
-    cierre   = ahora.replace(hour=16, minute=0, second=0, microsecond=0)
-    return apertura <= ahora <= cierre
+    apertura = ahora_ny.replace(hour=9, minute=30, second=0, microsecond=0)
+    cierre   = ahora_ny.replace(hour=16, minute=0, second=0, microsecond=0)
+    return apertura <= ahora_ny <= cierre
+
+def es_hora_buenos_dias():
+    """9:00am–9:25am hora Colombia (antes de que abra NYSE)."""
+    ahora_col = hora_colombia()
+    if ahora_col.weekday() >= 5:
+        return False
+    inicio = ahora_col.replace(hour=9, minute=0, second=0, microsecond=0)
+    fin    = ahora_col.replace(hour=9, minute=25, second=0, microsecond=0)
+    return inicio <= ahora_col <= fin
+
+def es_hora_cierre():
+    """Ventana post-cierre NYSE, hora Colombia."""
+    ahora_ny = hora_nueva_york()
+    if ahora_ny.weekday() >= 5:
+        return False
+    # 4:00pm–4:45pm NY = cuando cierra el mercado
+    inicio = ahora_ny.replace(hour=16, minute=0, second=0, microsecond=0)
+    fin    = ahora_ny.replace(hour=16, minute=45, second=0, microsecond=0)
+    return inicio <= ahora_ny <= fin
 
 def es_hora_buenos_dias():
     ahora = hora_colombia()

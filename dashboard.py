@@ -8,7 +8,19 @@ import warnings
 warnings.filterwarnings('ignore')
 from styles import CSS
 import subprocess, requests, time, threading
+import pytz
+import warnings
 
+TZ_NY  = pytz.timezone("America/New_York")
+TZ_COL = pytz.timezone("America/Bogota")
+
+def mercado_abierto_ahora():
+    ny = datetime.now(TZ_NY)
+    if ny.weekday() >= 5:
+        return False
+    apertura = ny.replace(hour=9, minute=30, second=0, microsecond=0)
+    cierre   = ny.replace(hour=16, minute=0, second=0, microsecond=0)
+    return apertura <= ny <= cierre
 
 def arrancar_monitor():
     time.sleep(15)
@@ -2333,34 +2345,48 @@ def monitor_view(archivo):
         '<style>@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.4}}</style>'
         '<script>'
         'function mercadoAbiertoAhora(){'
-        '  const col=new Date(new Date().toLocaleString("en-US",{timeZone:"America/Bogota"}));'
-        '  const d=col.getDay(),h=col.getHours()*60+col.getMinutes();'
+        '  var ny=new Date(new Date().toLocaleString("en-US",{timeZone:"America/New_York"}));'
+        '  var d=ny.getDay(),h=ny.getHours()*60+ny.getMinutes();'
         '  return d>=1&&d<=5&&h>=570&&h<=960;'
         '}'
-        f'const ARCHIVO="{archivo}";'
-        'const MA=mercadoAbiertoAhora();'
+        f'var ARCHIVO="{archivo}";'
+        'var MA=mercadoAbiertoAhora();'
         'console.log("Mercado abierto:",MA);'
         'async function actualizarPreciosRT(){'
         '  try{'
-        '    const r=await fetch("/api/precios-rt/"+ARCHIVO);'
-        '    const d=await r.json();'
+        '    var r=await fetch("/api/precios-rt/"+ARCHIVO);'
+        '    var d=await r.json();'
         '    if(!d.ok)return;'
-        '    Object.entries(d.precios).forEach(([tk,data])=>{'
-        '      const elP=document.getElementById("precio-"+tk);'
-        '      if(elP)elP.textContent="$"+data.precio.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});'
-        '      const elC=document.getElementById("cambio-"+tk);'
-        '      if(elC){const s=data.cambio_dia>=0?"+":"";elC.textContent=s+data.cambio_dia.toFixed(2)+"% hoy";elC.style.color=data.cambio_dia>=0?"#30d158":"#ff453a";}'
+        '    Object.entries(d.precios).forEach(function(entry){'
+        '      var tk=entry[0],data=entry[1];'
+        '      var elP=document.getElementById("precio-"+tk);'
+        '      if(elP){'
+        '        if(data.mercado_rt){'
+        '          elP.textContent="$"+data.precio.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});'
+        '        }else{'
+        '          elP.textContent="$"+data.precio.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})+" (cierre)";'
+        '        }'
+        '      }'
+        '      var elC=document.getElementById("cambio-"+tk);'
+        '      if(elC){'
+        '        var s=data.cambio_dia>=0?"+":"";'
+        '        elC.textContent=s+data.cambio_dia.toFixed(2)+"% hoy";'
+        '        elC.style.color=data.cambio_dia>=0?"#30d158":"#ff453a";'
+        '      }'
         '    });'
-        '    const ts=document.getElementById("rt-timestamp");'
-        '    if(ts){const h=new Date().toLocaleTimeString("es-CO",{hour:"2-digit",minute:"2-digit",second:"2-digit"});ts.textContent="⚡ Actualizado: "+h;}'
+        '    var ts=document.getElementById("rt-timestamp");'
+        '    if(ts){'
+        '      var h=new Date().toLocaleTimeString("es-CO",{hour:"2-digit",minute:"2-digit",second:"2-digit"});'
+        '      ts.textContent=d.mercado_abierto?"⚡ Actualizado: "+h:"🔒 Cierre: "+h;'
+        '    }'
         '  }catch(e){console.error("RT error:",e);}'
         '}'
         'if(MA){actualizarPreciosRT();setInterval(actualizarPreciosRT,15000);}'
-        'else{setTimeout(()=>location.reload(),60000);}'
+        'else{setTimeout(function(){location.reload();},60000);}'
         'async function resetearMonitor(){'
-        '  if(!confirm("¿Resetear el historial del monitor?")) return;'
-        f'  const r=await fetch("/api/reset-monitor/{archivo}",{{method:"POST"}});'
-        '  const d=await r.json();'
+        '  if(!confirm("¿Resetear el historial del monitor?"))return;'
+        f'  var r=await fetch("/api/reset-monitor/{archivo}",{{method:"POST"}});'
+        '  var d=await r.json();'
         '  if(d.ok){alert("✅ Monitor reseteado.");location.reload();}'
         '  else alert("Error: "+d.error);'
         '}'
@@ -3011,6 +3037,17 @@ def api_recolector():
     try: subprocess.run(["python","recolector.py"],check=False,timeout=120); return jsonify({'ok':True})
     except Exception as e: return jsonify({'ok':False,'error':str(e)})
 
+import pytz
+from datetime import datetime
+
+def mercado_abierto_ahora():
+    ny = datetime.now(pytz.timezone("America/New_York"))
+    if ny.weekday() >= 5:
+        return False
+    apertura = ny.replace(hour=9, minute=30, second=0, microsecond=0)
+    cierre   = ny.replace(hour=16, minute=0, second=0, microsecond=0)
+    return apertura <= ny <= cierre
+
 @app.route('/api/precios-rt/<path:archivo>')
 def api_precios_rt(archivo):
     redir = verificar_acceso(archivo)
@@ -3021,6 +3058,7 @@ def api_precios_rt(archivo):
         portafolio  = leer_portafolio(archivo)
         tickers     = list(portafolio.get('composicion', {}).keys())
         finnhub_key = os.environ.get('FINNHUB_API_KEY', '')
+        mercado_rt  = mercado_abierto_ahora()
         precios     = {}
         for tk in tickers:
             try:
@@ -3032,14 +3070,16 @@ def api_precios_rt(archivo):
                 d = r.json()
                 if d.get('c'):
                     precios[tk] = {
-                        'precio':     round(float(d['c']), 2),
-                        'cambio_dia': round(float(d.get('dp', 0)), 2),
-                        'maximo':     round(float(d.get('h', 0)), 2),
-                        'minimo':     round(float(d.get('l', 0)), 2),
+                        'precio':      round(float(d['c']), 2),   # último precio
+                        'cierre_ant':  round(float(d.get('pc', 0)), 2),  # cierre anterior
+                        'cambio_dia':  round(float(d.get('dp', 0)), 2),
+                        'maximo':      round(float(d.get('h', 0)), 2),
+                        'minimo':      round(float(d.get('l', 0)), 2),
+                        'mercado_rt':  mercado_rt,  # si está abierto o no
                     }
             except:
                 continue
-        return jsonify({'ok': True, 'precios': precios})
+        return jsonify({'ok': True, 'precios': precios, 'mercado_abierto': mercado_rt})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)})
 
