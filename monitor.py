@@ -7,12 +7,16 @@ monitor.py — Motor de monitoreo de mercado
 - Buenos días a las 9:15am Colombia (antes de abrir)
 - Reporte de cierre a las 4:00-4:45pm Colombia (Telegram + app)
 - Recomendación de entrada subóptima si pasa 1 semana sin señal
+
+FUENTE DE DATOS: Finnhub.io (reemplaza yfinance)
+- Precios en tiempo real (sin delay)
+- OHLC histórico diario
+- Variable de entorno requerida: FINNHUB_API_KEY
 """
 
 import os, json, time, threading, requests
 from datetime import datetime, timedelta
 import pandas as pd
-import yfinance as yf
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -20,6 +24,7 @@ BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
 DATOS_DIR = os.path.join(BASE_DIR, "datos")
 PORTS_DIR = os.path.join(DATOS_DIR, "portafolios")
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+FINNHUB_KEY = os.environ.get("FINNHUB_API_KEY", "")
 
 INTERVALO_MINUTOS   = 18   # cada cuántos minutos se analiza durante el día
 UMBRAL_ENTRADA      = 6.5  # score mínimo para emitir alerta de entrada
@@ -95,47 +100,115 @@ def telegram(chat_id, texto):
         print(f"❌ Telegram error: {e}")
 
 # ─────────────────────────────────────────────────────────────
-# ANÁLISIS TÉCNICO DE UN ACTIVO
+# FINNHUB — CLIENTE DE DATOS
+# ─────────────────────────────────────────────────────────────
+
+def finnhub_get(endpoint, params={}):
+    """Llamada base a Finnhub. Incluye API key automáticamente."""
+    base = "https://finnhub.io/api/v1"
+    try:
+        resp = requests.get(
+            f"{base}/{endpoint}",
+            params={"token": FINNHUB_KEY, **params},
+            timeout=10
+        )
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        print(f"❌ Finnhub error ({endpoint}): {e}")
+        return None
+
+def obtener_precio_actual(ticker):
+    """
+    Precio en tiempo real desde Finnhub.
+    Retorna dict con: c (close/actual), h (high), l (low), o (open), pc (prev close)
+    """
+    data = finnhub_get("quote", {"symbol": ticker})
+    if not data or data.get("c", 0) == 0:
+        return None
+    return data
+
+def obtener_historico(ticker, dias=90):
+    """
+    OHLCV diario desde Finnhub para los últimos N días.
+    Retorna DataFrame con columnas: Open, High, Low, Close, Volume
+    """
+    fin   = int(datetime.utcnow().timestamp())
+    inicio = int((datetime.utcnow() - timedelta(days=dias)).timestamp())
+
+    data = finnhub_get("stock/candle", {
+        "symbol":     ticker,
+        "resolution": "D",       # diario
+        "from":       inicio,
+        "to":         fin,
+    })
+
+    if not data or data.get("s") == "no_data" or not data.get("c"):
+        return None
+
+    df = pd.DataFrame({
+        "Open":   data["o"],
+        "High":   data["h"],
+        "Low":    data["l"],
+        "Close":  data["c"],
+        "Volume": data["v"],
+    })
+    return df
+
+# ─────────────────────────────────────────────────────────────
+# ANÁLISIS TÉCNICO DE UN ACTIVO (ahora con Finnhub)
 # ─────────────────────────────────────────────────────────────
 
 def analizar_activo(ticker):
     try:
-        hoy    = datetime.utcnow()
-        inicio = (hoy - timedelta(days=90)).strftime("%Y-%m-%d")
-        df = yf.download(ticker, start=inicio, end=hoy.strftime("%Y-%m-%d"),
-                         interval="1d", auto_adjust=True, progress=False)
-        if df is None or len(df) < 20:
+        # ── 1. Precio actual en tiempo real ──────────────────
+        quote = obtener_precio_actual(ticker)
+        if not quote:
+            print(f"⚠️ Sin quote para {ticker}")
             return None
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
 
-        close  = df["Close"].squeeze()
-        volume = df["Volume"].squeeze() if "Volume" in df.columns else pd.Series([1]*len(df))
+        precio = float(quote["c"])   # precio actual (tiempo real)
 
-        precio  = float(close.iloc[-1])
-        ma20    = float(close.rolling(20).mean().iloc[-1])
-        ma50    = float(close.rolling(50).mean().iloc[-1]) if len(close) >= 50 else ma20
-        tend    = round(((precio - float(close.iloc[-20])) / float(close.iloc[-20])) * 100, 2)
-        vol_r   = round(float(volume.iloc[-1]) / float(volume.rolling(20).mean().iloc[-1]), 2) if float(volume.rolling(20).mean().iloc[-1]) > 0 else 1.0
+        # ── 2. Histórico para indicadores técnicos ───────────
+        df = obtener_historico(ticker, dias=90)
+        if df is None or len(df) < 20:
+            print(f"⚠️ Sin histórico suficiente para {ticker}")
+            return None
 
-        delta = close.diff()
+        close  = df["Close"]
+        volume = df["Volume"]
+
+        # Usar precio en tiempo real como último dato
+        # (el histórico puede tener el cierre de ayer como último)
+        close_con_rt = pd.concat([close, pd.Series([precio])], ignore_index=True)
+
+        ma20 = float(close_con_rt.rolling(20).mean().iloc[-1])
+        ma50 = float(close_con_rt.rolling(50).mean().iloc[-1]) if len(close_con_rt) >= 50 else ma20
+        tend = round(((precio - float(close.iloc[-20])) / float(close.iloc[-20])) * 100, 2)
+
+        vol_media = float(volume.rolling(20).mean().iloc[-1])
+        vol_r = round(float(volume.iloc[-1]) / vol_media, 2) if vol_media > 0 else 1.0
+
+        # RSI 14 períodos
+        delta = close_con_rt.diff()
         gain  = delta.clip(lower=0).rolling(14).mean()
         loss  = (-delta.clip(upper=0)).rolling(14).mean()
         rs    = gain / loss.replace(0, 1e-9)
         rsi   = round(float(100 - (100 / (1 + rs.iloc[-1]))), 1)
 
+        # ── 3. Score de entrada (misma lógica que antes) ─────
         score = 0.0
-        if rsi < 30:       score += 3.0
-        elif rsi < 45:     score += 2.5
-        elif rsi < 55:     score += 1.5
-        elif rsi < 65:     score += 0.5
-        if precio < ma20:  score += 2.0
-        elif precio < ma50: score += 1.0
+        if rsi < 30:            score += 3.0
+        elif rsi < 45:          score += 2.5
+        elif rsi < 55:          score += 1.5
+        elif rsi < 65:          score += 0.5
+        if precio < ma20:       score += 2.0
+        elif precio < ma50:     score += 1.0
         if -10 <= tend <= -3:   score += 2.5
         elif -3 < tend <= 0:    score += 1.5
         elif 0 < tend <= 3:     score += 1.0
         elif tend < -10:        score += 1.5
-        if vol_r > 1.5:    score += 0.5
+        if vol_r > 1.5:         score += 0.5
 
         score = round(min(score, 10.0), 1)
 
@@ -143,24 +216,38 @@ def analizar_activo(ticker):
         elif score >= 4.5:            senal = "VIGILAR"
         else:                         senal = "NEUTRAL"
 
+        # ── 4. Datos extra de Finnhub (apertura, max, min) ───
+        apertura   = float(quote.get("o", 0))   # open del día
+        maximo_dia = float(quote.get("h", 0))   # high del día
+        minimo_dia = float(quote.get("l", 0))   # low del día
+        cierre_ant = float(quote.get("pc", 0))  # cierre anterior
+        cambio_dia = round(((precio - cierre_ant) / cierre_ant) * 100, 2) if cierre_ant else 0
+
         return {
-            "ticker":    ticker,
-            "precio":    round(precio, 2),
-            "ma20":      round(ma20, 2),
-            "ma50":      round(ma50, 2),
-            "rsi":       rsi,
-            "tendencia": tend,
-            "vol_ratio": vol_r,
-            "score":     score,
-            "senal":     senal,
-            "timestamp": hora_colombia().strftime("%Y-%m-%d %H:%M"),
+            "ticker":      ticker,
+            "precio":      round(precio, 2),
+            "apertura":    round(apertura, 2),
+            "maximo_dia":  round(maximo_dia, 2),
+            "minimo_dia":  round(minimo_dia, 2),
+            "cierre_ant":  round(cierre_ant, 2),
+            "cambio_dia":  cambio_dia,           # % cambio vs ayer
+            "ma20":        round(ma20, 2),
+            "ma50":        round(ma50, 2),
+            "rsi":         rsi,
+            "tendencia":   tend,
+            "vol_ratio":   vol_r,
+            "score":       score,
+            "senal":       senal,
+            "fuente":      "finnhub_rt",         # para debug
+            "timestamp":   hora_colombia().strftime("%Y-%m-%d %H:%M"),
         }
+
     except Exception as e:
         print(f"❌ Error analizando {ticker}: {e}")
         return None
 
 # ─────────────────────────────────────────────────────────────
-# ANÁLISIS IA (Claude)
+# ANÁLISIS IA (Claude) — sin cambios
 # ─────────────────────────────────────────────────────────────
 
 def analisis_ia(resultados, portafolio, tipo="ciclo"):
@@ -170,9 +257,15 @@ def analisis_ia(resultados, portafolio, tipo="ciclo"):
 
         resumen = ""
         for r in resultados:
-            resumen += (f"- {r['ticker']}: ${r['precio']} | RSI {r['rsi']} | "
-                        f"Score {r['score']}/10 | Señal {r['senal']} | "
-                        f"Tendencia {r['tendencia']:+.1f}% | MA20 ${r['ma20']} | MA50 ${r['ma50']}\n")
+            resumen += (
+                f"- {r['ticker']}: ${r['precio']} | RSI {r['rsi']} | "
+                f"Score {r['score']}/10 | Señal {r['senal']} | "
+                f"Tendencia {r['tendencia']:+.1f}% | MA20 ${r['ma20']} | MA50 ${r['ma50']}"
+            )
+            # Agregar datos intraday si están disponibles
+            if r.get("cambio_dia") is not None:
+                resumen += f" | Hoy {r['cambio_dia']:+.2f}%"
+            resumen += "\n"
 
         if tipo == "cierre":
             prompt = (
@@ -232,7 +325,7 @@ def analisis_ia(resultados, portafolio, tipo="ciclo"):
         return ""
 
 # ─────────────────────────────────────────────────────────────
-# PERSISTENCIA DEL ESTADO DEL MONITOR
+# PERSISTENCIA DEL ESTADO DEL MONITOR — sin cambios
 # ─────────────────────────────────────────────────────────────
 
 def leer_estado(archivo):
@@ -301,11 +394,10 @@ def chat_id_de(portafolio):
     return ""
 
 # ─────────────────────────────────────────────────────────────
-# MENSAJE DE BUENOS DÍAS
+# MENSAJE DE BUENOS DÍAS — sin cambios
 # ─────────────────────────────────────────────────────────────
 
 def enviar_buenos_dias(archivo, portafolio):
-    """Saludo pre-apertura con resumen de lo que se va a monitorear."""
     chat_id = chat_id_de(portafolio)
     if not chat_id:
         return
@@ -315,7 +407,6 @@ def enviar_buenos_dias(archivo, portafolio):
     ahora       = hora_colombia()
     dia_semana  = ["lunes", "martes", "miércoles", "jueves", "viernes"][ahora.weekday()]
 
-    # Mensaje base sin IA
     msg_base = (
         f"☀️ <b>Buenos días — {dia_semana} {ahora.strftime('%d/%m')}</b>\n\n"
         f"📋 Portafolio: <b>{nombre_port}</b>\n"
@@ -326,7 +417,6 @@ def enviar_buenos_dias(archivo, portafolio):
         f"condiciones óptimas para entrar hoy.</i>"
     )
 
-    # Enriquecer con IA si está disponible
     try:
         ia_saludo = analisis_ia([], portafolio, tipo="buenos_dias")
         if ia_saludo:
@@ -353,7 +443,7 @@ def ciclo_portafolio(archivo, portafolio):
         r = analizar_activo(tk)
         if r:
             resultados.append(r)
-        time.sleep(0.5)
+        time.sleep(1)  # Finnhub free: max 60 req/min → 1 seg entre calls es seguro
 
     if not resultados:
         return
@@ -371,11 +461,14 @@ def ciclo_portafolio(archivo, portafolio):
         for r in entradas:
             msg = (
                 f"🟢 <b>SEÑAL DE ENTRADA — {r['ticker']}</b>\n\n"
-                f"💵 Precio: <b>${r['precio']:,} USD</b>\n"
+                f"💵 Precio: <b>${r['precio']:,} USD</b> "
+                f"({r['cambio_dia']:+.2f}% hoy)\n"
                 f"📊 Score: <b>{r['score']}/10</b> · RSI: {r['rsi']} · "
                 f"Tendencia: {r['tendencia']:+.1f}%\n"
                 f"📈 MA20: ${r['ma20']:,} · MA50: ${r['ma50']:,}\n"
-        )
+                f"🕐 Apertura: ${r['apertura']:,} · "
+                f"Max: ${r['maximo_dia']:,} · Min: ${r['minimo_dia']:,}\n"
+            )
             if ia_txt:
                 msg += f"\n💬 {ia_txt}"
             telegram(chat_id, msg)
@@ -409,7 +502,7 @@ def ciclo_portafolio(archivo, portafolio):
     return estado
 
 # ─────────────────────────────────────────────────────────────
-# REPORTE DE CIERRE (4:00–4:45pm)
+# REPORTE DE CIERRE — ahora incluye cambio del día
 # ─────────────────────────────────────────────────────────────
 
 def reporte_cierre(archivo, portafolio, estado):
@@ -418,7 +511,7 @@ def reporte_cierre(archivo, portafolio, estado):
         return
 
     chat_id  = chat_id_de(portafolio)
-    print(f"🔍 DEBUG cierre — archivo: {archivo} | owner: {portafolio.get('owner')} | chat_id: {chat_id}")  # ← agrega esta línea
+    print(f"🔍 DEBUG cierre — archivo: {archivo} | owner: {portafolio.get('owner')} | chat_id: {chat_id}")
     hoy_str  = hora_colombia().strftime("%A %d de %B de %Y")
     dias_sin = estado.get("dias_consecutivos_sin_senal", 0)
 
@@ -426,8 +519,9 @@ def reporte_cierre(archivo, portafolio, estado):
               f"📅 {hoy_str}\n"]
     for r in sorted(resultados, key=lambda x: x["score"], reverse=True):
         emoji = {"ENTRAR": "🟢", "VIGILAR": "🟡", "NEUTRAL": "⚪"}.get(r["senal"], "⚪")
+        cambio_str = f" ({r['cambio_dia']:+.2f}% día)" if r.get("cambio_dia") is not None else ""
         lineas.append(
-            f"{emoji} <b>{r['ticker']}</b>  ${r['precio']:,}\n"
+            f"{emoji} <b>{r['ticker']}</b>  ${r['precio']:,}{cambio_str}\n"
             f"   Score {r['score']}/10 | RSI {r['rsi']} | {r['tendencia']:+.1f}% | Vol {r['vol_ratio']}x"
         )
 
@@ -466,7 +560,7 @@ def reporte_cierre(archivo, portafolio, estado):
     guardar_estado(archivo, estado)
 
 # ─────────────────────────────────────────────────────────────
-# ALERTA SUBÓPTIMA
+# ALERTA SUBÓPTIMA — sin cambios
 # ─────────────────────────────────────────────────────────────
 
 def verificar_alerta_suboptimal(archivo, portafolio, estado):
@@ -484,7 +578,7 @@ def verificar_alerta_suboptimal(archivo, portafolio, estado):
         guardar_estado(archivo, estado)
 
 # ─────────────────────────────────────────────────────────────
-# HILO PRINCIPAL DEL MONITOR
+# HILO PRINCIPAL DEL MONITOR — sin cambios
 # ─────────────────────────────────────────────────────────────
 
 _monitor_activo = False
@@ -499,16 +593,9 @@ def iniciar_monitor():
     print("🚀 Monitor iniciado")
 
 def _loop_monitor():
-    """
-    Estados del loop:
-    - 9:00–9:25am  → buenos días (una vez por día)
-    - 9:30am–4:00pm → ciclo de análisis cada 18 min
-    - 4:00–4:45pm  → reporte de cierre (una vez por día)
-    - resto        → duerme hasta próxima apertura
-    """
-    ultimo_ciclo    = {}   # archivo -> datetime del último ciclo
-    cierre_enviado  = {}   # archivo -> fecha
-    buenos_enviado  = {}   # archivo -> fecha
+    ultimo_ciclo    = {}
+    cierre_enviado  = {}
+    buenos_enviado  = {}
 
     while True:
         try:
@@ -547,7 +634,7 @@ def _loop_monitor():
                         ultimo_ciclo[archivo] = ahora
                     time.sleep(60)
 
-            # ── Hora de cierre: el scheduler lo maneja ────
+            # ── Hora de cierre ─────────────────────────────
             elif es_hora_cierre():
                 print("📋 Ventana de cierre — el scheduler envía el reporte.")
                 time.sleep(60)
