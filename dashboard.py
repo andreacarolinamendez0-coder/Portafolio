@@ -3011,7 +3011,7 @@ def api_recolector():
     try: subprocess.run(["python","recolector.py"],check=False,timeout=120); return jsonify({'ok':True})
     except Exception as e: return jsonify({'ok':False,'error':str(e)})
 
-@app.route('/api/precios-rt/<archivo>')
+@app.route('/api/precios-rt/<path:archivo>')
 def api_precios_rt(archivo):
     redir = verificar_acceso(archivo)
     if redir:
