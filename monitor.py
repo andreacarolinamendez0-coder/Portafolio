@@ -2,35 +2,33 @@
 monitor.py — Motor de monitoreo de mercado
 ==========================================
 
-FUENTES DE DATOS (responsabilidades claras):
+ARQUITECTURA NUEVA:
 ─────────────────────────────────────────────
-  Finnhub  →  precio actual en TIEMPO REAL (sin delay)
-               quote: precio, apertura, max, min, cambio % del día
-               Se usa SOLO para mostrar el precio real al usuario
+  8:00am        →  precalcular_rangos()  UNA SOLA VEZ
+                   Descarga histórico yfinance
+                   Calcula RSI, MA20, MA50, tendencia, volumen (fijos todo el día)
+                   Determina rangos de precio para ENTRAR y VIGILAR
+                   Guarda en disco → sobrevive reinicios de Railway
 
-  yfinance →  histórico OHLC de los últimos 90 días
-               Se usa SOLO para calcular indicadores técnicos:
-               MA20, MA50, RSI, tendencia, volumen ratio
-               Tiene 15 min de delay pero no importa — los
-               indicadores técnicos son diarios, no necesitan RT
+  8:30am-3:00pm →  vigilar_precios()  CADA 9 SEGUNDOS
+                   Solo consulta precio actual a Finnhub
+                   Compara precio vs rangos precalculados
+                   Si cruza un rango → alerta Telegram inmediata
+                   Guarda precio actualizado → el display lo lee
 
-FLUJO por activo:
-  1. Finnhub  → precio actual RT           (lo que ve el usuario)
-  2. yfinance → histórico 90d              (para calcular score)
-  3. Combinar → precio RT + score técnico  (alerta inteligente)
+  3:00pm        →  reporte de cierre
 
-FIXES vs versión anterior:
-  ✅ Alertas de entrada: una sola vez por ticker por día
-  ✅ Botones de respuesta: "Ya entré / No voy a entrar / Sigue informando"
-  ✅ Anti-spam: máximo 3 intentos sin respuesta, luego silencio
-  ✅ Estado persistente en disco (sobrevive reinicios de Railway)
-  ✅ Cierre del mercado limpia las alertas del día automáticamente
+FUENTES DE DATOS:
+─────────────────────────────────────────────
+  Finnhub  →  precio actual TIEMPO REAL cada 9 segundos
+  yfinance →  histórico 90 días UNA VEZ a las 8am
 """
 
 import os, json, time, threading, requests
 from datetime import datetime, timedelta
 import pandas as pd
 import yfinance as yf
+import pytz
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -40,32 +38,33 @@ PORTS_DIR   = os.path.join(DATOS_DIR, "portafolios")
 BOT_TOKEN   = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 FINNHUB_KEY = os.environ.get("FINNHUB_API_KEY", "")
 
-INTERVALO_MINUTOS  = 18
 UMBRAL_ENTRADA     = 6.5
+UMBRAL_VIGILAR     = 4.5
 DIAS_SIN_SENAL_MAX = 5
 
 # ─────────────────────────────────────────────────────────────
-# TIEMPO
+# ZONAS HORARIAS
 # ─────────────────────────────────────────────────────────────
 
-from datetime import datetime
-import pytz
-
-TZ_COLOMBIA = pytz.timezone("America/Bogota")
+TZ_COLOMBIA   = pytz.timezone("America/Bogota")
 TZ_NUEVA_YORK = pytz.timezone("America/New_York")
 
 def hora_colombia():
-    """Hora actual en Colombia."""
+    """Hora actual en Colombia (maneja DST automáticamente)."""
     return datetime.now(TZ_COLOMBIA)
 
 def hora_nueva_york():
     """Hora actual en Nueva York (maneja DST automáticamente)."""
     return datetime.now(TZ_NUEVA_YORK)
 
+# ─────────────────────────────────────────────────────────────
+# FUNCIONES DE TIEMPO
+# ─────────────────────────────────────────────────────────────
+
 def mercado_abierto():
     """
-    NYSE abre 9:30am–4:00pm hora Nueva York, lunes a viernes.
-    Usar hora NY directamente elimina el problema del DST.
+    NYSE abre 9:30am–3:00pm hora Colombia (ajustado para cuenta individual).
+    Usa hora Nueva York para manejar DST correctamente.
     """
     ahora_ny = hora_nueva_york()
     if ahora_ny.weekday() >= 5:
@@ -74,55 +73,61 @@ def mercado_abierto():
     cierre   = ahora_ny.replace(hour=16, minute=0, second=0, microsecond=0)
     return apertura <= ahora_ny <= cierre
 
-def es_hora_buenos_dias():
-    """9:00am–9:25am hora Colombia (antes de que abra NYSE)."""
-    ahora_col = hora_colombia()
-    if ahora_col.weekday() >= 5:
+def es_hora_precalculo():
+    """
+    True entre 8:00am y 8:10am hora Colombia.
+    Ventana para descargar histórico y calcular rangos del día.
+    """
+    ahora = hora_colombia()
+    if ahora.weekday() >= 5:
         return False
-    inicio = ahora_col.replace(hour=9, minute=0, second=0, microsecond=0)
-    fin    = ahora_col.replace(hour=9, minute=25, second=0, microsecond=0)
-    return inicio <= ahora_col <= fin
+    inicio = ahora.replace(hour=8, minute=0, second=0, microsecond=0)
+    fin    = ahora.replace(hour=8, minute=10, second=0, microsecond=0)
+    return inicio <= ahora <= fin
+
+def es_hora_buenos_dias():
+    """True entre 8:15am y 8:25am hora Colombia."""
+    ahora = hora_colombia()
+    if ahora.weekday() >= 5:
+        return False
+    inicio = ahora.replace(hour=8, minute=15, second=0, microsecond=0)
+    fin    = ahora.replace(hour=8, minute=25, second=0, microsecond=0)
+    return inicio <= ahora <= fin
 
 def es_hora_cierre():
-    """Ventana post-cierre NYSE, hora Colombia."""
+    """True entre 4:00pm y 4:45pm hora Nueva York."""
     ahora_ny = hora_nueva_york()
     if ahora_ny.weekday() >= 5:
         return False
-    # 4:00pm–4:45pm NY = cuando cierra el mercado
     inicio = ahora_ny.replace(hour=16, minute=0, second=0, microsecond=0)
     fin    = ahora_ny.replace(hour=16, minute=45, second=0, microsecond=0)
     return inicio <= ahora_ny <= fin
 
-def es_hora_buenos_dias():
-    ahora = hora_colombia()
-    if ahora.weekday() >= 5:
-        return False
-    inicio = ahora.replace(hour=9, minute=0, second=0, microsecond=0)
-    fin    = ahora.replace(hour=9, minute=25, second=0, microsecond=0)
-    return inicio <= ahora <= fin
-
-def es_hora_cierre():
-    ahora = hora_colombia()
-    if ahora.weekday() >= 5:
-        return False
-    inicio = ahora.replace(hour=16, minute=0, second=0, microsecond=0)
-    fin    = ahora.replace(hour=16, minute=45, second=0, microsecond=0)
-    return inicio <= ahora <= fin
-
 def es_viernes():
     return hora_colombia().weekday() == 4
 
-def segundos_hasta_apertura():
+def segundos_hasta_precalculo():
+    """
+    Calcula segundos hasta las 8:00am Colombia del próximo día hábil.
+    Usa hora Colombia porque el precálculo es a las 8am Colombia.
+    """
     ahora = hora_colombia()
     if ahora.weekday() >= 5:
+        # Fin de semana — próximo lunes
         dias = 7 - ahora.weekday()
-        prox = (ahora + timedelta(days=dias)).replace(hour=9, minute=0, second=0, microsecond=0)
+        prox = (ahora + timedelta(days=dias)).replace(
+            hour=8, minute=0, second=0, microsecond=0
+        )
     else:
-        hoy_apertura = ahora.replace(hour=9, minute=0, second=0, microsecond=0)
-        if ahora < hoy_apertura:
-            prox = hoy_apertura
+        hoy_precalculo = ahora.replace(hour=8, minute=0, second=0, microsecond=0)
+        if ahora < hoy_precalculo:
+            prox = hoy_precalculo
         else:
-            prox = (ahora + timedelta(days=1)).replace(hour=9, minute=0, second=0, microsecond=0)
+            # Ya pasó el precálculo de hoy — calcular para mañana
+            prox = (ahora + timedelta(days=1)).replace(
+                hour=8, minute=0, second=0, microsecond=0
+            )
+            # Saltar fin de semana
             while prox.weekday() >= 5:
                 prox += timedelta(days=1)
     return max(0, (prox - ahora).total_seconds())
@@ -147,7 +152,7 @@ def telegram(chat_id, texto, reply_markup=None):
         print(f"❌ Telegram error: {e}")
 
 def teclado_decision(ticker):
-    """Botones inline para que el usuario responda a una alerta de entrada."""
+    """Botones inline para que el usuario responda a una alerta."""
     return {
         "inline_keyboard": [[
             {"text": "✅ Ya entré",         "callback_data": f"entro:{ticker}"},
@@ -158,7 +163,6 @@ def teclado_decision(ticker):
 
 # ─────────────────────────────────────────────────────────────
 # FINNHUB — PRECIO EN TIEMPO REAL
-# Responsabilidad: decirle al usuario el precio EXACTO ahora mismo
 # ─────────────────────────────────────────────────────────────
 
 def finnhub_quote(ticker):
@@ -166,7 +170,6 @@ def finnhub_quote(ticker):
     Precio en tiempo real desde Finnhub (plan Free).
     Retorna dict con: c=precio actual, o=apertura, h=max, l=min,
                       pc=cierre anterior, dp=cambio %
-    Retorna None si falla o el precio es 0.
     """
     try:
         resp = requests.get(
@@ -175,7 +178,7 @@ def finnhub_quote(ticker):
             timeout=8
         )
         resp.raise_for_status()
-        data  = resp.json()
+        data   = resp.json()
         precio = data.get("c", 0)
         if not precio or precio == 0:
             print(f"⚠️ Finnhub sin precio para {ticker}")
@@ -186,17 +189,14 @@ def finnhub_quote(ticker):
         return None
 
 # ─────────────────────────────────────────────────────────────
-# YFINANCE — HISTÓRICO PARA INDICADORES TÉCNICOS
-# Responsabilidad: proveer los 90 días de OHLC para calcular
-#                  MA20, MA50, RSI, tendencia, volumen
-# El delay de 15 min no importa — son indicadores diarios
+# YFINANCE — HISTÓRICO PARA INDICADORES
+# Solo se usa a las 8am, no durante el mercado
 # ─────────────────────────────────────────────────────────────
 
 def yfinance_historico(ticker, dias=90):
     """
     Histórico OHLC diario desde yfinance.
-    Solo se usa para calcular indicadores técnicos, NO para el precio mostrado.
-    Retorna DataFrame con columnas: Close, Volume (mínimo)
+    Se llama UNA VEZ a las 8am para calcular indicadores fijos.
     """
     try:
         hoy    = datetime.utcnow()
@@ -219,115 +219,286 @@ def yfinance_historico(ticker, dias=90):
         return None
 
 # ─────────────────────────────────────────────────────────────
-# ANÁLISIS TÉCNICO — combina ambas fuentes
+# PRECÁLCULO DE RANGOS — corre UNA VEZ a las 8am
 # ─────────────────────────────────────────────────────────────
 
-def analizar_activo(ticker):
+def precalcular_rangos(archivo, portafolio):
     """
-    Análisis completo de un activo combinando:
-      - Finnhub: precio RT para mostrar al usuario
-      - yfinance: histórico para calcular score técnico
+    Descarga histórico y calcula indicadores fijos del día.
+    Determina rangos de precio para ENTRAR y VIGILAR.
+    Guarda en datos/portafolios/rangos_<archivo> para sobrevivir reinicios.
 
-    El precio que aparece en las alertas es siempre el de Finnhub (RT).
-    El score se calcula con los datos históricos de yfinance.
+    Los indicadores RSI, MA20, MA50, tendencia y volumen son FIJOS
+    durante el día — se calculan con datos del día anterior.
+    Solo el precio cambia durante el mercado.
     """
-    try:
-        # ── PASO 1: Precio en tiempo real (Finnhub) ───────────
-        quote = finnhub_quote(ticker)
-        if not quote:
-            print(f"⚠️ Sin precio RT para {ticker} — omitiendo")
-            return None
-
-        precio_rt  = float(quote["c"])    # ← precio real, sin delay
-        apertura   = float(quote.get("o",  0))
-        maximo_dia = float(quote.get("h",  0))
-        minimo_dia = float(quote.get("l",  0))
-        cierre_ant = float(quote.get("pc", 0))
-        cambio_dia = float(quote.get("dp", 0))  # % cambio del día
-
-        # ── PASO 2: Histórico para indicadores (yfinance) ─────
-        df = yfinance_historico(ticker, dias=90)
-        if df is None:
-            # Sin histórico no podemos calcular score — skip
-            print(f"⚠️ Sin histórico para {ticker} — no se puede calcular score")
-            return None
-
-        close  = df["Close"].squeeze()
-        volume = df["Volume"].squeeze() if "Volume" in df.columns else pd.Series([1] * len(df))
-
-        # ── PASO 3: Indicadores técnicos (sobre histórico) ────
-        # MA20 y MA50: medias móviles del histórico
-        # No usamos precio_rt aquí para no distorsionar las medias
-        ma20 = float(close.rolling(20).mean().iloc[-1])
-        ma50 = float(close.rolling(50).mean().iloc[-1]) if len(close) >= 50 else ma20
-
-        # Tendencia: % cambio en últimos 20 días (histórico)
-        tend = round(
-            ((float(close.iloc[-1]) - float(close.iloc[-20])) / float(close.iloc[-20])) * 100, 2
-        )
-
-        # Volumen ratio vs promedio 20 días
-        vol_media = float(volume.rolling(20).mean().iloc[-1])
-        vol_r     = round(float(volume.iloc[-1]) / vol_media, 2) if vol_media > 0 else 1.0
-
-        # RSI 14 períodos (sobre histórico)
-        delta = close.diff()
-        gain  = delta.clip(lower=0).rolling(14).mean()
-        loss  = (-delta.clip(upper=0)).rolling(14).mean()
-        rs    = gain / loss.replace(0, 1e-9)
-        rsi   = round(float(100 - (100 / (1 + rs.iloc[-1]))), 1)
-
-        # ── PASO 4: Score de entrada ───────────────────────────
-        # Compara precio RT vs medias históricas (esto sí tiene sentido)
-        score = 0.0
-        if rsi < 30:                        score += 3.0
-        elif rsi < 45:                      score += 2.5
-        elif rsi < 55:                      score += 1.5
-        elif rsi < 65:                      score += 0.5
-        if precio_rt < ma20:                score += 2.0   # precio RT vs MA histórica
-        elif precio_rt < ma50:              score += 1.0
-        if -10 <= tend <= -3:               score += 2.5
-        elif -3 < tend <= 0:                score += 1.5
-        elif 0 < tend <= 3:                 score += 1.0
-        elif tend < -10:                    score += 1.5
-        if vol_r > 1.5:                     score += 0.5
-        score = round(min(score, 10.0), 1)
-
-        if score >= UMBRAL_ENTRADA:   senal = "ENTRAR"
-        elif score >= 4.5:            senal = "VIGILAR"
-        else:                         senal = "NEUTRAL"
-
-        # ── RESULTADO FINAL ────────────────────────────────────
-        return {
-            # Precio en tiempo real (Finnhub) — lo que ve el usuario
-            "ticker":     ticker,
-            "precio":     round(precio_rt, 2),    # ← FINNHUB RT
-            "apertura":   round(apertura, 2),     # ← FINNHUB RT
-            "maximo_dia": round(maximo_dia, 2),   # ← FINNHUB RT
-            "minimo_dia": round(minimo_dia, 2),   # ← FINNHUB RT
-            "cierre_ant": round(cierre_ant, 2),   # ← FINNHUB RT
-            "cambio_dia": round(cambio_dia, 2),   # ← FINNHUB RT (% día)
-            # Indicadores técnicos (yfinance histórico) — para el score
-            "ma20":       round(ma20, 2),         # ← YFINANCE histórico
-            "ma50":       round(ma50, 2),         # ← YFINANCE histórico
-            "rsi":        rsi,                    # ← YFINANCE histórico
-            "tendencia":  tend,                   # ← YFINANCE histórico
-            "vol_ratio":  vol_r,                  # ← YFINANCE histórico
-            # Score y señal
-            "score":      score,
-            "senal":      senal,
-            # Metadata
-            "fuente_precio": "finnhub_rt",
-            "fuente_score":  "yfinance_historico",
-            "timestamp":  hora_colombia().strftime("%Y-%m-%d %H:%M"),
-        }
-
-    except Exception as e:
-        print(f"❌ Error analizando {ticker}: {e}")
+    composicion = portafolio.get("composicion", {})
+    tickers     = list(composicion.keys())
+    if not tickers:
         return None
 
+    print(f"  📐 Precalculando rangos para {portafolio['nombre']}...")
+    rangos_hoy = {}
+    hoy        = hora_colombia().strftime("%Y-%m-%d")
+
+    for ticker in tickers:
+        try:
+            # Descarga histórico — solo aquí, solo a las 8am
+            df = yfinance_historico(ticker, dias=90)
+            if df is None:
+                print(f"    ⚠️ Sin histórico para {ticker} — omitiendo")
+                continue
+
+            close  = df["Close"].squeeze()
+            volume = df["Volume"].squeeze() if "Volume" in df.columns else pd.Series([1] * len(df))
+
+            # ── Indicadores fijos — no cambian durante el día ──
+
+            ma20 = float(close.rolling(20).mean().iloc[-1])
+            ma50 = float(close.rolling(50).mean().iloc[-1]) if len(close) >= 50 else ma20
+
+            # Tendencia: % cambio últimos 20 días
+            tend = round(
+                ((float(close.iloc[-1]) - float(close.iloc[-20])) /
+                 float(close.iloc[-20])) * 100, 2
+            )
+
+            # Volumen ratio
+            vol_media = float(volume.rolling(20).mean().iloc[-1])
+            vol_r     = round(float(volume.iloc[-1]) / vol_media, 2) if vol_media > 0 else 1.0
+
+            # RSI 14 períodos
+            delta = close.diff()
+            gain  = delta.clip(lower=0).rolling(14).mean()
+            loss  = (-delta.clip(upper=0)).rolling(14).mean()
+            rs    = gain / loss.replace(0, 1e-9)
+            rsi   = round(float(100 - (100 / (1 + rs.iloc[-1]))), 1)
+
+            # ── Score base — sin precio vs medias ──────────────
+            # RSI + tendencia + volumen (los 3 fijos)
+            score_base = 0.0
+            if rsi < 30:            score_base += 3.0
+            elif rsi < 45:          score_base += 2.5
+            elif rsi < 55:          score_base += 1.5
+            elif rsi < 65:          score_base += 0.5
+            if -10 <= tend <= -3:   score_base += 2.5
+            elif -3 < tend <= 0:    score_base += 1.5
+            elif 0 < tend <= 3:     score_base += 1.0
+            elif tend < -10:        score_base += 1.5
+            if vol_r > 1.5:         score_base += 0.5
+            score_base = round(score_base, 1)
+
+            # ── Rangos de precio ───────────────────────────────
+            # precio < MA20 suma +2.0 → ¿llega al umbral?
+            # precio < MA50 suma +1.0 → ¿llega al umbral?
+            puede_entrar  = (score_base + 2.0) >= UMBRAL_ENTRADA
+            puede_vigilar = (score_base + 1.0) >= UMBRAL_VIGILAR
+
+            rango_entrar  = round(ma20, 2) if puede_entrar  else None
+            rango_vigilar = round(ma50, 2) if puede_vigilar else None
+
+            rangos_hoy[ticker] = {
+                "ma20":          round(ma20, 2),
+                "ma50":          round(ma50, 2),
+                "rsi":           rsi,
+                "tendencia":     tend,
+                "vol_ratio":     vol_r,
+                "score_base":    score_base,
+                "rango_entrar":  rango_entrar,
+                "rango_vigilar": rango_vigilar,
+                "puede_entrar":  puede_entrar,
+                "puede_vigilar": puede_vigilar,
+            }
+
+            # Log claro en Railway
+            if puede_entrar:
+                estado_dia = f"🟢 puede ENTRAR si precio < ${rango_entrar}"
+            elif puede_vigilar:
+                estado_dia = f"🟡 puede VIGILAR si precio < ${rango_vigilar}"
+            else:
+                estado_dia = "⚪ NEUTRAL fijo hoy (score_base insuficiente)"
+
+            print(f"    {ticker}: score_base={score_base} | RSI={rsi} | {estado_dia}")
+
+        except Exception as e:
+            print(f"    ❌ Error precalculando {ticker}: {e}")
+            continue
+
+    if not rangos_hoy:
+        return None
+
+    resultado = {
+        "fecha":        hoy,
+        "rangos":       rangos_hoy,
+        "calculado_a":  hora_colombia().strftime("%Y-%m-%d %H:%M"),
+        "portafolio":   portafolio.get("nombre", ""),
+    }
+
+    # Guardar en disco — sobrevive reinicios de Railway
+    ruta = os.path.join(PORTS_DIR, f"rangos_{archivo}")
+    try:
+        with open(ruta, "w", encoding="utf-8") as f:
+            json.dump(resultado, f, indent=2, ensure_ascii=False)
+        print(f"  ✅ Rangos guardados: {len(rangos_hoy)} activos")
+    except Exception as e:
+        print(f"  ❌ Error guardando rangos: {e}")
+
+    return resultado
+
 # ─────────────────────────────────────────────────────────────
-# CONTROL DE ALERTAS — una por ticker por día
+# VIGILAR PRECIOS — corre cada 9 segundos durante el mercado
+# ─────────────────────────────────────────────────────────────
+
+def vigilar_precios(archivo, portafolio, rangos_del_dia):
+    """
+    Solo consulta precio actual a Finnhub.
+    Compara precio vs rangos precalculados a las 8am.
+    Si el precio cruza un rango → alerta Telegram inmediata.
+    Guarda precios actualizados en estado para el display.
+    """
+    if not rangos_del_dia:
+        return
+
+    estado  = leer_estado(archivo)
+    chat_id = chat_id_de(portafolio)
+    hoy_str = hora_colombia().strftime("%Y-%m-%d")
+
+    if "resultados_rt" not in estado:
+        estado["resultados_rt"] = {}
+
+    for ticker, rango in rangos_del_dia["rangos"].items():
+
+        # ── Solo precio — una petición a Finnhub ──────────────
+        quote = finnhub_quote(ticker)
+        if not quote:
+            continue
+
+        precio = float(quote["c"])
+        cambio = float(quote.get("dp", 0))
+
+        # ── Determinar señal con rangos precalculados ──────────
+        rango_entrar  = rango.get("rango_entrar")
+        rango_vigilar = rango.get("rango_vigilar")
+
+        if rango_entrar and precio < rango_entrar:
+            senal_actual = "ENTRAR"
+        elif rango_vigilar and precio < rango_vigilar:
+            senal_actual = "VIGILAR"
+        else:
+            senal_actual = "NEUTRAL"
+
+        # Score real con precio actual (para mostrar en display)
+        score = rango["score_base"]
+        if precio < rango["ma20"]:   score += 2.0
+        elif precio < rango["ma50"]: score += 1.0
+        score = round(min(score, 10.0), 1)
+
+        # ── Actualizar estado para el display ─────────────────
+        # El display lee esto cada vez que el browser pide /api/precios-rt
+        estado["resultados_rt"][ticker] = {
+            "ticker":        ticker,
+            "precio":        round(precio, 2),
+            "cambio_dia":    round(cambio, 2),
+            "ma20":          rango["ma20"],
+            "ma50":          rango["ma50"],
+            "rsi":           rango["rsi"],
+            "tendencia":     rango["tendencia"],
+            "vol_ratio":     rango["vol_ratio"],
+            "score_base":    rango["score_base"],
+            "score":         score,
+            "senal":         senal_actual,
+            "rango_entrar":  rango_entrar,
+            "rango_vigilar": rango_vigilar,
+            "puede_entrar":  rango["puede_entrar"],
+            "puede_vigilar": rango["puede_vigilar"],
+            "timestamp":     hora_colombia().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+        # ── Alertas — solo si la señal es ENTRAR ──────────────
+        if senal_actual == "ENTRAR":
+            dec = decision_usuario(estado, ticker)
+
+            # Silenciar según decisión del usuario
+            if dec == "no_entro":
+                continue
+            if dec == "entro":
+                continue
+
+            # Anti-spam: máximo 3 alertas sin respuesta
+            if ya_alerte_hoy(estado, ticker) and dec != "sigue":
+                clave  = f"ciclos_sin_respuesta_{ticker}"
+                ciclos = estado.get(clave, 0) + 1
+                estado[clave] = ciclos
+                if ciclos >= 3:
+                    continue
+
+            # Construir y enviar alerta
+            msg = (
+                f"🟢 <b>SEÑAL DE ENTRADA — {ticker}</b>\n\n"
+                f"💵 Precio: <b>${precio:,.2f} USD</b> ({cambio:+.2f}% hoy)\n"
+                f"🎯 Cruzó el rango de entrada (< ${rango_entrar:,.2f})\n\n"
+                f"📊 Score: <b>{score}/10</b> · RSI: {rango['rsi']} · "
+                f"Tendencia: {rango['tendencia']:+.1f}%\n"
+                f"📈 MA20: ${rango['ma20']:,.2f} · MA50: ${rango['ma50']:,.2f}"
+            )
+            if dec == "sigue":
+                msg += "\n\n<i>(Actualización — pediste seguir informado)</i>"
+
+            telegram(chat_id, msg, reply_markup=teclado_decision(ticker))
+            marcar_alerta_enviada(estado, ticker)
+            estado[f"ciclos_sin_respuesta_{ticker}"] = 0
+            print(f"  🟢 ALERTA: {ticker} @ ${precio} cruzó rango ${rango_entrar}")
+
+    # Actualizar contadores de días sin señal
+    hay_entradas = any(
+        v.get("senal") == "ENTRAR"
+        for v in estado["resultados_rt"].values()
+    )
+    if hay_entradas:
+        estado["ultimo_dia_con_senal"]       = hoy_str
+        estado["dias_consecutivos_sin_senal"] = 0
+    else:
+        ultimo = estado.get("ultimo_dia_con_senal")
+        if ultimo and ultimo != hoy_str:
+            try:
+                dias = sum(
+                    1 for i in range(
+                        (datetime.strptime(hoy_str, "%Y-%m-%d") -
+                         datetime.strptime(ultimo, "%Y-%m-%d")).days
+                    )
+                    if (datetime.strptime(ultimo, "%Y-%m-%d") +
+                        timedelta(days=i+1)).weekday() < 5
+                )
+                estado["dias_consecutivos_sin_senal"] = dias
+            except:
+                pass
+
+    # Predicción para el display
+    vigilando = [
+        t for t, v in estado["resultados_rt"].items()
+        if v.get("senal") == "VIGILAR"
+    ]
+    entrando = [
+        t for t, v in estado["resultados_rt"].items()
+        if v.get("senal") == "ENTRAR"
+    ]
+    if entrando:
+        estado["prediccion"] = f"🟢 {len(entrando)} entrada(s) detectada(s)"
+    elif vigilando:
+        estado["prediccion"] = f"👁 {len(vigilando)} en vigilancia"
+    else:
+        estado["prediccion"] = "⚪ Sin señales este ciclo"
+
+    estado["timestamp"]         = hora_colombia().strftime("%Y-%m-%d %H:%M:%S")
+    estado["nombre_portafolio"] = portafolio.get("nombre", "")
+
+    # Convertir resultados_rt a lista para compatibilidad con display existente
+    estado["resultados"] = list(estado["resultados_rt"].values())
+
+    guardar_estado(archivo, estado)
+
+# ─────────────────────────────────────────────────────────────
+# CONTROL DE ALERTAS
 # ─────────────────────────────────────────────────────────────
 
 def ya_alerte_hoy(estado, ticker):
@@ -372,7 +543,7 @@ def analisis_ia(resultados, portafolio, tipo="ciclo"):
         resumen = ""
         for r in resultados:
             resumen += (
-                f"- {r['ticker']}: ${r['precio']} (RT) | RSI {r['rsi']} | "
+                f"- {r['ticker']}: ${r['precio']} | RSI {r['rsi']} | "
                 f"Score {r['score']}/10 | Señal {r['senal']} | "
                 f"Tendencia {r['tendencia']:+.1f}% | MA20 ${r['ma20']} | MA50 ${r['ma50']}"
             )
@@ -393,15 +564,15 @@ def analisis_ia(resultados, portafolio, tipo="ciclo"):
                 f"Analista de {portafolio['propietario']}. "
                 f"{DIAS_SIN_SENAL_MAX}+ días hábiles sin señal.\n\n"
                 f"ESTADO:\n{resumen}\n\n"
-                f"Recomendación especial, máximo 4 párrafos. Sin asteriscos. Directo."
+                f"Recomendación especial, máximo 4 párrafos. Sin asteriscos."
             )
         elif tipo == "buenos_dias":
             tickers = list(portafolio.get("composicion", {}).keys())
             prompt = (
                 f"Analista de {portafolio['propietario']}. "
-                f"9:15am Colombia, NYSE abre en 15 min.\n"
+                f"8:15am Colombia, NYSE abre en 15 minutos.\n"
                 f"PORTAFOLIO: {', '.join(tickers)}\n"
-                f"UN párrafo corto de buenos días, máximo 3 oraciones. Sin asteriscos."
+                f"UN párrafo de buenos días, máximo 3 oraciones. Sin asteriscos."
             )
         else:
             entradas = [r for r in resultados if r["senal"] == "ENTRAR"]
@@ -450,7 +621,7 @@ def leer_portafolios_activos():
     if not os.path.exists(PORTS_DIR):
         return activos
     for fn in os.listdir(PORTS_DIR):
-        if not fn.endswith(".json") or fn.startswith("monitor_"):
+        if not fn.endswith(".json") or fn.startswith("monitor_") or fn.startswith("rangos_"):
             continue
         ruta = os.path.join(PORTS_DIR, fn)
         try:
@@ -479,11 +650,11 @@ def chat_id_de(portafolio):
                     print(f"📲 chat_id encontrado para {owner}: {cid}")
                     return cid
     except Exception as e:
-        print(f"⚠️ No pudo leer usuario para chat_id: {e}")
+        print(f"⚠️ chat_id error: {e}")
     cid = portafolio.get("telegram_chat_id", "").strip()
     if cid:
         return cid
-    print(f"⚠️ Sin chat_id para portafolio: {portafolio.get('nombre','?')}")
+    print(f"⚠️ Sin chat_id para: {portafolio.get('nombre','?')}")
     return ""
 
 # ─────────────────────────────────────────────────────────────
@@ -495,17 +666,30 @@ def enviar_buenos_dias(archivo, portafolio):
     if not chat_id:
         return
 
-    tickers     = list(portafolio.get("composicion", {}).keys())
+    # Leer rangos precalculados para incluir en el mensaje
+    rangos     = _cargar_rangos_disco(archivo)
+    tickers    = list(portafolio.get("composicion", {}).keys())
     nombre_port = portafolio.get("nombre", "tu portafolio")
-    ahora       = hora_colombia()
-    dia_semana  = ["lunes", "martes", "miércoles", "jueves", "viernes"][ahora.weekday()]
+    ahora      = hora_colombia()
+    dia_semana = ["lunes", "martes", "miércoles", "jueves", "viernes"][ahora.weekday()]
+
+    # Resumen de rangos del día
+    resumen_rangos = ""
+    if rangos:
+        for ticker, r in rangos["rangos"].items():
+            if r["puede_entrar"]:
+                resumen_rangos += f"  🟢 {ticker}: entraría si cae bajo ${r['rango_entrar']:,.2f}\n"
+            elif r["puede_vigilar"]:
+                resumen_rangos += f"  🟡 {ticker}: vigilar si cae bajo ${r['rango_vigilar']:,.2f}\n"
+            else:
+                resumen_rangos += f"  ⚪ {ticker}: NEUTRAL hoy (indicadores no favorables)\n"
 
     msg = (
         f"☀️ <b>Buenos días — {dia_semana} {ahora.strftime('%d/%m')}</b>\n\n"
-        f"📋 Portafolio: <b>{nombre_port}</b>\n"
-        f"🔍 Monitoreando: <b>{', '.join(tickers)}</b>\n\n"
-        f"El mercado NYSE abre a las 9:30am. "
-        f"Estaré analizando cada 18 minutos y te aviso si encuentro señales.\n\n"
+        f"📋 Portafolio: <b>{nombre_port}</b>\n\n"
+        f"<b>Rangos calculados para hoy:</b>\n{resumen_rangos}\n"
+        f"🔍 Monitoreando cada 9 segundos de 8:30am a 3:00pm.\n"
+        f"Te aviso al instante si algún precio cruza su rango.\n\n"
         f"<i>Cuando recibas una alerta podrás responder:\n"
         f"✅ Ya entré · ❌ No voy a entrar · 📊 Sigue informando</i>"
     )
@@ -520,115 +704,18 @@ def enviar_buenos_dias(archivo, portafolio):
     telegram(chat_id, msg)
     print(f"  ☀️ Buenos días enviado: {portafolio['nombre']}")
 
-# ─────────────────────────────────────────────────────────────
-# CICLO PRINCIPAL
-# ─────────────────────────────────────────────────────────────
-
-def ciclo_portafolio(archivo, portafolio):
-    composicion = portafolio.get("composicion", {})
-    tickers     = list(composicion.keys())
-    if not tickers:
-        return
-
-    print(f"  🔍 Analizando {len(tickers)} activos de {portafolio['nombre']}...")
-    resultados = []
-    for tk in tickers:
-        r = analizar_activo(tk)
-        if r:
-            resultados.append(r)
-        time.sleep(0.5)  # pequeña pausa entre tickers
-
-    if not resultados:
-        return
-
-    estado    = leer_estado(archivo)
-    chat_id   = chat_id_de(portafolio)
-    ahora_str = hora_colombia().strftime("%Y-%m-%d %H:%M")
-    hoy_str   = hora_colombia().strftime("%Y-%m-%d")
-
-    entradas = [r for r in resultados if r["senal"] == "ENTRAR"]
-    vigilar  = [r for r in resultados if r["senal"] == "VIGILAR"]
-
-    if entradas:
-        ia_txt = analisis_ia(resultados, portafolio, tipo="ciclo")
-
-        for r in entradas:
-            ticker = r["ticker"]
-            dec    = decision_usuario(estado, ticker)
-
-            # ── Silenciar según decisión del usuario ───────────
-            if dec == "no_entro":
-                print(f"  ⏭ {ticker}: usuario dijo NO entrar — silenciado hoy")
-                continue
-
-            if dec == "entro":
-                print(f"  ⏭ {ticker}: usuario ya entró — silenciado hoy")
-                continue
-
-            # ── Anti-spam: máximo 3 intentos sin respuesta ─────
-            if ya_alerte_hoy(estado, ticker) and dec != "sigue":
-                clave   = f"ciclos_sin_respuesta_{ticker}"
-                ciclos  = estado.get(clave, 0) + 1
-                estado[clave] = ciclos
-                if ciclos >= 3:
-                    print(f"  🔇 {ticker}: 3 intentos sin respuesta — silenciando hoy")
-                    continue
-                print(f"  🔁 {ticker}: reintento {ciclos}/3 sin respuesta del usuario")
-
-            # ── Construir y enviar alerta ──────────────────────
-            msg = (
-                f"🟢 <b>SEÑAL DE ENTRADA — {ticker}</b>\n\n"
-                # Precio en tiempo real (Finnhub)
-                f"💵 Precio: <b>${r['precio']:,.2f} USD</b> "
-                f"({r['cambio_dia']:+.2f}% hoy)\n"
-                f"🕐 Apertura: ${r['apertura']:,.2f} · "
-                f"Max: ${r['maximo_dia']:,.2f} · Min: ${r['minimo_dia']:,.2f}\n\n"
-                # Indicadores técnicos (yfinance histórico)
-                f"📊 Score: <b>{r['score']}/10</b> · RSI: {r['rsi']} · "
-                f"Tendencia 20d: {r['tendencia']:+.1f}%\n"
-                f"📈 MA20: ${r['ma20']:,.2f} · MA50: ${r['ma50']:,.2f}\n"
-            )
-            if ia_txt:
-                msg += f"\n💬 {ia_txt}"
-            if dec == "sigue":
-                msg += "\n\n<i>(Actualización — pediste seguir informado)</i>"
-
-            telegram(chat_id, msg, reply_markup=teclado_decision(ticker))
-            marcar_alerta_enviada(estado, ticker)
-            estado[f"ciclos_sin_respuesta_{ticker}"] = 0
-            print(f"  ✅ Alerta enviada: {ticker} — precio RT ${r['precio']} (Finnhub)")
-
-        estado["ultimo_dia_con_senal"] = hoy_str
-        estado["dias_consecutivos_sin_senal"] = 0
-
-    else:
-        ultimo = estado.get("ultimo_dia_con_senal")
-        if ultimo:
-            try:
-                dias = sum(
-                    1 for i in range(
-                        (datetime.strptime(hoy_str, "%Y-%m-%d") -
-                         datetime.strptime(ultimo, "%Y-%m-%d")).days
-                    )
-                    if (datetime.strptime(ultimo, "%Y-%m-%d") + timedelta(days=i+1)).weekday() < 5
-                )
-                estado["dias_consecutivos_sin_senal"] = dias
-            except:
-                estado["dias_consecutivos_sin_senal"] = estado.get("dias_consecutivos_sin_senal", 0)
-        else:
-            estado["dias_consecutivos_sin_senal"] = estado.get("dias_consecutivos_sin_senal", 0) + 1
-
-    estado["resultados"]        = resultados
-    estado["timestamp"]         = ahora_str
-    estado["prediccion"]        = (
-        f"🟢 {len(entradas)} entrada(s) detectada(s)" if entradas
-        else f"👁 {len(vigilar)} en vigilancia" if vigilar
-        else "⚪ Sin señales este ciclo"
-    )
-    estado["justificacion"]     = analisis_ia(resultados, portafolio, tipo="ciclo") if not entradas else ""
-    estado["nombre_portafolio"] = portafolio["nombre"]
-    guardar_estado(archivo, estado)
-    return estado
+def _cargar_rangos_disco(archivo):
+    """Lee los rangos guardados en disco para este portafolio."""
+    hoy  = hora_colombia().strftime("%Y-%m-%d")
+    ruta = os.path.join(PORTS_DIR, f"rangos_{archivo}")
+    if not os.path.exists(ruta):
+        return None
+    try:
+        with open(ruta, "r", encoding="utf-8") as f:
+            r = json.load(f)
+        return r if r.get("fecha") == hoy else None
+    except:
+        return None
 
 # ─────────────────────────────────────────────────────────────
 # REPORTE DE CIERRE
@@ -643,19 +730,22 @@ def reporte_cierre(archivo, portafolio, estado):
     hoy_str  = hora_colombia().strftime("%A %d de %B de %Y")
     dias_sin = estado.get("dias_consecutivos_sin_senal", 0)
 
-    lineas = [f"📋 <b>REPORTE DE CIERRE — {portafolio['nombre']}</b>", f"📅 {hoy_str}\n"]
+    lineas = [
+        f"📋 <b>REPORTE DE CIERRE — {portafolio['nombre']}</b>",
+        f"📅 {hoy_str}\n"
+    ]
     for r in sorted(resultados, key=lambda x: x["score"], reverse=True):
         emoji      = {"ENTRAR": "🟢", "VIGILAR": "🟡", "NEUTRAL": "⚪"}.get(r["senal"], "⚪")
         cambio_str = f" ({r['cambio_dia']:+.2f}%)" if r.get("cambio_dia") is not None else ""
         lineas.append(
             f"{emoji} <b>{r['ticker']}</b> ${r['precio']:,.2f}{cambio_str}\n"
-            f"   Score {r['score']}/10 | RSI {r['rsi']} | {r['tendencia']:+.1f}% | Vol {r['vol_ratio']}x"
+            f"   Score {r['score']}/10 | RSI {r['rsi']} | {r['tendencia']:+.1f}%"
         )
 
     entradas = [r for r in resultados if r["senal"] == "ENTRAR"]
     lineas.append(
-        f"\n🎯 Señales: {', '.join(r['ticker'] for r in entradas)}" if entradas
-        else "\n⚪ Sin señales hoy"
+        f"\n🎯 Señales hoy: {', '.join(r['ticker'] for r in entradas)}"
+        if entradas else "\n⚪ Sin señales de entrada hoy"
     )
     if dias_sin > 0:
         lineas.append(f"📆 Días sin señal: {dias_sin}")
@@ -675,7 +765,7 @@ def reporte_cierre(archivo, portafolio, estado):
     telegram(chat_id, msg_final)
     print(f"  📋 Reporte cierre enviado: {portafolio['nombre']}")
 
-    # Limpiar alertas del día al cerrar — mañana arrancan limpias
+    # Limpiar alertas del día
     estado["alertas_enviadas_hoy"] = {}
     estado["decisiones_usuario"]   = {}
     estado["reporte_cierre"]       = msg_final
@@ -703,14 +793,13 @@ def verificar_alerta_suboptimal(archivo, portafolio, estado):
         guardar_estado(archivo, estado)
 
 # ─────────────────────────────────────────────────────────────
-# WEBHOOK: procesar respuestas del usuario desde Telegram
+# WEBHOOK DE TELEGRAM
 # ─────────────────────────────────────────────────────────────
 
 def procesar_callback_telegram(callback_data, chat_id):
     """
     Procesa los botones inline del usuario.
     callback_data: "entro:AAPL", "no_entro:AAPL", "sigue:AAPL"
-    Llamado desde /telegram-webhook en dashboard.py
     """
     try:
         partes   = callback_data.split(":", 1)
@@ -720,7 +809,7 @@ def procesar_callback_telegram(callback_data, chat_id):
             return
 
         for fn in os.listdir(PORTS_DIR):
-            if not fn.endswith(".json") or fn.startswith("monitor_"):
+            if not fn.endswith(".json") or fn.startswith("monitor_") or fn.startswith("rangos_"):
                 continue
             try:
                 with open(os.path.join(PORTS_DIR, fn), "r", encoding="utf-8") as f:
@@ -728,9 +817,9 @@ def procesar_callback_telegram(callback_data, chat_id):
                 if chat_id_de(p) == str(chat_id):
                     registrar_decision(fn, ticker, decision)
                     mensajes = {
-                        "entro":    f"✅ Registrado: entraste a <b>{ticker}</b>. No te molesto más con este hoy.",
+                        "entro":    f"✅ Registrado: entraste a <b>{ticker}</b>. No te molesto más hoy.",
                         "no_entro": f"❌ Ok, no te aviso más de <b>{ticker}</b> hoy.",
-                        "sigue":    f"📊 Perfecto, te sigo informando de <b>{ticker}</b> si el precio mejora."
+                        "sigue":    f"📊 Perfecto, te aviso si el precio de <b>{ticker}</b> mejora."
                     }
                     telegram(str(chat_id), mensajes.get(decision, "Decisión registrada."))
                     print(f"  📲 Decisión '{decision}' para {ticker} — chat {chat_id}")
@@ -755,8 +844,18 @@ def iniciar_monitor():
     print("🚀 Monitor iniciado")
 
 def _loop_monitor():
-    ultimo_ciclo   = {}
-    buenos_enviado = {}
+    """
+    Estados del loop:
+    8:00am-8:10am  →  precalcular_rangos() UNA VEZ
+    8:15am-8:25am  →  enviar buenos días
+    8:30am-3:00pm  →  vigilar_precios() cada 9 segundos
+    3:00pm-3:45pm  →  reporte de cierre
+    resto          →  dormir hasta las 8am del próximo día hábil
+    """
+    buenos_enviado    = {}   # archivo → fecha último buenos días
+    rangos_calculados = {}   # archivo → rangos del día (en RAM como caché)
+    precalculo_hecho  = {}   # archivo → fecha del último precálculo
+    cierre_enviado    = {}   # archivo → fecha del último cierre
 
     while True:
         try:
@@ -764,9 +863,34 @@ def _loop_monitor():
             ahora       = hora_colombia()
             hoy         = ahora.strftime("%Y-%m-%d")
 
-            # ── Buenos días (una vez por día) ──────────────────
-            if es_hora_buenos_dias():
-                for archivo, portafolio in portafolios:
+            # ── Cargar rangos desde disco si Railway reinició ──
+            # Esto corre siempre — si ya están en RAM no hace nada
+            for archivo, _ in portafolios:
+                if archivo not in rangos_calculados:
+                    rangos = _cargar_rangos_disco(archivo)
+                    if rangos:
+                        rangos_calculados[archivo] = rangos
+                        precalculo_hecho[archivo]  = hoy
+                        print(f"  📂 Rangos cargados desde disco: {archivo}")
+
+            # ── 8:00am — Precálculo de rangos ─────────────────
+            if es_hora_precalculo():
+                for archivo, _ in portafolios:
+                    if precalculo_hecho.get(archivo) != hoy:
+                        try:
+                            with open(os.path.join(PORTS_DIR, archivo), "r", encoding="utf-8") as f:
+                                pf = json.load(f)
+                            resultado = precalcular_rangos(archivo, pf)
+                            if resultado:
+                                rangos_calculados[archivo] = resultado
+                                precalculo_hecho[archivo]  = hoy
+                        except Exception as e:
+                            print(f"❌ Error precálculo {archivo}: {e}")
+                time.sleep(60)
+
+            # ── 8:15am — Buenos días ───────────────────────────
+            elif es_hora_buenos_dias():
+                for archivo, _ in portafolios:
                     if buenos_enviado.get(archivo) != hoy:
                         try:
                             with open(os.path.join(PORTS_DIR, archivo), "r", encoding="utf-8") as f:
@@ -777,32 +901,45 @@ def _loop_monitor():
                         buenos_enviado[archivo] = hoy
                 time.sleep(60)
 
-            # ── Mercado abierto: ciclos de análisis ────────────
+            # ── 8:30am-3:00pm — Vigilancia cada 9 segundos ────
             elif mercado_abierto():
-                for archivo, portafolio in portafolios:
-                    ultimo = ultimo_ciclo.get(archivo)
-                    if ultimo is None or (ahora - ultimo).total_seconds() >= INTERVALO_MINUTOS * 60:
+                for archivo, _ in portafolios:
+                    rangos = rangos_calculados.get(archivo)
+                    if not rangos:
+                        print(f"  ⚠️ Sin rangos para {archivo} — esperando precálculo")
+                        continue
+                    try:
+                        with open(os.path.join(PORTS_DIR, archivo), "r", encoding="utf-8") as f:
+                            pf = json.load(f)
+                        vigilar_precios(archivo, pf, rangos)
+                        # Verificar alerta subóptima
+                        estado = leer_estado(archivo)
+                        verificar_alerta_suboptimal(archivo, pf, estado)
+                    except Exception as e:
+                        print(f"❌ Error vigilando {archivo}: {e}")
+
+                time.sleep(9)   # ← cada 9 segundos
+
+            # ── 4:00pm — Reporte de cierre ─────────────────────
+            elif es_hora_cierre():
+                for archivo, _ in portafolios:
+                    if cierre_enviado.get(archivo) != hoy:
                         try:
                             with open(os.path.join(PORTS_DIR, archivo), "r", encoding="utf-8") as f:
                                 pf = json.load(f)
-                            estado = ciclo_portafolio(archivo, pf)
-                            if estado:
-                                verificar_alerta_suboptimal(archivo, pf, estado)
+                            estado = leer_estado(archivo)
+                            reporte_cierre(archivo, pf, estado)
+                            cierre_enviado[archivo] = hoy
                         except Exception as e:
-                            print(f"❌ Error ciclo {archivo}: {e}")
-                        ultimo_ciclo[archivo] = ahora
+                            print(f"❌ Error cierre {archivo}: {e}")
                 time.sleep(60)
 
-            # ── Hora de cierre ─────────────────────────────────
-            elif es_hora_cierre():
-                print("📋 Ventana de cierre — el scheduler envía el reporte.")
-                time.sleep(60)
-
-            # ── Mercado cerrado ────────────────────────────────
+            # ── Mercado cerrado — dormir ───────────────────────
             else:
-                segs = segundos_hasta_apertura()
-                print(f"💤 Mercado cerrado. Próxima apertura en {segs/3600:.1f}h")
-                time.sleep(min(segs, 300))
+                segs = segundos_hasta_precalculo()
+                horas = segs / 3600
+                print(f"💤 Mercado cerrado. Próximo precálculo en {horas:.1f}h")
+                time.sleep(min(segs, 300))   # máximo 5 minutos por si Railway reinicia
 
         except Exception as e:
             print(f"❌ Error loop monitor: {e}")

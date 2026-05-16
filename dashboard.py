@@ -2175,6 +2175,7 @@ def monitor_view(archivo):
                 f'<div style="display:flex;align-items:center;gap:10px">'
                 f'<span style="padding:4px 12px;border-radius:980px;font-size:11px;font-weight:500;'
                 f'background:{bg};color:{col};border:1px solid {bd}">{em} {s}</span>'
+                f'<span id="senal-{r["ticker"]}" style="padding:4px 12px;...background:{bg};color:{col};...">{em} {s}</span>'
                 f'{btn_c}</div></div>'
 
                 # Precio grande
@@ -2189,6 +2190,7 @@ def monitor_view(archivo):
                 f'<div style="display:flex;justify-content:space-between;margin-bottom:4px">'
                 f'<span style="font-size:11px;color:#6e6e73;text-transform:uppercase;letter-spacing:0.05em">Score de entrada</span>'
                 f'<span style="font-size:13px;font-weight:600;color:{barra_c}">{r["score"]}/10</span></div>'
+                f'<span id="score-{r["ticker"]}" style="font-size:13px;font-weight:600;color:{barra_c}">{r["score"]}/10</span>'
                 f'<div style="background:rgba(255,255,255,0.06);border-radius:980px;height:5px;overflow:hidden">'
                 f'<div style="background:{barra_c};height:100%;width:{barra_w}%;transition:width 0.4s"></div>'
                 f'</div></div>'
@@ -2358,7 +2360,8 @@ def monitor_view(archivo):
         '    var d=await r.json();'
         '    if(!d.ok)return;'
         '    Object.entries(d.precios).forEach(function(entry){'
-        '      var tk=entry[0],data=entry[1];'
+        '      var tk=entry[0];'
+        '      var data=entry[1];'
         '      var elP=document.getElementById("precio-"+tk);'
         '      if(elP){'
         '        if(data.mercado_rt){'
@@ -2373,6 +2376,25 @@ def monitor_view(archivo):
         '        elC.textContent=s+data.cambio_dia.toFixed(2)+"% hoy";'
         '        elC.style.color=data.cambio_dia>=0?"#30d158":"#ff453a";'
         '      }'
+        '      var elS=document.getElementById("senal-"+tk);'
+        '      if (elS) {'
+        '          var colores ={'
+        '          "ENTRAR": "#30D158"'
+        '          "VIGILAR":"#ffd60a"'
+        '          "NEUTRAL":"#6e6e73"'
+        ' };'
+        '           var emojis={'
+        '           "ENTRAR":  "🟢",'
+        '            "VIGILAR": "🟡",'
+        '           "NEUTRAL": "⚪"'
+        '}'
+        '            elS.textContent = (emojis[data.senal]||"⚪") + " " + data.senal;'
+        '            elS.style.color = colores[data.senal]|| "#6e6e73";'
+        '}'
+        '           var elSc = document.getElementById("score-" + tk);'
+        '           if (elSc) {'
+        '               elSc.textContent = data.score + "/10";'
+        '}'
         '    });'
         '    var ts=document.getElementById("rt-timestamp");'
         '    if(ts){'
@@ -3054,32 +3076,42 @@ def api_precios_rt(archivo):
     if redir:
         return jsonify({'error': 'No autorizado'})
     try:
-        from gestor_portafolio import leer_portafolio
-        portafolio  = leer_portafolio(archivo)
-        tickers     = list(portafolio.get('composicion', {}).keys())
-        finnhub_key = os.environ.get('FINNHUB_API_KEY', '')
-        mercado_rt  = mercado_abierto_ahora()
-        precios     = {}
-        for tk in tickers:
-            try:
-                r = requests.get(
-                    'https://finnhub.io/api/v1/quote',
-                    params={'symbol': tk, 'token': finnhub_key},
-                    timeout=5
-                )
-                d = r.json()
-                if d.get('c'):
-                    precios[tk] = {
-                        'precio':      round(float(d['c']), 2),   # último precio
-                        'cierre_ant':  round(float(d.get('pc', 0)), 2),  # cierre anterior
-                        'cambio_dia':  round(float(d.get('dp', 0)), 2),
-                        'maximo':      round(float(d.get('h', 0)), 2),
-                        'minimo':      round(float(d.get('l', 0)), 2),
-                        'mercado_rt':  mercado_rt,  # si está abierto o no
-                    }
-            except:
-                continue
-        return jsonify({'ok': True, 'precios': precios, 'mercado_abierto': mercado_rt})
+        # Lee el estado que el monitor actualiza cada 9 segundos
+        # No llama a Finnhub directamente — el monitor ya lo hizo
+        ruta = os.path.join(DATOS_DIR, "portafolios", f"monitor_{archivo}")
+        if not os.path.exists(ruta):
+            return jsonify({'ok': False, 'error': 'Sin datos aún'})
+
+        with open(ruta, 'r', encoding='utf-8') as f:
+            estado = json.load(f)
+
+        resultados_rt = estado.get('resultados_rt', {})
+        mercado_rt    = mercado_abierto_ahora()
+
+        precios = {}
+        for ticker, r in resultados_rt.items():
+            precios[ticker] = {
+                'precio':        r.get('precio', 0),
+                'cambio_dia':    r.get('cambio_dia', 0),
+                'senal':         r.get('senal', 'NEUTRAL'),
+                'score':         r.get('score', 0),
+                'rsi':           r.get('rsi', 0),
+                'ma20':          r.get('ma20', 0),
+                'ma50':          r.get('ma50', 0),
+                'rango_entrar':  r.get('rango_entrar'),
+                'rango_vigilar': r.get('rango_vigilar'),
+                'puede_entrar':  r.get('puede_entrar', False),
+                'mercado_rt':    mercado_rt,
+                'timestamp':     r.get('timestamp', ''),
+            }
+
+        return jsonify({
+            'ok':             True,
+            'precios':        precios,
+            'mercado_abierto': mercado_rt,
+            'ultimo_update':  estado.get('timestamp', ''),
+        })
+
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)})
 
