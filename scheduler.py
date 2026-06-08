@@ -14,15 +14,16 @@ import json
 from datetime import datetime, timezone, timedelta
 import requests
 
-TELEGRAM_TOKEN      = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-FINNHUB_KEY         = os.environ.get("FINNHUB_API_KEY", "")
-BASE_DIR            = os.path.dirname(os.path.abspath(__file__))
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+FINNHUB_KEY = os.environ.get("FINNHUB_API_KEY", "")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CARPETA_PORTAFOLIOS = os.path.join(BASE_DIR, "datos", "portafolios")
-SCHEDULER_STATE     = os.path.join(BASE_DIR, "datos", "scheduler_state.json")
+SCHEDULER_STATE = os.path.join(BASE_DIR, "datos", "scheduler_state.json")
 
 # ─────────────────────────────────────────────────────────────
 # ESTADO PERSISTENTE EN DISCO
 # ─────────────────────────────────────────────────────────────
+
 
 def leer_estado_scheduler():
     """Lee el estado del scheduler desde disco."""
@@ -34,6 +35,7 @@ def leer_estado_scheduler():
             pass
     return {}
 
+
 def guardar_estado_scheduler(estado):
     """Guarda el estado del scheduler en disco."""
     os.makedirs(os.path.dirname(SCHEDULER_STATE), exist_ok=True)
@@ -43,10 +45,12 @@ def guardar_estado_scheduler(estado):
     except Exception as e:
         print(f"❌ Error guardando estado scheduler: {e}")
 
+
 def ya_enviado_hoy(clave, hoy_str):
     """Verifica si ya se envió un mensaje identificado por clave hoy."""
     estado = leer_estado_scheduler()
     return estado.get(clave) == hoy_str
+
 
 def marcar_enviado(clave, hoy_str):
     """Marca que ya se envió el mensaje de hoy."""
@@ -54,12 +58,15 @@ def marcar_enviado(clave, hoy_str):
     estado[clave] = hoy_str
     guardar_estado_scheduler(estado)
 
+
 # ─────────────────────────────────────────────────────────────
 # UTILIDADES
 # ─────────────────────────────────────────────────────────────
 
+
 def hora_colombia():
     return datetime.now(timezone(timedelta(hours=-5)))
+
 
 def enviar_telegram(chat_id, mensaje):
     if not chat_id or not TELEGRAM_TOKEN:
@@ -68,14 +75,16 @@ def enviar_telegram(chat_id, mensaje):
         requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
             json={"chat_id": chat_id, "text": mensaje, "parse_mode": "HTML"},
-            timeout=10
+            timeout=10,
         )
     except Exception as e:
         print(f"❌ Error Telegram scheduler: {e}")
 
+
 # ─────────────────────────────────────────────────────────────
 # FINNHUB — precio actual
 # ─────────────────────────────────────────────────────────────
+
 
 def finnhub_precio(ticker):
     """Precio actual en tiempo real desde Finnhub."""
@@ -83,7 +92,7 @@ def finnhub_precio(ticker):
         r = requests.get(
             "https://finnhub.io/api/v1/quote",
             params={"symbol": ticker, "token": FINNHUB_KEY},
-            timeout=8
+            timeout=8,
         )
         data = r.json()
         precio = data.get("c", 0)
@@ -92,9 +101,11 @@ def finnhub_precio(ticker):
         print(f"❌ Finnhub precio {ticker}: {e}")
         return None
 
+
 # ─────────────────────────────────────────────────────────────
 # CÁLCULO TIEMPO REAL (Finnhub, sin yfinance)
 # ─────────────────────────────────────────────────────────────
+
 
 def calcular_tiempo_real_simple(portafolio):
     """
@@ -123,10 +134,10 @@ def calcular_tiempo_real_simple(portafolio):
                 pos_raw[tk] = {
                     "fracciones": 0,
                     "invertido": 0,
-                    "fecha_inicio": a["fecha"]
+                    "fecha_inicio": a["fecha"],
                 }
             pos_raw[tk]["fracciones"] += a["fracciones"]
-            pos_raw[tk]["invertido"]  += a["monto_cop"]
+            pos_raw[tk]["invertido"] += a["monto_cop"]
 
         resultados = []
         total_inv = total_val = 0
@@ -138,17 +149,21 @@ def calcular_tiempo_real_simple(portafolio):
                 continue
             time.sleep(0.5)  # respetar rate limit Finnhub free (60 req/min)
 
-            val  = d["fracciones"] * precio * trm_actual
-            años = (datetime.now() - datetime.strptime(d["fecha_inicio"], "%Y-%m-%d")).days / 365.25
+            val = d["fracciones"] * precio * trm_actual
+            años = (
+                datetime.now() - datetime.strptime(d["fecha_inicio"], "%Y-%m-%d")
+            ).days / 365.25
             inv_r = d["invertido"] / (1 + inf_anual / 100) ** años
-            gan  = val - inv_r
+            gan = val - inv_r
 
-            resultados.append({
-                "activo":       tk,
-                "valor_hoy":    round(val, 0),
-                "ganancia":     round(gan, 0),
-                "rentabilidad": round((gan / inv_r * 100) if inv_r > 0 else 0, 2)
-            })
+            resultados.append(
+                {
+                    "activo": tk,
+                    "valor_hoy": round(val, 0),
+                    "ganancia": round(gan, 0),
+                    "rentabilidad": round((gan / inv_r * 100) if inv_r > 0 else 0, 2),
+                }
+            )
             total_inv += inv_r
             total_val += val
 
@@ -156,24 +171,28 @@ def calcular_tiempo_real_simple(portafolio):
             return None
 
         return {
-            "posiciones":         resultados,
-            "total_invertido":    round(total_inv, 0),
-            "total_valor":        round(total_val, 0),
-            "ganancia_total":     round(total_val - total_inv, 0),
+            "posiciones": resultados,
+            "total_invertido": round(total_inv, 0),
+            "total_valor": round(total_val, 0),
+            "ganancia_total": round(total_val - total_inv, 0),
             "rentabilidad_total": round(
                 (total_val - total_inv) / total_inv * 100 if total_inv > 0 else 0, 2
-            )
+            ),
         }
 
     except Exception as e:
         print(f"❌ Error calcular tiempo real scheduler: {e}")
         return None
 
+
 # ─────────────────────────────────────────────────────────────
 # CONSTRUCCIÓN DE MENSAJES
 # ─────────────────────────────────────────────────────────────
 
-def construir_mensaje_portafolio(portafolio, datos_tr, nombre_usuario, total_portafolios):
+
+def construir_mensaje_portafolio(
+    portafolio, datos_tr, nombre_usuario, total_portafolios
+):
     nombre = portafolio.get("nombre", "Mi Portafolio")
     perfil = portafolio.get("perfil", "").upper()
 
@@ -186,16 +205,15 @@ def construir_mensaje_portafolio(portafolio, datos_tr, nombre_usuario, total_por
 
     if not datos_tr:
         return (
-            encabezado +
-            "\n⏳ Sin inversiones registradas aún.\n"
+            encabezado + "\n⏳ Sin inversiones registradas aún.\n"
             "Entra al sistema para registrar tu primera compra.\n\n"
             f"<i>Sistema de Portafolio · {datetime.now().strftime('%d %b %Y')}</i>"
         )
 
-    gl     = datos_tr["ganancia_total"]
+    gl = datos_tr["ganancia_total"]
     gl_pct = datos_tr["rentabilidad_total"]
     emoji_gl = "📈" if gl >= 0 else "📉"
-    signo    = "+" if gl >= 0 else ""
+    signo = "+" if gl >= 0 else ""
 
     lineas_activos = ""
     for pos in datos_tr["posiciones"]:
@@ -209,14 +227,14 @@ def construir_mensaje_portafolio(portafolio, datos_tr, nombre_usuario, total_por
 
     # Señales del monitor
     senal_html = ""
-    archivo    = portafolio.get("_archivo", "")
+    archivo = portafolio.get("_archivo", "")
     ruta_monitor = os.path.join(CARPETA_PORTAFOLIOS, f"monitor_{archivo}")
     if os.path.exists(ruta_monitor):
         try:
             with open(ruta_monitor, "r", encoding="utf-8") as f:
                 m = json.load(f)
             resultados = m.get("resultados", [])
-            entrar  = [r["ticker"] for r in resultados if r.get("senal") == "ENTRAR"]
+            entrar = [r["ticker"] for r in resultados if r.get("senal") == "ENTRAR"]
             vigilar = [r["ticker"] for r in resultados if r.get("senal") == "VIGILAR"]
             if entrar:
                 senal_html += f"\n🟢 <b>Señal ENTRAR:</b> {', '.join(entrar)}"
@@ -226,23 +244,25 @@ def construir_mensaje_portafolio(portafolio, datos_tr, nombre_usuario, total_por
             pass
 
     return (
-        encabezado +
-        f"\n💰 <b>Valor total:</b> ${datos_tr['total_valor']:,.0f} COP\n"
+        encabezado + f"\n💰 <b>Valor total:</b> ${datos_tr['total_valor']:,.0f} COP\n"
         f"📥 <b>Invertido:</b> ${datos_tr['total_invertido']:,.0f} COP\n"
         f"{emoji_gl} <b>Ganancia real:</b> {signo}${gl:,.0f} COP ({signo}{gl_pct}%)\n"
         f"\n<b>Posiciones:</b>\n{lineas_activos}"
-        + senal_html +
-        f"\n\n<i>Sistema de Portafolio · {datetime.now().strftime('%d %b %Y')}</i>"
+        + senal_html
+        + f"\n\n<i>Sistema de Portafolio · {datetime.now().strftime('%d %b %Y')}</i>"
     )
+
 
 # ─────────────────────────────────────────────────────────────
 # APERTURA (9:00am)
 # ─────────────────────────────────────────────────────────────
 
+
 def enviar_apertura():
     print(f"[{datetime.now().strftime('%H:%M:%S')}] ☀️ Enviando apertura...")
     try:
         from monitor import leer_portafolios_activos, chat_id_de
+
         portafolios = leer_portafolios_activos()
 
         for archivo, _ in portafolios:
@@ -256,12 +276,14 @@ def enviar_apertura():
                     continue
 
                 datos_tr = calcular_tiempo_real_simple(p)
-                tickers  = list(p.get("composicion", {}).keys())
-                ahora    = hora_colombia()
-                dia      = ["lunes", "martes", "miércoles", "jueves", "viernes"][ahora.weekday()]
+                tickers = list(p.get("composicion", {}).keys())
+                ahora = hora_colombia()
+                dia = ["lunes", "martes", "miércoles", "jueves", "viernes"][
+                    ahora.weekday()
+                ]
 
                 if datos_tr:
-                    gl    = datos_tr["ganancia_total"]
+                    gl = datos_tr["ganancia_total"]
                     signo = "+" if gl >= 0 else ""
                     emoji = "📈" if gl >= 0 else "📉"
                     valor_html = (
@@ -289,9 +311,11 @@ def enviar_apertura():
     except Exception as e:
         print(f"❌ Error general apertura: {e}")
 
+
 # ─────────────────────────────────────────────────────────────
 # CIERRE (4:05pm)
 # ─────────────────────────────────────────────────────────────
+
 
 def enviar_cierre():
     print(f"[{datetime.now().strftime('%H:%M:%S')}] 📋 Enviando cierre...")
@@ -311,16 +335,16 @@ def enviar_cierre():
                 if not chat_id:
                     continue
 
-                datos_tr   = calcular_tiempo_real_simple(p)
-                estado     = leer_estado(archivo)
+                datos_tr = calcular_tiempo_real_simple(p)
+                estado = leer_estado(archivo)
                 resultados = estado.get("resultados", [])
 
-                ahora      = hora_colombia()
+                ahora = hora_colombia()
                 es_viernes = ahora.weekday() == 4
 
                 # Valor de cierre
                 if datos_tr:
-                    gl    = datos_tr["ganancia_total"]
+                    gl = datos_tr["ganancia_total"]
                     signo = "+" if gl >= 0 else ""
                     emoji = "📈" if gl >= 0 else "📉"
                     valor_html = (
@@ -334,8 +358,14 @@ def enviar_cierre():
                 resumen_activos = ""
                 if resultados:
                     for r in sorted(resultados, key=lambda x: x["score"], reverse=True):
-                        em = {"ENTRAR": "🟢", "VIGILAR": "🟡", "NEUTRAL": "⚪"}.get(r["senal"], "⚪")
-                        cambio_str = f" ({r['cambio_dia']:+.2f}%)" if r.get("cambio_dia") is not None else ""
+                        em = {"ENTRAR": "🟢", "VIGILAR": "🟡", "NEUTRAL": "⚪"}.get(
+                            r["senal"], "⚪"
+                        )
+                        cambio_str = (
+                            f" ({r['cambio_dia']:+.2f}%)"
+                            if r.get("cambio_dia") is not None
+                            else ""
+                        )
                         resumen_activos += (
                             f"{em} <b>{r['ticker']}</b> ${r['precio']:,.2f}{cambio_str} · "
                             f"Score {r['score']}/10 · RSI {r['rsi']}\n"
@@ -344,15 +374,25 @@ def enviar_cierre():
                 # Análisis IA
                 ia_txt = ""
                 try:
-                    client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
-                    resumen_data = "\n".join(
-                        f"- {r['ticker']}: ${r['precio']} | RSI {r['rsi']} | "
-                        f"Score {r['score']}/10 | {r['senal']} | tendencia {r['tendencia']:+.1f}%"
-                        for r in resultados
-                    ) if resultados else "Sin datos de mercado hoy."
+                    client = anthropic.Anthropic(
+                        api_key=os.environ.get("ANTHROPIC_API_KEY", "")
+                    )
+                    resumen_data = (
+                        "\n".join(
+                            f"- {r['ticker']}: ${r['precio']} | RSI {r['rsi']} | "
+                            f"Score {r['score']}/10 | {r['senal']} | tendencia {r['tendencia']:+.1f}%"
+                            for r in resultados
+                        )
+                        if resultados
+                        else "Sin datos de mercado hoy."
+                    )
 
-                    entradas = [r["ticker"] for r in resultados if r["senal"] == "ENTRAR"]
-                    vigilar  = [r["ticker"] for r in resultados if r["senal"] == "VIGILAR"]
+                    entradas = [
+                        r["ticker"] for r in resultados if r["senal"] == "ENTRAR"
+                    ]
+                    vigilar = [
+                        r["ticker"] for r in resultados if r["senal"] == "VIGILAR"
+                    ]
 
                     prompt = (
                         f"Eres el analista de {p.get('propietario', 'el inversor')}. "
@@ -373,7 +413,7 @@ def enviar_cierre():
                     resp = client.messages.create(
                         model="claude-sonnet-4-5",
                         max_tokens=200,
-                        messages=[{"role": "user", "content": prompt}]
+                        messages=[{"role": "user", "content": prompt}],
                     )
                     ia_txt = resp.content[0].text.strip()
                 except Exception as e:
@@ -382,7 +422,9 @@ def enviar_cierre():
                 dias_sin = estado.get("dias_consecutivos_sin_senal", 0)
                 senal_resumen = ""
                 if entradas:
-                    senal_resumen = f"\n🎯 Señales de entrada hoy: <b>{', '.join(entradas)}</b>"
+                    senal_resumen = (
+                        f"\n🎯 Señales de entrada hoy: <b>{', '.join(entradas)}</b>"
+                    )
                 elif vigilar:
                     senal_resumen = f"\n👁 En vigilancia: <b>{', '.join(vigilar)}</b>"
                 else:
@@ -395,8 +437,7 @@ def enviar_cierre():
                     f"📋 <b>Cierre de mercado — {p.get('nombre', 'Portafolio')}</b>\n\n"
                     f"{valor_html}\n\n"
                     f"<b>Activos hoy:</b>\n{resumen_activos}"
-                    f"{senal_resumen}\n\n"
-                    + (f"💬 {ia_txt}" if ia_txt else "")
+                    f"{senal_resumen}\n\n" + (f"💬 {ia_txt}" if ia_txt else "")
                 )
 
                 # Limpiar alertas del día al cerrar
@@ -411,9 +452,11 @@ def enviar_cierre():
     except Exception as e:
         print(f"❌ Error general cierre: {e}")
 
+
 # ─────────────────────────────────────────────────────────────
 # LIMPIAR ALERTAS AL CIERRE
 # ─────────────────────────────────────────────────────────────
+
 
 def _limpiar_alertas_hoy(archivo):
     """Al cerrar el mercado, resetea las alertas del día para que mañana arranquen limpias."""
@@ -423,26 +466,28 @@ def _limpiar_alertas_hoy(archivo):
             with open(ruta_monitor, "r", encoding="utf-8") as f:
                 estado = json.load(f)
             estado["alertas_enviadas_hoy"] = {}
-            estado["decisiones_usuario"]   = {}
+            estado["decisiones_usuario"] = {}
             with open(ruta_monitor, "w", encoding="utf-8") as f:
                 json.dump(estado, f, indent=2, ensure_ascii=False)
     except Exception as e:
         print(f"⚠️ Error limpiando alertas: {e}")
 
+
 # ─────────────────────────────────────────────────────────────
 # LOOP PRINCIPAL — estado en disco, no en memoria
 # ─────────────────────────────────────────────────────────────
+
 
 def loop_scheduler():
     print("⏰ Scheduler iniciado")
 
     while True:
         try:
-            ahora        = hora_colombia()
-            hoy          = ahora.strftime("%Y-%m-%d")
+            ahora = hora_colombia()
+            hoy = ahora.strftime("%Y-%m-%d")
             es_dia_habil = ahora.weekday() < 5
-            hora         = ahora.hour
-            minuto       = ahora.minute
+            hora = ahora.hour
+            minuto = ahora.minute
 
             # ── Apertura: exactamente a las 9:00am ────────────
             if hora == 9 and minuto < 5 and es_dia_habil:

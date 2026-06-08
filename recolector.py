@@ -14,32 +14,51 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATOS_DIR = os.path.join(BASE_DIR, "datos")
 
 CARPETA_PRECIOS = os.path.join(DATOS_DIR, "precios")
-CARPETA_MACRO   = os.path.join(DATOS_DIR, "macro")
-CARPETA_LOGS    = os.path.join(DATOS_DIR, "Logs")
+CARPETA_MACRO = os.path.join(DATOS_DIR, "macro")
+CARPETA_LOGS = os.path.join(DATOS_DIR, "Logs")
 
 # ============================================================
 # CONFIGURACIÓN — activos
 # ============================================================
 
 ACTIVOS = [
-    'AAPL', 'MSFT', 'GOOGL', 'NVDA', 'META',
-    'JPM', 'V', 'MA',
-    'JNJ', 'LLY',
-    'AMZN', 'WMT', 'KO',
-    'XOM', 'CVX',
-    'GLD', 'TLT',
-    'VOO', 'VTI', 'VWO',
-    'QQQ', 'XLK',
-    'BTC-USD', 'ETH-USD', 'SOL-USD'
+    "AAPL",
+    "MSFT",
+    "GOOGL",
+    "NVDA",
+    "META",
+    "JPM",
+    "V",
+    "MA",
+    "JNJ",
+    "LLY",
+    "AMZN",
+    "WMT",
+    "KO",
+    "XOM",
+    "CVX",
+    "GLD",
+    "TLT",
+    "VOO",
+    "VTI",
+    "VWO",
+    "QQQ",
+    "XLK",
+    "BTC-USD",
+    "ETH-USD",
+    "SOL-USD",
 ]
 
 # ============================================================
 # UTILIDADES
 # ============================================================
 
+
 def crear_carpetas():
     for carpeta in [
-        CARPETA_PRECIOS, CARPETA_MACRO, CARPETA_LOGS,
+        CARPETA_PRECIOS,
+        CARPETA_MACRO,
+        CARPETA_LOGS,
         os.path.join(DATOS_DIR, "portafolios"),
         os.path.join(DATOS_DIR, "Reportes"),
         os.path.join(DATOS_DIR, "seguimiento"),
@@ -47,20 +66,25 @@ def crear_carpetas():
     ]:
         os.makedirs(carpeta, exist_ok=True)
 
+
 def registrar(mensaje, tipo="INFO"):
-    hoy  = datetime.now().strftime("%Y-%m-%d")
+    hoy = datetime.now().strftime("%Y-%m-%d")
     hora = datetime.now().strftime("%H:%M:%S")
     linea = f"[{hora}][{tipo}]{mensaje}\n"
     print(linea.strip())
     try:
-        with open(os.path.join(CARPETA_LOGS, f"Log_{hoy}.txt"), "a", encoding="utf-8") as f:
+        with open(
+            os.path.join(CARPETA_LOGS, f"Log_{hoy}.txt"), "a", encoding="utf-8"
+        ) as f:
             f.write(linea)
     except Exception:
         pass
 
+
 # ============================================================
 # RECOLECTOR 1 — PRECIOS DE ACCIONES
 # ============================================================
+
 
 def recolectar_precios():
     registrar("Iniciando descarga de precios...")
@@ -70,7 +94,9 @@ def recolectar_precios():
         df_existente = pd.read_parquet(archivo)
         ultima_fecha = df_existente.index.max()
         inicio = ultima_fecha + timedelta(days=1)
-        registrar(f"Datos existentes hasta {ultima_fecha.date()}. Descargando desde {inicio.date()}...")
+        registrar(
+            f"Datos existentes hasta {ultima_fecha.date()}. Descargando desde {inicio.date()}..."
+        )
     else:
         df_existente = pd.DataFrame()
         inicio = datetime.now() - timedelta(days=365 * 10)
@@ -79,29 +105,37 @@ def recolectar_precios():
     fin = datetime.now()
 
     try:
-        df_nuevo = yf.download(ACTIVOS, start=inicio, end=fin, auto_adjust=True)['Close']
-        df_nuevo = df_nuevo.dropna(how='all')
+        df_nuevo = yf.download(ACTIVOS, start=inicio, end=fin, auto_adjust=True)[
+            "Close"
+        ]
+        df_nuevo = df_nuevo.dropna(how="all")
 
         if df_nuevo.empty:
-            registrar("No hay datos nuevos hoy (mercado cerrado o fin de semana).", "AVISO")
+            registrar(
+                "No hay datos nuevos hoy (mercado cerrado o fin de semana).", "AVISO"
+            )
             return
 
         if not df_existente.empty:
             df_final = pd.concat([df_existente, df_nuevo])
-            df_final = df_final[~df_final.index.duplicated(keep='last')]
+            df_final = df_final[~df_final.index.duplicated(keep="last")]
         else:
             df_final = df_nuevo
 
         df_final.sort_index(inplace=True)
         df_final.to_parquet(archivo)
-        registrar(f"✅ Precios guardados. {len(df_nuevo)} días nuevos. Total: {len(df_final)} días.")
+        registrar(
+            f"✅ Precios guardados. {len(df_nuevo)} días nuevos. Total: {len(df_final)} días."
+        )
 
     except Exception as e:
         registrar(f"❌ Error descargando precios: {e}", "ERROR")
 
+
 # ============================================================
 # RECOLECTOR 2 — TRM COLOMBIA
 # ============================================================
+
 
 def recolectar_trm():
     registrar("Iniciando descarga de TRM...")
@@ -109,14 +143,14 @@ def recolectar_trm():
 
     try:
         url = "https://www.datos.gov.co/resource/ceyp-9c7c.csv?$limit=10000"
-        headers = {'User-Agent': 'Mozilla/5.0'}
+        headers = {"User-Agent": "Mozilla/5.0"}
         response = requests.get(url, headers=headers, timeout=15)
 
         df = pd.read_csv(io.StringIO(response.text))
-        df['Fecha'] = pd.to_datetime(df['vigenciadesde'])
-        df = df.set_index('Fecha').sort_index()
-        df = df[['valor']].rename(columns={'valor': 'TRM'})
-        df = df[~df.index.duplicated(keep='first')]
+        df["Fecha"] = pd.to_datetime(df["vigenciadesde"])
+        df = df.set_index("Fecha").sort_index()
+        df = df[["valor"]].rename(columns={"valor": "TRM"})
+        df = df[~df.index.duplicated(keep="first")]
 
         df.to_parquet(archivo)
         registrar(f"✅ TRM guardada. Último valor: ${df['TRM'].iloc[-1]:,.2f}")
@@ -124,9 +158,11 @@ def recolectar_trm():
     except Exception as e:
         registrar(f"❌ Error descargando TRM: {e}", "ERROR")
 
+
 # ============================================================
 # RECOLECTOR 3 — INFLACIÓN USA
 # ============================================================
+
 
 def recolectar_inflacion_usa():
     registrar("Iniciando descarga de inflación USA...")
@@ -134,35 +170,39 @@ def recolectar_inflacion_usa():
     try:
         # FRED API — fuente oficial, sin key requerida para este endpoint
         url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=CPIAUCSL"
-        headers = {'User-Agent': 'Mozilla/5.0'}
+        headers = {"User-Agent": "Mozilla/5.0"}
         r = requests.get(url, headers=headers, timeout=15)
         from io import StringIO
+
         df = pd.read_csv(StringIO(r.text))
-        df.columns = ['Fecha', 'CPI']
-        df['Fecha'] = pd.to_datetime(df['Fecha'])
-        df = df.set_index('Fecha').sort_index()
-        df['CPI'] = pd.to_numeric(df['CPI'], errors='coerce')
+        df.columns = ["Fecha", "CPI"]
+        df["Fecha"] = pd.to_datetime(df["Fecha"])
+        df = df.set_index("Fecha").sort_index()
+        df["CPI"] = pd.to_numeric(df["CPI"], errors="coerce")
         df = df.dropna()
-        df['Inflacion_USA'] = df['CPI'].pct_change(12) * 100
-        df = df[['Inflacion_USA']].dropna()
+        df["Inflacion_USA"] = df["CPI"].pct_change(12) * 100
+        df = df[["Inflacion_USA"]].dropna()
         df.to_parquet(archivo)
-        ultimo = df['Inflacion_USA'].iloc[-1]
-        fecha_ultimo = df.index[-1].strftime('%Y-%m')
-        registrar(f"✅ Inflación USA guardada. Último dato: {ultimo:.2f}% ({fecha_ultimo})")
+        ultimo = df["Inflacion_USA"].iloc[-1]
+        fecha_ultimo = df.index[-1].strftime("%Y-%m")
+        registrar(
+            f"✅ Inflación USA guardada. Último dato: {ultimo:.2f}% ({fecha_ultimo})"
+        )
     except Exception as e:
         registrar(f"❌ Error descargando inflación USA: {e}", "ERROR")
         # Fallback: usar valor conocido si falla todo
         if not os.path.exists(archivo):
             df = pd.DataFrame(
-                {'Inflacion_USA': [3.5]},
-                index=[pd.Timestamp('2025-03-01')]
+                {"Inflacion_USA": [3.5]}, index=[pd.Timestamp("2025-03-01")]
             )
             df.to_parquet(archivo)
             registrar("⚠️ Usando inflación USA de respaldo: 3.5% (marzo 2025)", "AVISO")
 
+
 # ============================================================
 # RECOLECTOR 4 — INFLACIÓN COLOMBIA
 # ============================================================
+
 
 def recolectar_inflacion_col():
     registrar("Iniciando descarga de inflación Colombia...")
@@ -173,61 +213,73 @@ def recolectar_inflacion_col():
             "https://api.worldbank.org/v2/country/CO/indicator/FP.CPI.TOTL.ZG"
             "?format=json&per_page=10&mrv=5"
         )
-        headers = {'User-Agent': 'Mozilla/5.0'}
+        headers = {"User-Agent": "Mozilla/5.0"}
         r = requests.get(url, headers=headers, timeout=15)
         data = r.json()
         registros = data[1]
         filas = []
         for rec in registros:
-            if rec.get('value') is not None:
-                filas.append({
-                    'Fecha': pd.Timestamp(f"{rec['date']}-12-01"),
-                    'Inflacion_COL': float(rec['value'])
-                })
+            if rec.get("value") is not None:
+                filas.append(
+                    {
+                        "Fecha": pd.Timestamp(f"{rec['date']}-12-01"),
+                        "Inflacion_COL": float(rec["value"]),
+                    }
+                )
         if not filas:
             raise ValueError("Sin datos del Banco Mundial")
-        df = pd.DataFrame(filas).set_index('Fecha').sort_index()
+        df = pd.DataFrame(filas).set_index("Fecha").sort_index()
         df.to_parquet(archivo)
-        ultimo = df['Inflacion_COL'].iloc[-1]
-        fecha_ultimo = df.index[-1].strftime('%Y')
-        registrar(f"✅ Inflación COL guardada. Último dato: {ultimo:.2f}% ({fecha_ultimo})")
+        ultimo = df["Inflacion_COL"].iloc[-1]
+        fecha_ultimo = df.index[-1].strftime("%Y")
+        registrar(
+            f"✅ Inflación COL guardada. Último dato: {ultimo:.2f}% ({fecha_ultimo})"
+        )
     except Exception as e:
-        registrar(f"⚠️ Banco Mundial falló: {e} — intentando fuente alternativa", "AVISO")
+        registrar(
+            f"⚠️ Banco Mundial falló: {e} — intentando fuente alternativa", "AVISO"
+        )
         try:
             # Alternativa: db.nomics con serie del FMI
             url2 = "https://api.db.nomics.world/v22/series/WB/WDI/A.FP.CPI.TOTL.ZG.COL?observations=1"
             r2 = requests.get(url2, timeout=15)
             data2 = r2.json()
-            periods = data2['series']['docs'][0]['period']
-            values  = data2['series']['docs'][0]['value']
+            periods = data2["series"]["docs"][0]["period"]
+            values = data2["series"]["docs"][0]["value"]
             filas2 = []
             for p, v in zip(periods, values):
                 if v is not None:
                     try:
-                        filas2.append({
-                            'Fecha': pd.Timestamp(f"{p}-12-01"),
-                            'Inflacion_COL': float(v)
-                        })
-                    except: continue
+                        filas2.append(
+                            {
+                                "Fecha": pd.Timestamp(f"{p}-12-01"),
+                                "Inflacion_COL": float(v),
+                            }
+                        )
+                    except:
+                        continue
             if not filas2:
                 raise ValueError("Sin datos en alternativa")
-            df2 = pd.DataFrame(filas2).set_index('Fecha').sort_index()
+            df2 = pd.DataFrame(filas2).set_index("Fecha").sort_index()
             df2.to_parquet(archivo)
-            ultimo2 = df2['Inflacion_COL'].iloc[-1]
+            ultimo2 = df2["Inflacion_COL"].iloc[-1]
             registrar(f"✅ Inflación COL (alternativa) guardada: {ultimo2:.2f}%")
         except Exception as e2:
             registrar(f"❌ Ambas fuentes fallaron: {e2}", "ERROR")
             if not os.path.exists(archivo):
                 df_fb = pd.DataFrame(
-                    {'Inflacion_COL': [5.68]},
-                    index=[pd.Timestamp('2024-12-01')]
+                    {"Inflacion_COL": [5.68]}, index=[pd.Timestamp("2024-12-01")]
                 )
                 df_fb.to_parquet(archivo)
-                registrar("⚠️ Usando inflación COL de respaldo: 5.68% (abril 2026)", "AVISO")
+                registrar(
+                    "⚠️ Usando inflación COL de respaldo: 5.68% (abril 2026)", "AVISO"
+                )
+
 
 # ============================================================
 # RECOLECTOR 5 — TASA LIBRE DE RIESGO
 # ============================================================
+
 
 def recolectar_tasa_libre_riesgo():
     registrar("Iniciando descarga de tasa libre de riesgo...")
@@ -243,20 +295,24 @@ def recolectar_tasa_libre_riesgo():
         response = requests.get(url, timeout=15)
         data = response.json()
 
-        df = pd.DataFrame(data['data'])
-        df['Fecha'] = pd.to_datetime(df['record_date'])
-        df['Risk_Free'] = pd.to_numeric(df['avg_interest_rate_amt'], errors='coerce')
-        df = df.set_index('Fecha')[['Risk_Free']].sort_index().dropna()
+        df = pd.DataFrame(data["data"])
+        df["Fecha"] = pd.to_datetime(df["record_date"])
+        df["Risk_Free"] = pd.to_numeric(df["avg_interest_rate_amt"], errors="coerce")
+        df = df.set_index("Fecha")[["Risk_Free"]].sort_index().dropna()
 
         df.to_parquet(archivo)
-        registrar(f"✅ Tasa libre de riesgo guardada. Último dato: {df['Risk_Free'].iloc[-1]:.2f}%")
+        registrar(
+            f"✅ Tasa libre de riesgo guardada. Último dato: {df['Risk_Free'].iloc[-1]:.2f}%"
+        )
 
     except Exception as e:
         registrar(f"❌ Error descargando tasa libre de riesgo: {e}", "ERROR")
 
+
 # ============================================================
 # RECOLECTOR 6 — TASA BANCO DE LA REPÚBLICA
 # ============================================================
+
 
 def recolectar_tasa_banrep():
     registrar("Iniciando descarga de tasa Banrep...")
@@ -266,9 +322,9 @@ def recolectar_tasa_banrep():
     if os.path.exists(archivo):
         try:
             df_prev = pd.read_parquet(archivo)
-            ultima  = df_prev.index.max()
+            ultima = df_prev.index.max()
             if ultima.date() == datetime.now().date():
-                tasa_hoy = float(df_prev['Tasa_Banrep'].iloc[-1])
+                tasa_hoy = float(df_prev["Tasa_Banrep"].iloc[-1])
                 registrar(f"✅ Tasa Banrep ya descargada hoy: {tasa_hoy:.2f}%")
                 return
         except Exception:
@@ -276,15 +332,18 @@ def recolectar_tasa_banrep():
 
         try:
             url = "https://www.banrep.gov.co/es/estadisticas/tasas-de-interes-del-banco-de-la-republica"
-            headers = {'User-Agent': 'Mozilla/5.0'}
+            headers = {"User-Agent": "Mozilla/5.0"}
             response = requests.get(url, headers=headers, timeout=15)
 
             import re
-            matches = re.findall(r'(\d+[.,]\d+)\s*%', response.text)
-            registrar(f"DEBUG todos los porcentajes encontrados: {matches[:20]}", "INFO")
+
+            matches = re.findall(r"(\d+[.,]\d+)\s*%", response.text)
+            registrar(
+                f"DEBUG todos los porcentajes encontrados: {matches[:20]}", "INFO"
+            )
 
             if matches:
-                tasa = float(matches[0].replace(',', '.'))
+                tasa = float(matches[0].replace(",", "."))
                 registrar(f"✅ Tasa Banrep extraída del sitio web: {tasa:.2f}%")
             else:
                 raise ValueError("No se encontró la tasa en el HTML")
@@ -293,16 +352,17 @@ def recolectar_tasa_banrep():
             tasa = 11.25
             registrar(f"⚠️ Usando tasa Banrep de respaldo: {tasa}%", "AVISO")
 
-    df = pd.DataFrame({'Tasa_Banrep': [tasa]}, index=[pd.Timestamp.now()])
+    df = pd.DataFrame({"Tasa_Banrep": [tasa]}, index=[pd.Timestamp.now()])
 
     if os.path.exists(archivo):
         df_existente = pd.read_parquet(archivo)
         df = pd.concat([df_existente, df])
-        df = df[~df.index.duplicated(keep='last')]
+        df = df[~df.index.duplicated(keep="last")]
 
     df.sort_index(inplace=True)
     df.to_parquet(archivo)
     registrar(f"✅ Tasa Banrep guardada: {tasa:.2f}%")
+
 
 # ============================================================
 # EJECUCIÓN PRINCIPAL
