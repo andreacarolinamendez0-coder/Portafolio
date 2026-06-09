@@ -5,9 +5,12 @@ import requests
 import json
 import os
 import time
+import logging
 import schedule
 from datetime import datetime, time as dtime, timedelta
 import warnings
+
+logger = logging.getLogger(__name__)
 
 warnings.filterwarnings("ignore")
 
@@ -17,8 +20,8 @@ from gestor_portafolio import leer_portafolio_activo
 # CONFIGURACIÓN TELEGRAM
 # ============================================================
 
-TELEGRAM_TOKEN = "8332465511:AAH-PlentkDhWWNenLGOdvJCLC6OXNEnrA8"
-TELEGRAM_CHAT_ID = "6999614895"
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "")
 
 
 def enviar_telegram(mensaje):
@@ -35,8 +38,8 @@ def notificacion_windows(titulo, mensaje):
         from plyer import notification
 
         notification.notify(title=titulo, message=mensaje, timeout=10)
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"Desktop notification not available: {e}")
 
 
 # ============================================================
@@ -88,7 +91,8 @@ def calcular_senales(ticker):
             )
             if hist_m.empty or len(hist_m) < 3:
                 hist_m = hist_w
-        except:
+        except Exception as e:
+            logger.warning(f"Monthly data unavailable for {ticker}, using weekly: {e}")
             hist_m = hist_w
         # Fallback: si falla con fechas explícitas, intentar con period
 
@@ -113,7 +117,8 @@ def calcular_senales(ticker):
                     )
                 if hist_d.empty or len(hist_d) < 50:
                     return None
-            except:
+            except Exception as e:
+                logger.warning(f"Could not download daily data for {ticker}: {e}")
                 return None
 
         if hist_d.empty or len(hist_d) < 50:
@@ -127,7 +132,8 @@ def calcular_senales(ticker):
                 )
                 if hist_d.empty or len(hist_d) < 50:
                     return None
-            except:
+            except Exception as e:
+                logger.warning(f"Could not download 6mo data for {ticker}: {e}")
                 return None
 
         for df in (hist_d, hist_w, hist_m):

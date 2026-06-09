@@ -3,9 +3,12 @@ import pandas as pd
 import numpy as np
 import json
 import os
+import logging
 import requests
 from datetime import datetime, timedelta
 import warnings
+
+logger = logging.getLogger(__name__)
 
 warnings.filterwarnings("ignore")
 
@@ -20,8 +23,8 @@ from gestor_portafolio import (
 # CONFIGURACIÓN
 # ============================================================
 
-TELEGRAM_TOKEN = "8332465511:AAH-PlentkDhWWNenLGOdvJCLC6OXNEnrA8"
-TELEGRAM_CHAT_ID = "6999614895"
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("ADMIN_CHAT_ID", "")
 CARPETA_PORT = "datos/portafolios"
 
 
@@ -43,7 +46,8 @@ def leer_trm_actual():
     try:
         trm = pd.read_parquet("datos/macro/trm.parquet")
         return float(trm["TRM"].iloc[-1])
-    except:
+    except Exception as e:
+        logger.warning(f"Could not read TRM, using fallback 4000: {e}")
         return 4000.0
 
 
@@ -53,7 +57,8 @@ def leer_trm_historica(fecha_str):
         fecha = pd.to_datetime(fecha_str)
         idx = trm.index.get_indexer([fecha], method="nearest")[0]
         return float(trm["TRM"].iloc[idx])
-    except:
+    except Exception as e:
+        logger.warning(f"Could not read historical TRM for {fecha_str}, using current: {e}")
         return leer_trm_actual()
 
 
@@ -61,7 +66,8 @@ def leer_inflacion_col():
     try:
         inf = pd.read_parquet("datos/macro/inflacion_col.parquet")
         return float(inf["Inflacion_COL"].iloc[-1])
-    except:
+    except Exception as e:
+        logger.warning(f"Could not read Colombian inflation, using fallback 4.90: {e}")
         return 4.90
 
 
@@ -94,7 +100,8 @@ def precio_actual_usd(ticker):
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
         return float(df["Close"].iloc[-1])
-    except:
+    except Exception as e:
+        logger.warning(f"Could not fetch price for {ticker}: {e}")
         return None
 
 

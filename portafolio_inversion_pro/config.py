@@ -5,17 +5,19 @@ BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 
 
 class Config:
-    SECRET_KEY = os.environ.get("SECRET_KEY", "portafolio-secret-2024-xK9mN2pQ")
+    SECRET_KEY = os.environ.get("SECRET_KEY")
+    if not SECRET_KEY:
+        raise RuntimeError("SECRET_KEY environment variable is not set")
     SQLALCHEMY_DATABASE_URI = f"sqlite:///{os.path.join(BASE_DIR, 'instance', 'portafolio.db')}"
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     PERMANENT_SESSION_LIFETIME = timedelta(days=30)
 
     # Groq AI
-    GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
+    GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
     GROQ_MODEL = "llama-3.3-70b-versatile"
 
     # Telegram
-    TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8332465511:AAH-PlentkDhWWNenLGOdvJCLC6OXNEnrA8")
+    TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 
     # Monitor
     MONITOR_INTERVAL = 60  # segundos entre actualizaciones de precios
