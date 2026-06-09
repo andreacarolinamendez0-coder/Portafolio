@@ -1,7 +1,11 @@
 import json
 import os
 import hashlib
+import logging
 from datetime import datetime
+from werkzeug.security import generate_password_hash, check_password_hash
+
+logger = logging.getLogger(__name__)
 
 CARPETA_PORTAFOLIOS = "datos/portafolios"
 os.makedirs(CARPETA_PORTAFOLIOS, exist_ok=True)
@@ -12,7 +16,24 @@ os.makedirs(CARPETA_PORTAFOLIOS, exist_ok=True)
 
 
 def hash_password(password):
+    # Legacy unsalted SHA-256 — only used for reading old hashes during migration
     return hashlib.sha256(password.encode()).hexdigest()
+
+
+def hash_password_secure(password):
+    return generate_password_hash(password)
+
+
+def _is_legacy_hash(h):
+    """Returns True if the hash is old-style (plain SHA-256 hex, 64 chars)."""
+    return len(h) == 64 and all(c in "0123456789abcdef" for c in h)
+
+
+def verify_password(stored_hash, password):
+    """Verify password against either legacy SHA-256 or modern werkzeug hash."""
+    if _is_legacy_hash(stored_hash):
+        return stored_hash == hash_password(password)
+    return check_password_hash(stored_hash, password)
 
 
 def _leer(ruta):
@@ -59,8 +80,8 @@ def listar_portafolios():
                             ultima_senal = "🟡 VIGILAR"
                         else:
                             ultima_senal = "⚪ NEUTRAL"
-                except:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Could not read monitor file {ruta_monitor}: {e}")
 
             portafolios.append(
                 {
@@ -76,7 +97,8 @@ def listar_portafolios():
                     "ultimo_analisis": ultimo_ts,
                 }
             )
-        except:
+        except Exception as e:
+            logger.warning(f"Could not read portfolio {archivo}: {e}")
             continue
     return portafolios
 
@@ -116,7 +138,7 @@ def crear_portafolio(
         "nombre": nombre,
         "perfil": perfil,
         "propietario": propietario,
-        "password_hash": hash_password(password),
+        "password_hash": hash_password_secure(password),
         "email": email,
         "telegram_chat_id": telegram_chat_id,
         "fecha_inicio": datetime.now().strftime("%Y-%m-%d"),
@@ -156,8 +178,8 @@ def leer_portafolio(nombre_archivo):
             _escribir(ruta, data)
             print(f"⚠️ Portafolio {nombre_archivo} re-guardado en UTF-8.")
             return data
-        except:
-            print(f"❌ Error leyendo {nombre_archivo}: {e}")
+        except Exception as e2:
+            logger.error(f"Error reading {nombre_archivo}: {e}, fallback error: {e2}")
             return None
 
 
@@ -173,7 +195,8 @@ def leer_portafolio_activo():
                 data = _leer(f"{CARPETA_PORTAFOLIOS}/{archivo}")
                 if data.get("activo", False):
                     return data
-            except:
+            except Exception as e:
+                logger.warning(f"Could not read portfolio file {archivo}: {e}")
                 continue
     print("⚠️ No hay portafolio activo.")
     return None
@@ -188,8 +211,9 @@ def verificar_password(nombre_archivo, password):
     ruta = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}"
     try:
         data = _leer(ruta)
-        return data.get("password_hash") == hash_password(password)
-    except:
+        return verify_password(data.get("password_hash", ""), password)
+    except Exception as e:
+        logger.error(f"Error verifying password for {nombre_archivo}: {e}")
         return False
 
 
@@ -199,14 +223,14 @@ def verificar_password(nombre_archivo, password):
 
 
 def buscar_portafolios_por_password(password):
-    ph = hash_password(password)
     resultados = []
     for archivo in os.listdir(CARPETA_PORTAFOLIOS):
         if not archivo.endswith(".json") or archivo.startswith("monitor_"):
             continue
         try:
             data = _leer(f"{CARPETA_PORTAFOLIOS}/{archivo}")
-            if data.get("password_hash") == ph:
+            stored = data.get("password_hash", "")
+            if stored and verify_password(stored, password):
                 resultados.append(
                     {
                         "archivo": archivo,
@@ -215,7 +239,8 @@ def buscar_portafolios_por_password(password):
                         "propietario": data["propietario"],
                     }
                 )
-        except:
+        except Exception as e:
+            logger.warning(f"Could not read portfolio {archivo}: {e}")
             continue
     return resultados
 
@@ -367,7 +392,7 @@ def _leer_usuarios():
             "admin": {
                 "username": "admin",
                 "email": "admin@portafolio.com",
-                "password_hash": hash_password("admin123"),
+                "password_hash": hash_password_secure("admin123"),
                 "telegram_chat_id": "",
                 "fecha_registro": datetime.now().strftime("%Y-%m-%d"),
                 "es_admin": True,
@@ -393,7 +418,7 @@ def registrar_usuario(username, email, password, telegram_chat_id=""):
     usuarios[username] = {
         "username": username,
         "email": email,
-        "password_hash": hash_password(password),
+        "password_hash": hash_password_secure(password),
         "telegram_chat_id": telegram_chat_id,
         "fecha_registro": datetime.now().strftime("%Y-%m-%d"),
         "es_admin": False,
@@ -406,7 +431,6 @@ def login_usuario(email, password):
     from datetime import datetime, timedelta
 
     usuarios = _leer_usuarios()
-    ph = hash_password(password)
 
     # Buscar usuario por email
     usuario_key = None
@@ -434,13 +458,16 @@ def login_usuario(email, password):
             _escribir_usuarios(usuarios)
 
     # Verificar contraseña
-    if u["password_hash"] == ph:
+    if verify_password(u["password_hash"], password):
         # Login exitoso — resetear intentos
         usuarios[usuario_key]["intentos_fallidos"] = 0
         usuarios[usuario_key]["bloqueado_hasta"] = None
         usuarios[usuario_key]["ultimo_login"] = datetime.now().strftime(
             "%Y-%m-%d %H:%M:%S"
         )
+        # Upgrade legacy hash to secure hash on successful login
+        if _is_legacy_hash(u["password_hash"]):
+            usuarios[usuario_key]["password_hash"] = hash_password_secure(password)
         _escribir_usuarios(usuarios)
         return u
 
@@ -477,7 +504,7 @@ def resetear_password(username, nueva_password="cambiar123"):
     usuarios = _leer_usuarios()
     if username not in usuarios:
         return False
-    usuarios[username]["password_hash"] = hash_password(nueva_password)
+    usuarios[username]["password_hash"] = hash_password_secure(nueva_password)
     _escribir_usuarios(usuarios)
     return True
 
@@ -515,7 +542,8 @@ def listar_portafolios_de_usuario(username):
                         "monitoreo_activo": data.get("monitoreo_activo", False),
                     }
                 )
-        except:
+        except Exception as e:
+            logger.warning(f"Could not read portfolio {archivo}: {e}")
             continue
     return resultado
 
@@ -577,7 +605,8 @@ def _leer_logs():
         return []
     try:
         return _leer(ARCHIVO_LOGS_ACTIVIDAD)
-    except:
+    except Exception as e:
+        logger.warning(f"Could not read activity logs: {e}")
         return []
 
 
@@ -620,7 +649,8 @@ def eliminar_usuario(username):
                         monitor = f"{CARPETA_PORTAFOLIOS}/monitor_{archivo}"
                         if os.path.exists(monitor):
                             os.remove(monitor)
-                except:
+                except Exception as e:
+                    logger.warning(f"Could not process portfolio {archivo} during user deletion: {e}")
                     continue
     # Eliminar usuario
     del usuarios[username]

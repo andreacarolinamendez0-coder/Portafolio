@@ -1,15 +1,23 @@
 ﻿from flask import Flask, request, session, redirect, url_for, jsonify
 import pandas as pd
-import json, os, requests, subprocess
+import json, os, requests, subprocess, time, threading
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
 import yfinance as yf
+import pytz
+import anthropic
 import warnings
 warnings.filterwarnings('ignore')
 from styles import CSS
-import subprocess, requests, time, threading
-import pytz
-import warnings
+from gestor_portafolio import (
+    leer_portafolio, listar_portafolios, listar_portafolios_de_usuario,
+    leer_portafolio_activo, crear_portafolio_para_usuario, activar_portafolio,
+    guardar_composicion, guardar_aporte, registrar_usuario, login_usuario,
+    registrar_actividad, get_usuario, actualizar_usuario, resetear_password,
+    desbloquear_usuario, eliminar_usuario, _leer_usuarios, _leer_logs,
+    hash_password_secure, verify_password,
+)
 
 TZ_NY  = pytz.timezone("America/New_York")
 TZ_COL = pytz.timezone("America/Bogota")
@@ -44,7 +52,8 @@ def notificar_url_ngrok():
         url = r['tunnels'][0]['public_url']
         requests.post(f"https://api.telegram.org/bot{os.environ.get('TELEGRAM_BOT_TOKEN', '')}/sendMessage",
             json={"chat_id": os.environ.get("ADMIN_CHAT_ID", ""), "text": f"🌐 URL del sistema:\n{url}"})
-    except: pass
+    except Exception as e:
+        print(f"ngrok URL notification failed: {e}")
 
 threading.Thread(target=notificar_url_ngrok, daemon=True).start()
 
@@ -56,7 +65,9 @@ os.makedirs(os.path.join(DATOS_DIR, "macro"), exist_ok=True)
 os.makedirs(os.path.join(DATOS_DIR, "precios"), exist_ok=True)
 os.makedirs(os.path.join(DATOS_DIR, "portafolios"), exist_ok=True)
 os.makedirs(os.path.join(DATOS_DIR, "Logs"), exist_ok=True)
-app.secret_key = os.environ.get("SECRET_KEY", "portafolio_andrea_2026_secreto")
+app.secret_key = os.environ.get("SECRET_KEY")
+if not app.secret_key:
+    raise RuntimeError("SECRET_KEY environment variable is not set")
 
 
 
@@ -94,14 +105,12 @@ def verificar_acceso(archivo):
     username = session.get('username')
     if not username:
         return redirect(url_for('login'))
-    from gestor_portafolio import leer_portafolio
     p = leer_portafolio(archivo)
     if not p or p.get('owner') != username:
         return redirect(url_for('mis_portafolios'))
     return None
 
 def groq_chat(messages, system='', max_tokens=300, temperature=0.5):
-    import anthropic
     client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
     kwargs = {
         "model": "claude-sonnet-4-5",
@@ -126,7 +135,7 @@ def cargar_macro():
         os.makedirs("datos/precios", exist_ok=True)
         os.makedirs("datos/portafolios", exist_ok=True)
         try: subprocess.run(["python","recolector.py"], check=False, timeout=120)
-        except: return None
+        except Exception as e: print(f"Error running recolector: {e}"); return None
     try:
         trm       = pd.read_parquet(os.path.join(DATOS_DIR, "macro/trm.parquet"))
         inf_col   = pd.read_parquet(os.path.join(DATOS_DIR, "macro/inflacion_col.parquet"))
@@ -159,7 +168,9 @@ def precio_actual_usd(ticker):
         if df.empty: return None
         if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
         return float(df['Close'].iloc[-1])
-    except: return None
+    except Exception as e:
+        print(f"Error fetching price for {ticker}: {e}")
+        return None
 
 def calcular_tiempo_real(portafolio):
     if not portafolio or not portafolio.get('aportes'): return None
@@ -195,7 +206,8 @@ def enviar_notificacion(portafolio, asunto, mensaje):
         try:
             requests.post(f"https://api.telegram.org/bot{os.environ.get('TELEGRAM_BOT_TOKEN', '')}/sendMessage",
                 json={"chat_id":portafolio['telegram_chat_id'],"text":mensaje,"parse_mode":"HTML"},timeout=10)
-        except: pass
+        except Exception as e:
+            print(f"Telegram notification failed: {e}")
     if portafolio.get('email'):
         try:
             import smtplib
@@ -206,7 +218,8 @@ def enviar_notificacion(portafolio, asunto, mensaje):
                 msg = MIMEMultipart(); msg['From']=gu; msg['To']=portafolio['email']; msg['Subject']=asunto
                 msg.attach(MIMEText(mensaje,'plain'))
                 with smtplib.SMTP_SSL('smtp.gmail.com',465) as s: s.login(gu,gp); s.send_message(msg)
-        except: pass
+        except Exception as e:
+            print(f"Email notification failed: {e}")
 
 # ============================================================
 # GRÁFICAS
@@ -218,7 +231,6 @@ def grafica_trm(trm_hist):
     ma7        = pd.Series(trm_values).rolling(7).mean().tolist()
     analisis_trm = ''
     try:
-        import xml.etree.ElementTree as ET
         noticias = []
         for termino in ["dolar peso colombiano TRM", "tasa cambio Colombia hoy"]:
             try:
@@ -229,7 +241,8 @@ def grafica_trm(trm_hist):
                     t = item.find('title'); d = item.find('pubDate')
                     if t is not None:
                         noticias.append(f"- {t.text[:120]} ({d.text[:16] if d is not None else ''})")
-            except:
+            except Exception as e:
+                print(f"News fetch failed for term: {e}")
                 continue
         noticias_txt = '\n'.join(noticias) if noticias else 'Sin noticias recientes disponibles.'
 
@@ -486,7 +499,6 @@ def nav_html(archivo, activa):
     )
 
 def _dropdown_portafolios(archivo_actual):
-    from gestor_portafolio import listar_portafolios_de_usuario
     username    = session.get('username','')
     portafolios = listar_portafolios_de_usuario(username)
     if len(portafolios) <= 1:
@@ -559,7 +571,6 @@ def inicio():
 def mis_portafolios():
     if not session.get('username'):
         return redirect(url_for('login'))
-    from gestor_portafolio import listar_portafolios_de_usuario
     username    = session['username']
     portafolios = listar_portafolios_de_usuario(username)
     cards = ''
@@ -660,7 +671,6 @@ def register():
         return redirect(url_for('mis_portafolios'))
     error = ''
     if request.method == 'POST':
-        from gestor_portafolio import registrar_usuario
         username = request.form.get('username', '').strip()
         email    = request.form.get('email', '').strip()
         password = request.form.get('password', '').strip()
@@ -675,7 +685,6 @@ def register():
                 session['username'] = username
                 session['es_admin'] = False
                 session.permanent   = True
-                from gestor_portafolio import registrar_actividad
                 ip          = request.headers.get('X-Forwarded-For', request.remote_addr or '—').split(',')[0].strip()
                 dispositivo = request.headers.get('User-Agent', '—')[:120]
                 registrar_actividad('registro_nuevo', username, email=email,
@@ -763,7 +772,6 @@ def login():
         return redirect(url_for('mis_portafolios'))
     error = ''
     if request.method == 'POST':
-        from gestor_portafolio import login_usuario
         email    = request.form.get('email', '').strip()
         password = request.form.get('password', '')
         usuario  = login_usuario(email, password)
@@ -773,7 +781,6 @@ def login():
             session['username'] = usuario['username']
             session['es_admin'] = usuario.get('es_admin', False)
             session.permanent   = True
-            from gestor_portafolio import registrar_actividad
             registrar_actividad('login_ok', usuario['username'], email=email,
                 detalle='Login exitoso', ip=ip, dispositivo=dispositivo)
             try:
@@ -782,9 +789,9 @@ def login():
                     daemon=True
                 )
                 t.start()
-            except: pass
+            except Exception as e:
+                print(f"Error starting recolector thread: {e}")
             return redirect(url_for('mis_portafolios'))
-        from gestor_portafolio import registrar_actividad
         if usuario and usuario.get('bloqueado'):
             minutos = usuario.get('minutos', 15)
             registrar_actividad('login_fail', usuario.get('username', email), email=email,
@@ -832,7 +839,6 @@ def logout():
 
 @app.route('/activar-portafolio/<archivo>', methods=['POST'])
 def activar_portafolio_route(archivo):
-    from gestor_portafolio import activar_portafolio
     activar_portafolio(archivo)
     return redirect(url_for('mis_portafolios'))
 
@@ -846,7 +852,6 @@ def nuevo_portafolio():
         return redirect(url_for('login'))
     mensaje = ''; error = ''
     if request.method == 'POST':
-        from gestor_portafolio import crear_portafolio_para_usuario
         try:
             username    = session['username']
             nombre      = request.form.get('nombre', '').strip()
@@ -896,7 +901,6 @@ def nuevo_portafolio():
 def dashboard_portafolio(archivo):
     redir = verificar_acceso(archivo)
     if redir: return redir
-    from gestor_portafolio import leer_portafolio
     portafolio  = leer_portafolio(archivo)
     if not portafolio: return redirect(url_for('mis_portafolios'))
     macro       = cargar_macro()
@@ -1018,7 +1022,6 @@ def dashboard_portafolio(archivo):
 def analista_view(archivo):
     redir = verificar_acceso(archivo)
     if redir: return redir
-    from gestor_portafolio import leer_portafolio
     portafolio  = leer_portafolio(archivo)
     composicion = portafolio.get('composicion', {})
     tiene_inv   = len(portafolio.get('aportes',[])) > 0
@@ -1402,7 +1405,6 @@ def api_generar_propuesta(archivo):
     try:
         import sys; sys.path.insert(0,'.')
         from analista import cargar_datos, construir_panel, calcular_retornos_reales, optimizar_portafolio
-        from gestor_portafolio import leer_portafolio
         data       = request.get_json()
         perfil     = data.get('perfil','agresivo')
         inversion  = float(data.get('inversion', 1000000))
@@ -1597,7 +1599,6 @@ def api_recalcular_proyecciones(archivo):
 def api_aplicar_propuesta(archivo):
     if verificar_acceso(archivo): return jsonify({'ok':False,'error':'No autorizado'})
     try:
-        from gestor_portafolio import leer_portafolio, guardar_composicion, crear_portafolio_para_usuario
         data   = request.get_json()
         tipo   = data.get('tipo','reemplazar')
         pesos  = data.get('pesos',{})
@@ -1650,7 +1651,6 @@ def api_borrar_aporte(archivo, idx):
     redir = verificar_acceso(archivo)
     if redir: return jsonify({'ok': False, 'error': 'No autorizado'})
     try:
-        from gestor_portafolio import leer_portafolio
         import json
         ruta = f'datos/portafolios/{archivo}'
         with open(ruta, 'r', encoding='utf-8') as f:
@@ -1689,7 +1689,6 @@ def api_borrar_aportes(archivo):
 def seguimiento_view(archivo):
     redir = verificar_acceso(archivo)
     if redir: return redir
-    from gestor_portafolio import leer_portafolio, guardar_aporte
     portafolio  = leer_portafolio(archivo)
     composicion = portafolio.get('composicion', {})
     mensaje = ''; error = ''
@@ -1883,7 +1882,6 @@ def seguimiento_view(archivo):
 def bot_view(archivo):
     redir = verificar_acceso(archivo)
     if redir: return redir
-    from gestor_portafolio import leer_portafolio
     portafolio = leer_portafolio(archivo)
     pj = json.dumps({'nombre':portafolio['nombre'],'perfil':portafolio['perfil'],
         'propietario':portafolio['propietario'],'composicion':portafolio.get('composicion',{})})
@@ -1965,7 +1963,6 @@ def bot_view(archivo):
 def api_bot(archivo):
     if verificar_acceso(archivo): return jsonify({'respuesta':'No autorizado'})
     try:
-        from gestor_portafolio import leer_portafolio
         data=request.get_json(); mensaje=data.get('mensaje','')
         p=leer_portafolio(archivo); macro=cargar_macro()
         mt=f'TRM: ${macro["trm"]:,.0f}\nInflación: {macro["inf_col"]}%\nBanrep: {macro["banrep"]}%' if macro else ''
@@ -2009,7 +2006,8 @@ def api_bot(archivo):
                 for item in items:
                     t = item.find('title')
                     if t is not None: noticias_mercado += f'- {tk}: {t.text[:80]}\n'
-        except: pass
+        except Exception as e:
+            print(f"News fetch failed for {tk}: {e}")
         noticias_txt = f'\nNOTICIAS RECIENTES DE TUS ACTIVOS:\n{noticias_mercado}' if noticias_mercado else ''
         ctx = (
             f'Eres el asesor de inversiones personal de {p["propietario"]}, '
@@ -2052,7 +2050,6 @@ from monitor import mercado_abierto, hora_colombia, chat_id_de
 def monitor_view(archivo):
     redir = verificar_acceso(archivo)
     if redir: return redir
-    from gestor_portafolio import leer_portafolio
     portafolio  = leer_portafolio(archivo)
     composicion = portafolio.get('composicion', {})
     monitoreo   = portafolio.get('monitoreo_activo', False)
@@ -2432,7 +2429,6 @@ def api_toggle_monitor(archivo):
         # Si se está ACTIVANDO: desactivar todos los demás portafolios del usuario
         if nuevo_estado:
             username = session.get('username', '')
-            from gestor_portafolio import listar_portafolios_de_usuario
             todos = listar_portafolios_de_usuario(username)
             for p in todos:
                 if p['archivo'] != archivo:
@@ -2488,7 +2484,6 @@ def api_reset_monitor(archivo):
 def config_view(archivo):
     redir = verificar_acceso(archivo)
     if redir: return redir
-    from gestor_portafolio import leer_portafolio, activar_portafolio
     import hashlib
     portafolio=leer_portafolio(archivo); mensaje=''; error=''
     if request.method=='POST':
@@ -2575,7 +2570,6 @@ def config_view(archivo):
 def admin_panel():
     if not session.get('es_admin'):
         return redirect(url_for('mis_portafolios'))
-    from gestor_portafolio import _leer_usuarios, listar_portafolios, leer_portafolio
     usuarios    = _leer_usuarios()
     portafolios = listar_portafolios()
     ports_por_usuario = {}
@@ -2584,7 +2578,9 @@ def admin_panel():
             data = leer_portafolio(p['archivo'])
             owner = data.get('owner', '—')
             ports_por_usuario[owner] = ports_por_usuario.get(owner, 0) + 1
-        except: continue
+        except Exception as e:
+            print(f"Could not read portfolio: {e}")
+            continue
     filas_usuarios = ''
     for u in usuarios.values():
         admin_badge = '<span class="badge badge-yellow">ADMIN</span>' if u.get('es_admin') else ''
@@ -2644,8 +2640,9 @@ def admin_panel():
                 f'<td style="font-size:11px;color:#6e6e73">{ts}</td>'
                 f'</tr>'
             )
-        except: continue
-        from gestor_portafolio import _leer_logs
+        except Exception as e:
+            print(f"Could not render portfolio row: {e}")
+            continue
     logs_actividad = list(reversed(_leer_logs()))[:100]
 
     iconos = {
@@ -2752,7 +2749,6 @@ def admin_panel():
 def api_reset_password():
     if not session.get('es_admin'):
         return jsonify({'ok': False, 'error': 'No autorizado'})
-    from gestor_portafolio import resetear_password
     data     = request.get_json()
     username = data.get('username')
     ok = resetear_password(username)
@@ -2762,7 +2758,6 @@ def api_reset_password():
 def api_desbloquear():
     if not session.get('es_admin'):
         return jsonify({'ok': False, 'error': 'No autorizado'})
-    from gestor_portafolio import desbloquear_usuario
     data = request.get_json()
     ok = desbloquear_usuario(data.get('username'))
     return jsonify({'ok': ok})
@@ -2771,7 +2766,6 @@ def api_desbloquear():
 def api_toggle_admin():
     if not session.get('es_admin'):
         return jsonify({'ok': False, 'error': 'No autorizado'})
-    from gestor_portafolio import actualizar_usuario
     data = request.get_json()
     ok = actualizar_usuario(data.get('username'), {'es_admin': data.get('es_admin', False)})
     return jsonify({'ok': ok})
@@ -2784,7 +2778,6 @@ def api_toggle_admin():
 def api_eliminar_cuenta():
     if not session.get('username'):
         return jsonify({'ok': False, 'error': 'No autorizado'})
-    from gestor_portafolio import eliminar_usuario
     username = session.get('username')
     # El admin no puede eliminarse a sí mismo
     if session.get('es_admin'):
@@ -2798,7 +2791,6 @@ def api_eliminar_cuenta():
 def api_admin_eliminar_usuario():
     if not session.get('es_admin'):
         return jsonify({'ok': False, 'error': 'No autorizado'})
-    from gestor_portafolio import eliminar_usuario, registrar_actividad
     data     = request.get_json()
     username = data.get('username')
     if username == session.get('username'):
@@ -2920,7 +2912,7 @@ def api_ticker_listo(ticker):
     if listo:
         # Limpiar flag
         try: os.remove(flag)
-        except: pass
+        except Exception as e: print(f"Could not remove flag file: {e}")
     return jsonify({'listo': listo})
 
 @app.route('/api/test-telegram')
@@ -2937,7 +2929,6 @@ def api_test_telegram():
 def get_profile():
     if not session.get('username'):
         return jsonify({'error': 'No autorizado'})
-    from gestor_portafolio import get_usuario
     u = get_usuario(session['username'])
     if not u:
         return jsonify({'error': 'Usuario no encontrado'})
@@ -2952,7 +2943,6 @@ def get_profile():
 def update_profile():
     if not session.get('username'):
         return jsonify({'error': 'No autorizado'})
-    from gestor_portafolio import actualizar_usuario, get_usuario
     from werkzeug.security import generate_password_hash, check_password_hash
     data     = request.get_json()
     username = session['username']
@@ -2967,10 +2957,9 @@ def update_profile():
         u = get_usuario(username)
         ph = u.get('password_hash', '')
         cur = data.get('current_password', '')
-        from gestor_portafolio import hash_password
-        if hash_password(cur) != ph:
+        if not verify_password(ph, cur):
             return jsonify({'error': 'Contraseña actual incorrecta'}), 400
-        campos['password_hash'] = hash_password(data['new_password'])
+        campos['password_hash'] = hash_password_secure(data['new_password'])
     if not campos:
         return jsonify({'error': 'Sin cambios'}), 400
     ok = actualizar_usuario(username, campos)
@@ -2982,7 +2971,6 @@ def update_profile():
 def settings():
     if not session.get('username'):
         return redirect(url_for('login'))
-    from gestor_portafolio import get_usuario
     u = get_usuario(session['username'])
     contenido = (
         '<div class="container" style="max-width:600px">'
@@ -3121,7 +3109,9 @@ def api_ultima_actualizacion():
         mtime=os.path.getmtime("datos/macro/trm.parquet")
         hora=datetime.fromtimestamp(mtime).strftime("%d %b %Y · %I:%M %p")
         return jsonify({'timestamp':hora})
-    except: return jsonify({'timestamp':'No disponible'})
+    except Exception as e:
+        print(f"Could not read TRM timestamp: {e}")
+        return jsonify({'timestamp':'No disponible'})
 
 # ============================================================
 # WEBHOOK DE TELEGRAM
