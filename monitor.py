@@ -969,6 +969,7 @@ def _loop_monitor():
                 portafolios_cargados = hoy
 
             # ── Cargar rangos desde disco si Railway reinició ──
+            # Esto corre siempre — si ya están en RAM no hace nada
             for archivo, _ in portafolios:
                 if archivo not in rangos_calculados:
                     rangos = _cargar_rangos_disco(archivo)
