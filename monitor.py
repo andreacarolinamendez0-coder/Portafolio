@@ -484,7 +484,7 @@ def vigilar_precios(archivo, portafolio, rangos_del_dia, precios_cache=None):
             msg = (
                 f"🟢 <b>SEÑAL DE ENTRADA — {ticker}</b>\n\n"
                 f"💵 Precio: <b>${precio:,.2f} USD</b> ({cambio:+.2f}% hoy)\n"
-                f"🎯 Cruzó el rango de entrada (< ${rango_entrar:,.2f})\n\n"
+                f"🎯 Cruzó el rango de entrada (&lt; ${rango_entrar:,.2f})\n\n"
                 f"📊 Score: <b>{score}/10</b> · RSI: {rango['rsi']} · "
                 f"Tendencia: {rango['tendencia']:+.1f}%\n"
                 f"📈 MA20: ${rango['ma20']:,.2f} · MA50: ${rango['ma50']:,.2f}"
