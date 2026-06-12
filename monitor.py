@@ -155,11 +155,12 @@ def telegram(chat_id, texto, reply_markup=None):
         payload = {"chat_id": chat_id, "text": texto, "parse_mode": "HTML"}
         if reply_markup:
             payload["reply_markup"] = json.dumps(reply_markup)
-        requests.post(
+        resp = requests.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
             json=payload,
             timeout=10,
         )
+        print(f"  📤 Telegram → {chat_id}: {resp.status_code} {resp.json().get('ok')} — {resp.json().get('description', 'ok')}")
     except Exception as e:
         print(f"❌ Telegram error: {e}")
 
@@ -393,7 +394,7 @@ def precalcular_rangos(archivo, portafolio):
 # ─────────────────────────────────────────────────────────────
 
 
-def vigilar_precios(archivo, portafolio, rangos_del_dia):
+def vigilar_precios(archivo, portafolio, rangos_del_dia, precios_cache=None):
     """
     Solo consulta precio actual a Finnhub.
     Compara precio vs rangos precalculados a las 8am.
@@ -413,7 +414,8 @@ def vigilar_precios(archivo, portafolio, rangos_del_dia):
     for ticker, rango in rangos_del_dia["rangos"].items():
 
         # ── Solo precio — una petición a Finnhub ──────────────
-        quote = finnhub_quote(ticker)
+        # Usar precio del cache — ya consultado una vez arriba
+        quote = precios_cache.get(ticker) if precios_cache else finnhub_quote(ticker)
         if not quote:
             continue
 
@@ -482,7 +484,7 @@ def vigilar_precios(archivo, portafolio, rangos_del_dia):
             msg = (
                 f"🟢 <b>SEÑAL DE ENTRADA — {ticker}</b>\n\n"
                 f"💵 Precio: <b>${precio:,.2f} USD</b> ({cambio:+.2f}% hoy)\n"
-                f"🎯 Cruzó el rango de entrada (< ${rango_entrar:,.2f})\n\n"
+                f"🎯 Cruzó el rango de entrada (&lt; ${rango_entrar:,.2f})\n\n"
                 f"📊 Score: <b>{score}/10</b> · RSI: {rango['rsi']} · "
                 f"Tendencia: {rango['tendencia']:+.1f}%\n"
                 f"📈 MA20: ${rango['ma20']:,.2f} · MA50: ${rango['ma50']:,.2f}"
@@ -490,6 +492,7 @@ def vigilar_precios(archivo, portafolio, rangos_del_dia):
             if dec == "sigue":
                 msg += "\n\n<i>(Actualización — pediste seguir informado)</i>"
 
+            print(f"  📨 Intentando enviar alerta a chat_id='{chat_id}' para {ticker}")
             telegram(chat_id, msg, reply_markup=teclado_decision(ticker))
             marcar_alerta_enviada(estado, ticker)
             estado[f"ciclos_sin_respuesta_{ticker}"] = 0
@@ -952,11 +955,18 @@ def _loop_monitor():
     precalculo_hecho = {}  # archivo → fecha del último precálculo
     cierre_enviado = {}  # archivo → fecha del último cierre
 
+    portafolios = []          # ← cache en RAM
+    portafolios_cargados = None  # ← fecha del último scan de disco
+
     while True:
         try:
-            portafolios = leer_portafolios_activos()
             ahora = hora_colombia()
             hoy = ahora.strftime("%Y-%m-%d")
+
+            # ── Recargar portafolios solo una vez por día ──────
+            if portafolios_cargados != hoy:
+                portafolios = leer_portafolios_activos()
+                portafolios_cargados = hoy
 
             # ── Cargar rangos desde disco si Railway reinició ──
             # Esto corre siempre — si ya están en RAM no hace nada
@@ -973,9 +983,7 @@ def _loop_monitor():
                 for archivo, _ in portafolios:
                     if precalculo_hecho.get(archivo) != hoy:
                         try:
-                            with open(
-                                os.path.join(PORTS_DIR, archivo), "r", encoding="utf-8"
-                            ) as f:
+                            with open(os.path.join(PORTS_DIR, archivo), "r", encoding="utf-8") as f:
                                 pf = json.load(f)
                             resultado = precalcular_rangos(archivo, pf)
                             if resultado:
@@ -990,9 +998,7 @@ def _loop_monitor():
                 for archivo, _ in portafolios:
                     if buenos_enviado.get(archivo) != hoy:
                         try:
-                            with open(
-                                os.path.join(PORTS_DIR, archivo), "r", encoding="utf-8"
-                            ) as f:
+                            with open(os.path.join(PORTS_DIR, archivo), "r", encoding="utf-8") as f:
                                 pf = json.load(f)
                             enviar_buenos_dias(archivo, pf)
                         except Exception as e:
@@ -1002,18 +1008,32 @@ def _loop_monitor():
 
             # ── 8:30am-3:00pm — Vigilancia cada 9 segundos ────
             elif mercado_abierto():
+                # Recolectar todos los tickers únicos entre portafolios activos
+                tickers_unicos = {}  # ticker → precio (se consulta UNA vez)
+                for archivo, _ in portafolios:
+                    rangos = rangos_calculados.get(archivo)
+                    if not rangos:
+                        continue
+                    for ticker in rangos["rangos"]:
+                        if ticker not in tickers_unicos:
+                            tickers_unicos[ticker] = None
+
+                # Consultar Finnhub UNA vez por ticker
+                for ticker in tickers_unicos:
+                    quote = finnhub_quote(ticker)
+                    tickers_unicos[ticker] = quote
+                    time.sleep(0.5)  # ← respetar rate limit: ~60 req/min
+
+                # Procesar cada portafolio con los precios ya obtenidos
                 for archivo, _ in portafolios:
                     rangos = rangos_calculados.get(archivo)
                     if not rangos:
                         print(f"  ⚠️ Sin rangos para {archivo} — esperando precálculo")
                         continue
                     try:
-                        with open(
-                            os.path.join(PORTS_DIR, archivo), "r", encoding="utf-8"
-                        ) as f:
+                        with open(os.path.join(PORTS_DIR, archivo), "r", encoding="utf-8") as f:
                             pf = json.load(f)
-                        vigilar_precios(archivo, pf, rangos)
-                        # Verificar alerta subóptima
+                        vigilar_precios(archivo, pf, rangos, precios_cache=tickers_unicos)
                         estado = leer_estado(archivo)
                         verificar_alerta_suboptimal(archivo, pf, estado)
                     except Exception as e:
@@ -1026,9 +1046,7 @@ def _loop_monitor():
                 for archivo, _ in portafolios:
                     if cierre_enviado.get(archivo) != hoy:
                         try:
-                            with open(
-                                os.path.join(PORTS_DIR, archivo), "r", encoding="utf-8"
-                            ) as f:
+                            with open(os.path.join(PORTS_DIR, archivo), "r", encoding="utf-8") as f:
                                 pf = json.load(f)
                             estado = leer_estado(archivo)
                             reporte_cierre(archivo, pf, estado)
@@ -1040,9 +1058,8 @@ def _loop_monitor():
             # ── Mercado cerrado — dormir ───────────────────────
             else:
                 segs = segundos_hasta_precalculo()
-                horas = segs / 3600
-                print(f"💤 Mercado cerrado. Próximo precálculo en {horas:.1f}h")
-                time.sleep(min(segs, 300))  # máximo 5 minutos por si Railway reinicia
+                print(f"💤 Mercado cerrado. Próximo precálculo en {segs/3600:.1f}h")
+                time.sleep(min(segs, 300))
 
         except Exception as e:
             print(f"❌ Error loop monitor: {e}")
