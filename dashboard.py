@@ -3263,13 +3263,156 @@ def api_auth_me():
         'es_admin': session.get('es_admin', False),
     })
 
-@app.route('/api/portafolios')
-def api_portafolios_list():
+@app.route('/api/portafolios', methods=['GET', 'POST'])
+def api_portafolios():
     username = session.get('username')
     if not username:
         return jsonify({'error': 'No autorizado'}), 401
-    portafolios = listar_portafolios_de_usuario(username)
-    return jsonify({'portafolios': portafolios})
+
+    if request.method == 'GET':
+        portafolios = listar_portafolios_de_usuario(username)
+        return jsonify({'portafolios': portafolios})
+
+    data = request.get_json(silent=True) or {}
+    nombre      = data.get('nombre', '').strip()
+    perfil      = data.get('perfil', 'agresivo')
+    propietario = data.get('propietario', username).strip()
+    inversion   = float(data.get('inversion_inicial', 0) or 0)
+    aporte      = float(data.get('aporte_dca', 0) or 0)
+    frecuencia  = int(data.get('frecuencia_meses', 0) or 0)
+
+    if not nombre:
+        return jsonify({'error': 'El nombre del portafolio es obligatorio'}), 400
+
+    archivo = crear_portafolio_para_usuario(
+        username, nombre, perfil, propietario, inversion, aporte, frecuencia
+    )
+    return jsonify({'ok': True, 'archivo': archivo})
+
+@app.route('/api/dashboard/<archivo>')
+def api_dashboard(archivo):
+    username = session.get('username')
+    if not username:
+        return jsonify({'error': 'No autorizado'}), 401
+
+    portafolio = leer_portafolio(archivo)
+    if not portafolio or portafolio.get('owner') != username:
+        return jsonify({'error': 'No encontrado'}), 404
+
+    tiempo_real = calcular_tiempo_real(portafolio)
+    macro       = cargar_macro()
+
+    macro_json = None
+    if macro:
+        macro_json = {k: v for k, v in macro.items() if k != 'trm_hist'}
+
+    return jsonify({
+        'portafolio': {
+            'nombre':       portafolio.get('nombre'),
+            'propietario':  portafolio.get('propietario'),
+            'perfil':       portafolio.get('perfil'),
+            'fecha_inicio': portafolio.get('fecha_inicio'),
+        },
+        'composicion': portafolio.get('composicion', {}),
+        'tiempo_real': tiempo_real,
+        'macro':       macro_json,
+    })
+    
+@app.route('/api/auth/logout', methods=['POST'])
+def api_auth_logout():
+    session.clear()
+    return jsonify({'ok': True})
+
+@app.route('/api/config/<archivo>', methods=['GET', 'PUT'])
+def api_config(archivo):
+    if verificar_acceso(archivo):
+        return jsonify({'error': 'No autorizado'}), 401
+
+    portafolio = leer_portafolio(archivo)
+    if not portafolio:
+        return jsonify({'error': 'No encontrado'}), 404
+
+    if request.method == 'GET':
+        return jsonify({
+            'nombre': portafolio.get('nombre'),
+            'activo': portafolio.get('activo', False),
+            'divisa': portafolio.get('divisa', 'USD'),
+        })
+
+    # PUT: guardar la divisa preferida
+    data = request.get_json(silent=True) or {}
+    divisa = data.get('divisa', 'USD').strip().upper()
+    if divisa not in ('USD', 'EUR', 'COP'):
+        return jsonify({'error': 'Divisa no válida'}), 400
+
+    ruta = f'datos/portafolios/{archivo}'
+    with open(ruta, 'r', encoding='utf-8') as f:
+        d = json.load(f)
+    d['divisa'] = divisa
+    with open(ruta, 'w', encoding='utf-8') as f:
+        json.dump(d, f, indent=2, ensure_ascii=False)
+
+    return jsonify({'ok': True, 'mensaje': f'Divisa cambiada a {divisa}', 'divisa': divisa})
+
+@app.route('/api/seguimiento/<archivo>', methods=['GET', 'POST'])
+def api_seguimiento(archivo):
+    if verificar_acceso(archivo):
+        return jsonify({'error': 'No autorizado'}), 401
+
+    portafolio  = leer_portafolio(archivo)
+    composicion = portafolio.get('composicion', {})
+
+    if request.method == 'POST':
+        data = request.get_json(silent=True) or {}
+        try:
+            activo     = data.get('activo', '').upper()
+            fecha      = data.get('fecha', datetime.now().strftime('%Y-%m-%d'))
+            monto_usd  = float(str(data.get('monto_usd', '0')).replace(',', '.'))
+            fracciones = float(str(data.get('fracciones', '0')).replace(',', '.'))
+
+            if monto_usd <= 0 or fracciones <= 0:
+                return jsonify({'error': 'El monto y las fracciones deben ser mayores a 0'}), 400
+
+            precio_usd = round(monto_usd / fracciones, 4)
+            try:
+                trm_df  = pd.read_parquet("datos/macro/trm.parquet")
+                idx     = trm_df.index.get_indexer([pd.to_datetime(fecha)], method='nearest')[0]
+                trm_dia = float(trm_df['TRM'].iloc[idx])
+            except:
+                trm_dia = 4000
+            monto_cop = round(monto_usd * trm_dia, 0)
+
+            guardar_aporte(archivo, {
+                "fecha": fecha, "activo": activo,
+                "monto_usd": round(monto_usd, 2), "monto_cop": monto_cop,
+                "precio_usd": precio_usd, "trm_dia": trm_dia,
+                "fracciones": round(fracciones, 6), "tipo": "manual"
+            })
+            portafolio = leer_portafolio(archivo)
+        except Exception as e:
+            return jsonify({'error': f'Error: {str(e)}'}), 400
+
+    # GET (y respuesta tras POST): armar el estado completo
+    aportes    = portafolio.get('aportes', [])
+    entrados   = list(set(a['activo'] for a in aportes))
+    pendientes = [a for a in composicion if a not in entrados]
+    total_a    = len(composicion)
+    total_e    = len(entrados)
+    pct        = int(total_e / total_a * 100) if total_a > 0 else 0
+
+    pendientes_data = [
+        {'activo': a, 'peso': composicion.get(a, 0), 'precio_usd': precio_actual_usd(a) or 0}
+        for a in pendientes
+    ]
+
+    return jsonify({
+        'nombre':      portafolio.get('nombre'),
+        'composicion': composicion,
+        'progreso':    {'entrados': total_e, 'total': total_a, 'pct': pct},
+        'pendientes':  pendientes_data,
+        'entrados':    entrados,
+        'aportes':     aportes,
+    })
 
 if __name__=="__main__":
     print("="*55)
