@@ -1,4 +1,7 @@
-﻿from flask import Flask, request, session, redirect, url_for, jsonify
+﻿import dotenv
+dotenv.load_dotenv()
+from flask import Flask, request, session, redirect, url_for, jsonify
+from flask_cors import CORS
 import pandas as pd
 import json, os, requests, subprocess, time, threading
 import xml.etree.ElementTree as ET
@@ -3220,6 +3223,53 @@ def registrar_webhook_telegram():
 # ============================================================
 # MAIN
 # ============================================================
+
+@app.route('/api/auth/login', methods=['POST'])
+def api_auth_login():
+    data     = request.get_json(silent=True) or {}
+    email    = data.get('email', '').strip()
+    password = data.get('password', '')
+    usuario  = login_usuario(email, password)
+    ip          = request.headers.get('X-Forwarded-For', request.remote_addr or '—').split(',')[0].strip()
+    dispositivo = request.headers.get('User-Agent', '—')[:120]
+
+    if usuario and not usuario.get('bloqueado'):
+        session['username'] = usuario['username']
+        session['es_admin'] = usuario.get('es_admin', False)
+        session.permanent   = True
+        registrar_actividad('login_ok', usuario['username'], email=email,
+            detalle='Login API', ip=ip, dispositivo=dispositivo)
+        return jsonify({'ok': True, 'username': usuario['username'],
+                        'es_admin': usuario.get('es_admin', False)})
+
+    if usuario and usuario.get('bloqueado'):
+        minutos = usuario.get('minutos', 15)
+        registrar_actividad('login_fail', usuario.get('username', email), email=email,
+            detalle=f'Cuenta bloqueada — {minutos} min', ip=ip, dispositivo=dispositivo)
+        return jsonify({'ok': False, 'error': f'Cuenta bloqueada. Intenta en {minutos} minuto(s).'}), 403
+
+    registrar_actividad('login_fail', email, email=email,
+        detalle='Contraseña incorrecta', ip=ip, dispositivo=dispositivo)
+    return jsonify({'ok': False, 'error': 'Email o contraseña incorrectos.'}), 401
+
+@app.route('/api/auth/me')
+def api_auth_me():
+        username = session.get('username')
+        if not username:
+            return jsonify({'authenticated': False}), 401
+        return jsonify({
+            'authenticated': True,
+        'username': username,
+        'es_admin': session.get('es_admin', False),
+    })
+
+@app.route('/api/portafolios')
+def api_portafolios_list():
+    username = session.get('username')
+    if not username:
+        return jsonify({'error': 'No autorizado'}), 401
+    portafolios = listar_portafolios_de_usuario(username)
+    return jsonify({'portafolios': portafolios})
 
 if __name__=="__main__":
     print("="*55)
