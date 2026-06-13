@@ -12,3 +12,6 @@ fastparquet
 numpy
 scipy
 anthropic
+flask-cors
+python-dotenv
+pytz
