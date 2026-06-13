@@ -36,9 +36,7 @@ def mercado_abierto_ahora():
 def arrancar_monitor():
     time.sleep(15)
     from monitor import iniciar_monitor
-    from scheduler import iniciar_scheduler
     iniciar_monitor()
-    iniciar_scheduler()
     registrar_webhook_telegram()
 
 threading.Thread(target=arrancar_monitor, daemon=True).start()
@@ -2922,10 +2920,10 @@ def api_ticker_listo(ticker):
 def api_test_telegram():
     if not session.get('es_admin'):
         return jsonify({'error': 'No autorizado'})
-    from scheduler import enviar_resumenes_diarios, enviar_apertura, enviar_cierre
-    enviar_resumenes_diarios()
-    enviar_apertura()
-    enviar_cierre()
+    from monitor import enviar_buenos_dias, vigilar_precios, reporte_cierre
+    enviar_buenos_dias()
+    vigilar_precios()
+    reporte_cierre()
     return jsonify({'ok': True, 'mensaje': 'Los 3 mensajes fueron disparados. Revisa Telegram.'})
 
 @app.route('/api/profile', methods=['GET'])

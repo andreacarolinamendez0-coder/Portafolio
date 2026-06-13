@@ -168,13 +168,17 @@ def recolectar_inflacion_usa():
     registrar("Iniciando descarga de inflación USA...")
     archivo = os.path.join(CARPETA_MACRO, "inflacion_usa.parquet")
     try:
-        # FRED API — fuente oficial, sin key requerida para este endpoint
-        url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=CPIAUCSL"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get(url, headers=headers, timeout=15)
-        from io import StringIO
+        fred_key = os.environ.get("FRED_API_KEY", "")
+        
+        # FRED API — fuente oficial
+        url = f"https://api.stlouisfed.org/fred/series/observations?series_id=CPIAUCSL&api_key={fred_key}&file_type=json&sort_order=asc"
+        r = requests.get(url, timeout=15)
+        r.raise_for_status()
+        datos = r.json()["observations"]
 
-        df = pd.read_csv(StringIO(r.text))
+        from io import StringIO
+        df = pd.DataFrame(datos)[["date", "value"]].rename(columns={"date": "Fecha", "value": "CPI"})
+        df = pd.read_csv(StringIO(df.to_csv(index=False)))
         df.columns = ["Fecha", "CPI"]
         df["Fecha"] = pd.to_datetime(df["Fecha"])
         df = df.set_index("Fecha").sort_index()
