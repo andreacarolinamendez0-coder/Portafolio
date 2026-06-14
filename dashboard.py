@@ -46,18 +46,6 @@ os.makedirs("datos/precios", exist_ok=True)
 os.makedirs("datos/portafolios", exist_ok=True)
 os.makedirs("datos/Logs", exist_ok=True)
 
-def notificar_url_ngrok():
-    time.sleep(5)
-    try:
-        r = requests.get("http://localhost:4040/api/tunnels").json()
-        url = r['tunnels'][0]['public_url']
-        requests.post(f"https://api.telegram.org/bot{os.environ.get('TELEGRAM_BOT_TOKEN', '')}/sendMessage",
-            json={"chat_id": os.environ.get("ADMIN_CHAT_ID", ""), "text": f"🌐 URL del sistema:\n{url}"})
-    except Exception as e:
-        print(f"ngrok URL notification failed: {e}")
-
-threading.Thread(target=notificar_url_ngrok, daemon=True).start()
-
 app = Flask(__name__)
 # Ruta base absoluta para que funcione en Railway y en local
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -883,6 +871,7 @@ def nuevo_portafolio():
         '<div class="form-group"><label>Propietario *</label><input type="text" name="propietario" class="form-input" placeholder="Ej: Andrea" required></div>'
         '</div><div class="form-group"><label>Perfil de riesgo</label><select name="perfil" class="form-select">'
         '<option value="agresivo">Agresivo — mayor riesgo, mayor retorno (10 años)</option>'
+        '<option value="moderado">Moderado — balance entre riesgo y retorno (7 años)</option>'
         '<option value="conservador">Conservador — menor riesgo, más estable (5 años)</option>'
         '</select></div><div class="grid-2">'
         '<div class="form-group"><label>Inversión inicial COP *</label><input type="number" name="inversion" class="form-input" placeholder="Ej: 1000000" required></div>'
@@ -1033,6 +1022,28 @@ def analista_view(archivo):
                   '<div class="alert alert-info" style="margin-bottom:16px">Tienes composición sin inversiones. Puedes reemplazarla o crear una adicional.</div>')
         comp_html = estado + f'<div class="card" style="margin-bottom:16px"><h3>Composición actual</h3>{filas}</div>'
 
+    if composicion:
+        opcion_6 = (
+            f'6. La composición de activos (redistribuir entre tus actuales: '
+            f'{", ".join(composicion.keys())}, o agregar/quitar activos)'
+        )
+        instruccion_6 = (
+            f'Si elige opción 6: pregunta qué quiere cambiar de la composición actual. '
+            f'Luego genera el JSON incluyendo "activos" con la composición final. '
+            f'SIEMPRE incluye "activos" cuando hay composición existente.\n'
+            f'Ejemplo: {{"accion":"analizar","perfil":"agresivo","inversion":2000000,'
+            f'"aporte_dca":200000,"frecuencia_meses":1,"horizonte":10,"es_nuevo":false,'
+            f'"activos":{{"WMT":0.265,"LLY":0.212,"XLK":0.159,"GOOGL":0.154,"MSFT":0.110,"VTI":0.100}}}}'
+        )
+    else:
+        opcion_6 = '6. Definir la composición de activos (aún no tienes ninguna — te sugiero una optimizada para tu perfil)'
+        instruccion_6 = (
+            f'Si elige opción 6: genera INMEDIATAMENTE el JSON con es_nuevo=true '
+            f'usando los datos ya conocidos del portafolio. NO hagas más preguntas.\n'
+            f'Ejemplo: {{"accion":"analizar","perfil":"agresivo","inversion":1000000,'
+            f'"aporte_dca":200000,"frecuencia_meses":1,"horizonte":10,"es_nuevo":true}}'
+        )
+
     # Contexto actual del portafolio para el analista
     composicion_actual_txt = ''
     if composicion:
@@ -1063,6 +1074,17 @@ def analista_view(archivo):
         f'Ejemplo: {{"accion":"analizar","perfil":"agresivo","inversion":2000000,"aporte_dca":200000,'
         f'"frecuencia_meses":1,"horizonte":10,"es_nuevo":false,'
         f'"activos":{{"WMT":0.265,"LLY":0.212,"XLK":0.159,"GOOGL":0.154,"MSFT":0.110,"VTI":0.100}}}}\n\n'
+        f'Presenta UNA VEZ estas opciones al usuario:\n'
+        f'1. El monto total invertido (actualmente ${portafolio.get("inversion_inicial", 0):,.0f} COP)\n'
+        f'2. El aporte periódico DCA (actualmente ${portafolio.get("aporte_dca", 0):,.0f} COP cada {portafolio.get("frecuencia_meses", 1)} mes(es))\n'
+        f'3. La frecuencia del DCA\n'
+        f'4. El perfil de riesgo (actualmente {portafolio.get("perfil", "no definido")})\n'
+        f'5. El horizonte de inversión (actualmente {portafolio.get("horizonte", 10)} años)\n'
+        f'{opcion_6}\n\n'
+        f'{instruccion_6}\n\n'
+        f'Para opciones 1-5: genera JSON con valores actuales más el cambio solicitado. '
+        f'{"SIEMPRE incluye activos con la composicion actual." if composicion else "No incluyas activos en el JSON."}\n'
+        f'Evalúa si el cambio tiene sentido para el perfil. Si es riesgoso, díselo antes de proceder.'
         f'REGLAS: Una pregunta por mensaje. JSON solo y sin texto adicional. Español. Sin asteriscos. Horizonte entre 1 y 30, nunca 0.'
         f'FORMATO: Texto plano únicamente. Cero asteriscos, cero markdown, cero bullets. '
         f'Si usas asteriscos o markdown, estás fallando en tu trabajo.'
@@ -1614,9 +1636,9 @@ def api_aplicar_propuesta(archivo):
             guardar_composicion(archivo, pesos)
             # Resetear monitor automáticamente al cambiar composición
             ruta_monitor = os.path.join(DATOS_DIR, "portafolios", f"monitor_{archivo}")
-        if os.path.exists(ruta_monitor):
-            os.remove(ruta_monitor)
-            print(f"🔄 Monitor reseteado automáticamente: {archivo}")
+            if os.path.exists(ruta_monitor):
+                os.remove(ruta_monitor)
+                print(f"🔄 Monitor reseteado automáticamente: {archivo}")
             ruta = f'datos/portafolios/{archivo}'
             with open(ruta,'r',encoding='utf-8') as f: dp = json.load(f)
             dp.update({'inversion_inicial':inv,'aporte_dca':aporte,'frecuencia_meses':freq,'perfil':perfil})
