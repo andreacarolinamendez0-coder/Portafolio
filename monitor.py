@@ -472,12 +472,14 @@ def vigilar_precios(archivo, portafolio, rangos_del_dia, precios_cache=None):
             if dec == "entro":
                 continue
 
+            clave = f"ciclos_sin_respuesta_{ticker}"
             # Anti-spam: máximo 3 alertas sin respuesta
             if ya_alerte_hoy(estado, ticker) and dec != "sigue":
-                clave = f"ciclos_sin_respuesta_{ticker}"
                 ciclos = estado.get(clave, 0) + 1
                 estado[clave] = ciclos
+                print(f"  📊 {ticker} tiene {ciclos} ciclos sin respuesta")
                 if ciclos >= 3:
+                    print(f"  🚫 Silenciando {ticker} por falta de respuesta tras 3 alertas")
                     continue
 
             # Construir y enviar alerta
@@ -495,7 +497,6 @@ def vigilar_precios(archivo, portafolio, rangos_del_dia, precios_cache=None):
             print(f"  📨 Intentando enviar alerta a chat_id='{chat_id}' para {ticker}")
             telegram(chat_id, msg, reply_markup=teclado_decision(ticker))
             marcar_alerta_enviada(estado, ticker)
-            estado[f"ciclos_sin_respuesta_{ticker}"] = 0
             print(f"  🟢 ALERTA: {ticker} @ ${precio} cruzó rango ${rango_entrar}")
 
     # Actualizar contadores de días sin señal
@@ -584,6 +585,7 @@ def registrar_decision(archivo, ticker, decision):
     if "decisiones_usuario" not in estado:
         estado["decisiones_usuario"] = {}
     estado["decisiones_usuario"][ticker] = {"decision": decision, "fecha": hoy}
+    estado[f"ciclos_sin_respuesta_{ticker}"] = 0
     guardar_estado(archivo, estado)
     print(f"  💾 Decisión '{decision}' guardada para {ticker}")
 
