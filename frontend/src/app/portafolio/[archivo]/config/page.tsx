@@ -1,8 +1,13 @@
 "use client";
+import { GlassBackground } from "@/components/ui/glass-background";
+import { GlassPanel } from "@/components/ui/glass-panel";
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { getConfig, updateConfig, activarPortafolio } from "@/lib/api";
+import { LiquidButton } from "@/components/ui/liquid-glass-button";
+import { GlowPanel } from "@/components/ui/glow-panel";
+
 
 const DIVISAS = [
   { code: "USD", label: "Dólar estadounidense", symbol: "US$" },
@@ -48,13 +53,13 @@ export default function ConfigPage() {
     }
   }
 
-  if (loading) return <div style={{ background: "#000", color: "#6e6e73", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>Cargando...</div>;
+  if (loading) return <div style={{ background: "var(--bg)", color: "var(--text-3)", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>Cargando...</div>;
 
-  const cardStyle = { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 14, padding: 20, marginBottom: 16 };
+  
 
   return (
-    <div style={{ background: "#000", minHeight: "100vh", color: "#f5f5f7" }}>
-      <div style={{ maxWidth: 600, margin: "0 auto", padding: 24 }}>
+    <GlassBackground>
+      <div style={{ maxWidth: 600, margin: "0 auto", padding: 24, color: "var(--text)" }}>
 
         <Link href={`/portafolio/${archivo}`} style={{ color: "#6e6e73", fontSize: 12, textDecoration: "none" }}>← Volver al portafolio</Link>
         <h2 style={{ fontSize: "1.4rem", margin: "16px 0 24px" }}>Configuración — {nombre}</h2>
@@ -68,9 +73,9 @@ export default function ConfigPage() {
         )}
 
         {/* Divisa */}
-        <div style={cardStyle}>
+        <GlowPanel>
           <h3 style={{ fontSize: "1rem", marginBottom: 6 }}>Divisa de visualización</h3>
-          <p style={{ color: "#6e6e73", fontSize: 12, marginBottom: 16 }}>
+          <p style={{ color: "var(--text-3)", fontSize: 12, marginBottom: 16 }}>
             Elige en qué moneda quieres ver los montos de este portafolio.
           </p>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -91,24 +96,24 @@ export default function ConfigPage() {
               </button>
             ))}
           </div>
-        </div>
+        </GlowPanel>
 
         {/* Estado / activar */}
-        <div style={cardStyle}>
+        <GlowPanel>
           <h3 style={{ fontSize: "1rem", marginBottom: 12 }}>Estado</h3>
-          <p style={{ color: "#a1a1a6", fontSize: 13, marginBottom: 12 }}>
+          <p style={{ color: "var(--text-3)", fontSize: 13, marginBottom: 12 }}>
             Estado actual: {activo
               ? <span style={{ color: "#30d158" }}>● ACTIVO para monitoreo</span>
               : <span style={{ color: "#6e6e73" }}>○ INACTIVO</span>}
           </p>
           {!activo && (
-            <button onClick={activar} style={{ padding: "8px 18px", borderRadius: 980, fontSize: 13, cursor: "pointer", background: "#1c1c1e", color: "#f5f5f7", border: "1px solid rgba(255,255,255,0.1)" }}>
-              Activar para monitoreo
-            </button>
+          <LiquidButton onClick={activar} className="text-white font-semibold !px-12 !py-3.5 text-base">
+  Activar para monitoreo
+</LiquidButton>
           )}
-        </div>
+        </GlowPanel>
 
       </div>
-    </div>
+    </GlassBackground >
   );
 }

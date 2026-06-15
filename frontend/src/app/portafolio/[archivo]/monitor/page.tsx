@@ -6,6 +6,10 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { LogoMark } from "@/components/ui/logo";
 import { authMe, authLogout, getPreciosRT } from "@/lib/api";
+import { GlassBackground } from "@/components/ui/glass-background";
+import { GlassPanel } from "@/components/ui/glass-panel";
+import { GlowPanel } from "@/components/ui/glow-panel";
+import { LiquidButton } from "@/components/ui/liquid-glass-button";
 
 interface PrecioRT {
   precio:        number;
@@ -49,15 +53,15 @@ export default function MonitorPage() {
 
   const senalColor = (s: string) => s === "COMPRAR" ? "#30d158" : s === "VENDER" ? "#ff453a" : "#6e6e73";
 
-  if (loading) return <div className="min-h-screen flex items-center justify-center" style={{ background: "#000", color: "#6e6e73", fontSize: 14 }}>Cargando...</div>;
-
+  if (loading) return <div className="min-h-screen flex items-center justify-center" style={{ background: "var(--bg)", color: "var(--text-3)", fontSize: 14 }}>Cargando...</div>;
+  
   return (
-    <div style={{ background: "#000", minHeight: "100vh", color: "#f5f5f7" }}>
+    <GlassBackground>
       <div style={{ maxWidth: 1100, margin: "0 auto", padding: "24px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
           <LogoMark size={32} />
-          <Link href={`/portafolio/${archivo}`} style={{ color: "#6e6e73", fontSize: 12, textDecoration: "none" }}>← Dashboard</Link>
-          <span style={{ color: "#6e6e73", fontSize: 12 }}>/ Monitor</span>
+          <Link href={`/portafolio/${archivo}`} style={{ color: "var(--text-3)", fontSize: 12, textDecoration: "none" }}>← Dashboard</Link>
+          <span style={{ color: "var(--text-3)", fontSize: 12 }}>/ Monitor</span>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
             {mercadoAbierto
               ? <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "#30d158", padding: "5px 12px", borderRadius: 980, background: "rgba(48,209,88,0.08)", border: "1px solid rgba(48,209,88,0.2)" }}>
@@ -70,13 +74,13 @@ export default function MonitorPage() {
         </div>
 
         {Object.keys(precios).length === 0 ? (
-          <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 18, padding: "40px", textAlign: "center" }}>
-            <p style={{ color: "#6e6e73" }}>Sin datos de precios en tiempo real.</p>
-            <p style={{ color: "#3d3d3f", fontSize: 12, marginTop: 8 }}>El monitor necesita estar activo y tener datos de precios del portfolio.</p>
-          </div>
+          <GlassPanel style={{ padding: "40px", textAlign: "center" }}>
+            <p style={{ color: "var(--text-3)" }}>Sin datos de precios en tiempo real.</p>
+            <p style={{ color: "var(--text-3)", fontSize: 12, marginTop: 8 }}>El monitor necesita estar activo y tener datos de precios del portfolio.</p>
+          </GlassPanel>
         ) : (
           <>
-            <div style={{ overflowX: "auto" }}>
+            <GlassPanel style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr>
@@ -107,22 +111,22 @@ export default function MonitorPage() {
                   ))}
                 </tbody>
               </table>
-            </div>
+            </GlassPanel>
             {ultimoUpdate && <p style={{ color: "#6e6e73", fontSize: 11, textAlign: "right", marginTop: 8 }}>Actualizado: {ultimoUpdate}</p>}
           </>
         )}
 
         <div style={{ marginTop: 24, display: "flex", gap: 10 }}>
-          <Button onClick={load} variant="outline" style={{ borderColor: "rgba(255,255,255,0.1)", color: "#a1a1a6", background: "#1a1a1a", borderRadius: 980 }}>
+          <LiquidButton onClick={load} className="text-white font-semibold !px-8 !py-2.5">
             Actualizar precios
-          </Button>
+          </LiquidButton>
           <Link href={`/portafolio/${archivo}`}>
-            <Button variant="outline" style={{ borderColor: "rgba(255,255,255,0.1)", color: "#a1a1a6", background: "#1a1a1a", borderRadius: 980 }}>
+            <LiquidButton className="text-white font-semibold !px-8 !py-2.5">
               Ir al Dashboard
-            </Button>
+            </LiquidButton>
           </Link>
         </div>
       </div>
-    </div>
+    </GlassBackground>
   );
 }

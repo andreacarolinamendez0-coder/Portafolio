@@ -3,6 +3,10 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { getSeguimiento, registrarCompra, type SeguimientoData } from "@/lib/api";
+import { GlassBackground } from "@/components/ui/glass-background";
+import { GlassPanel } from "@/components/ui/glass-panel";
+import { GlowPanel } from "@/components/ui/glow-panel";
+import { LiquidButton } from "@/components/ui/liquid-glass-button";
 
 export default function SeguimientoPage() {
   const params  = useParams();
@@ -52,8 +56,8 @@ export default function SeguimientoPage() {
   const sinComposicion = data.progreso.total === 0;
 
   return (
-    <div style={{ background: "#000", minHeight: "100vh", color: "#f5f5f7" }}>
-      <div style={{ maxWidth: 900, margin: "0 auto", padding: 24 }}>
+    <GlassBackground>
+      <div style={{ maxWidth: 900, margin: "0 auto", padding: 24, color: "var(--text)" }}>
 
         <Link href={`/portafolio/${archivo}`} style={{ color: "#6e6e73", fontSize: 12, textDecoration: "none" }}>← Volver al portafolio</Link>
         <h2 style={{ fontSize: "1.4rem", margin: "16px 0 24px" }}>Seguimiento — {data.nombre}</h2>
@@ -65,15 +69,15 @@ export default function SeguimientoPage() {
         )}
 
         {sinComposicion ? (
-          <div style={s.card}>
+          <GlassPanel>
             <p style={{ color: "#a1a1a6", fontSize: 14 }}>
               Este portafolio aún no tiene una composición. Primero corre el <strong>Analista</strong> para generar la propuesta de activos, y luego podrás registrar tus compras aquí.
             </p>
-          </div>
+          </GlassPanel>
         ) : (
           <>
             {/* Barra de progreso */}
-            <div style={s.card}>
+            <GlassPanel>
               <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
                 <span style={{ color: "#a1a1a6" }}>Progreso de entradas</span>
                 <span style={{ color: "#0071e3", fontWeight: 600 }}>{data.progreso.entrados}/{data.progreso.total} activos</span>
@@ -82,12 +86,12 @@ export default function SeguimientoPage() {
                 <div style={{ background: "#0071e3", height: "100%", width: `${data.progreso.pct}%`, transition: "width 0.6s ease" }} />
               </div>
               <div style={{ marginTop: 8, fontSize: "0.8rem", color: "#6e6e73" }}>{data.progreso.pct}% completado</div>
-            </div>
+            </GlassPanel>
 
             {/* Pendientes */}
             {data.pendientes.length > 0 && (
-              <div style={s.card}>
-                <h3 style={s.h3}>Pendientes por entrar</h3>
+              <GlassPanel>
+                <h3 style={{ fontSize: "1rem", marginBottom: 12 }}>Pendientes por entrar</h3>
                 {data.pendientes.map(p => (
                   <div key={p.activo} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                     <div>
@@ -100,16 +104,16 @@ export default function SeguimientoPage() {
                     </div>
                   </div>
                 ))}
-              </div>
+              </GlassPanel>
             )}
 
             {/* Formulario de nueva compra */}
-            <div style={s.card}>
-              <h3 style={s.h3}>Registrar nueva compra</h3>
+            <GlassPanel>
+              <h3 style={{ fontSize: "1rem", marginBottom: 12 }}>Registrar nueva compra</h3>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
                 <div>
-                  <label style={s.label}>Activo</label>
-                  <select value={activo} onChange={e => setActivo(e.target.value)} style={s.input}>
+                  <label style={{ fontSize: "0.85rem", color: "#a1a1a6" }}>Activo</label>
+                  <select value={activo} onChange={e => setActivo(e.target.value)} style={{ background: "var(--bg-2)", border: "1px solid rgba(255,255,255,0.08)", color: "var(--text)", padding: "8px 12px", borderRadius: 8 }}>
                     <option value="">Selecciona...</option>
                     {data.pendientes.map(p => <option key={p.activo} value={p.activo}>{p.activo} — pendiente</option>)}
                     {data.entrados.map(a => <option key={a} value={a}>{a} — agregar más</option>)}
@@ -131,13 +135,13 @@ export default function SeguimientoPage() {
               <div style={{ padding: "10px 14px", background: "rgba(0,113,227,0.06)", border: "1px solid rgba(0,113,227,0.15)", borderRadius: 10, marginBottom: 14 }}>
                 <p style={{ color: "#4da3ff", fontSize: 12, margin: 0 }}>El sistema calcula el precio por acción y convierte a COP con la TRM del día.</p>
               </div>
-              <button onClick={registrar} style={s.btnPrimary}>Registrar compra</button>
-            </div>
+              <LiquidButton onClick={registrar} className="text-white font-semibold !px-10 !py-3">Registrar compra</LiquidButton>
+            </GlassPanel>
 
             {/* Historial */}
             {data.aportes.length > 0 && (
-              <div style={s.card}>
-                <h3 style={s.h3}>Historial de compras</h3>
+              <GlassPanel>
+                <h3 style={{ fontSize: "1rem", marginBottom: 12 }}>Historial de compras</h3>
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                     <thead>
@@ -161,22 +165,22 @@ export default function SeguimientoPage() {
                     </tbody>
                   </table>
                 </div>
-              </div>
+              </GlassPanel>
             )}
           </>
         )}
       </div>
-    </div>
+    </GlassBackground>
   );
 }
 
 const s: Record<string, React.CSSProperties> = {
-  load:       { background: "#000", color: "#6e6e73", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 },
-  card:       { background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 14, padding: 20, marginBottom: 16 },
-  h3:         { fontSize: "1rem", marginBottom: 12 },
-  label:      { display: "block", fontSize: 12, color: "#6e6e73", marginBottom: 6 },
-  input:      { background: "#111", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 10, color: "#f5f5f7", fontSize: "0.9rem", padding: "9px 12px", width: "100%" },
+  load:       { background: "var(--bg)", color: "var(--text-3)", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 },
+  card:       { background: "var(--glass)", border: "1px solid var(--glass-border)", borderRadius: 14, padding: 20, marginBottom: 16 },
+  h3:         { fontSize: "1rem", marginBottom: 12, color: "var(--text)" },
+  label:      { display: "block", fontSize: 12, color: "var(--text-3)", marginBottom: 6 },
+  input:      { background: "var(--bg-2)", border: "1px solid var(--glass-border)", borderRadius: 10, color: "var(--text)", fontSize: "0.9rem", padding: "9px 12px", width: "100%" },
   btnPrimary: { padding: "10px 20px", borderRadius: 980, fontSize: 13, cursor: "pointer", background: "#0071e3", color: "#fff", border: "none" },
   th:         { padding: "8px 10px", fontWeight: 500 },
-  td:         { padding: "8px 10px", color: "#f5f5f7" },
+  td:         { padding: "8px 10px", color: "var(--text)" },
 };

@@ -21,7 +21,7 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="es" className={cn("h-full", dmSans.variable, "font-sans", geist.variable)}>
+    <html lang="es" className={cn("dark", "h-full", dmSans.variable, "font-sans", geist.variable)}>
       <body
         className="min-h-full flex flex-col"
         style={{ fontFamily: "var(--font-dm-sans), -apple-system, BlinkMacSystemFont, sans-serif" }}

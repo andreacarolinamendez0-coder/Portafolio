@@ -8,6 +8,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LogoMark } from "@/components/ui/logo";
 import { authMe, authLogout, getProfile, updateProfile } from "@/lib/api";
+import { GlassBackground } from "@/components/ui/glass-background";
+import { GlassPanel } from "@/components/ui/glass-panel";
+import { LiquidButton } from "@/components/ui/liquid-glass-button";
+import { GlowPanel } from "@/components/ui/glow-panel";
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -47,13 +51,13 @@ export default function SettingsPage() {
     }
   }
 
-  if (loading) return <div className="min-h-screen flex items-center justify-center" style={{ background: "#000", color: "#6e6e73", fontSize: 14 }}>Cargando...</div>;
+  if (loading) return <div className="min-h-screen flex items-center justify-center" style={{ background: "var(--bg)", color: "var(--text-3)", fontSize: 14 }}>Cargando...</div>;
 
-  const inputStyle = { background: "#111", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12, color: "#f5f5f7", fontSize: "0.9rem" };
+  const inputStyle = { background: "var(--bg-2)", border: "1px solid var(--glass-border)", borderRadius: 12, color: "var(--text)", fontSize: "0.9rem" };
 
   return (
-    <div style={{ background: "#000", minHeight: "100vh", color: "#f5f5f7" }}>
-      <div style={{ maxWidth: 600, margin: "0 auto", padding: "24px" }}>
+    <GlassBackground>
+      <div style={{ maxWidth: 600, margin: "0 auto", padding: "24px", color: "var(--text)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 32 }}>
           <LogoMark size={32} />
           <Link href="/portafolios" style={{ color: "#6e6e73", fontSize: 12, textDecoration: "none" }}>← Portafolios</Link>
@@ -64,7 +68,7 @@ export default function SettingsPage() {
         <h2 style={{ fontSize: "1.5rem", fontWeight: 600, letterSpacing: "-0.02em", marginBottom: 24 }}>Mi Perfil</h2>
 
         {/* Personal info */}
-        <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 18, padding: 24, marginBottom: 16 }}>
+        <GlowPanel>
           <h3 style={{ fontSize: "0.72rem", fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#6e6e73", marginBottom: 20 }}>Información personal</h3>
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div className="flex flex-col gap-2">
@@ -86,18 +90,20 @@ export default function SettingsPage() {
               </div>
             </div>
           </div>
-          <Button onClick={saveProfile} style={{ marginTop: 20, background: "#0071e3", color: "#fff", borderRadius: 12, width: "100%", padding: "12px", height: "auto", fontSize: "0.95rem" }}>
-            Guardar cambios
-          </Button>
+          <div style={{ marginTop: 20 }}>
+            <LiquidButton onClick={saveProfile} className="text-white font-semibold !px-8 !py-3 w-full">
+              Guardar cambios
+            </LiquidButton>
+          </div>
           {msgProfile.text && (
             <p style={{ marginTop: 10, fontSize: 13, color: msgProfile.ok ? "#30d158" : "#ff453a" }}>
               {msgProfile.ok ? "✅" : "❌"} {msgProfile.text}
             </p>
           )}
-        </div>
+        </GlowPanel>
 
         {/* Change password */}
-        <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 18, padding: 24 }}>
+        <GlowPanel>
           <h3 style={{ fontSize: "0.72rem", fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#6e6e73", marginBottom: 20 }}>Cambiar contraseña</h3>
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <div className="flex flex-col gap-2">
@@ -109,16 +115,18 @@ export default function SettingsPage() {
               <Input type="password" value={newPw} onChange={e => setNewPw(e.target.value)} placeholder="Mínimo 6 caracteres" style={inputStyle} />
             </div>
           </div>
-          <Button onClick={changePassword} variant="outline" style={{ marginTop: 20, borderColor: "rgba(255,255,255,0.1)", color: "#f5f5f7", background: "#1a1a1a", borderRadius: 12, width: "100%", padding: "12px", height: "auto" }}>
-            Cambiar contraseña
-          </Button>
+          <div style={{ marginTop: 20 }}>
+            <LiquidButton onClick={changePassword} className="text-white font-semibold !px-8 !py-3 w-full">
+              Cambiar contraseña
+            </LiquidButton>
+          </div>
           {msgPw.text && (
             <p style={{ marginTop: 10, fontSize: 13, color: msgPw.ok ? "#30d158" : "#ff453a" }}>
               {msgPw.ok ? "✅" : "❌"} {msgPw.text}
             </p>
           )}
-        </div>
+        </GlowPanel>
       </div>
-    </div>
+    </GlassBackground>
   );
 }

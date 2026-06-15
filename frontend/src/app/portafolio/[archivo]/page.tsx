@@ -1,5 +1,9 @@
 "use client";
-
+import { MagneticTabs } from "@/components/ui/magnetic-tabs";
+import { LiquidButton } from "@/components/ui/liquid-glass-button";
+import { GlassPanel } from "@/components/ui/glass-panel";
+import { GlowCard } from "@/components/ui/spotlight-card";
+import { GlassBackground } from "@/components/ui/glass-background";
 import { useEffect, useState, useCallback } from "react";
 import { useRouter, useParams } from "next/navigation";
 import Link from "next/link";
@@ -58,8 +62,8 @@ export default function DashboardPage() {
   }
 
   if (loading || !data) return (
-    <div className="min-h-screen flex items-center justify-center" style={{ background: "#000" }}>
-      <div style={{ color: "#6e6e73", fontSize: 14 }}>Cargando portafolio...</div>
+    <div className="min-h-screen flex items-center justify-center" style={{ background: "var(--bg)" }}>
+      <div style={{ color: "var(--text-3)", fontSize: 14 }}>Cargando portafolio...</div>
     </div>
   );
 
@@ -68,9 +72,8 @@ export default function DashboardPage() {
   const gc     = tiempo_real && tiempo_real.ganancia_total > 0 ? "#30d158" : "#ff453a";
 
   return (
-    <div style={{ background: "#000", minHeight: "100vh", color: "#f5f5f7" }}>
-      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "24px 24px 48px" }}>
-
+    <GlassBackground>
+      <div style={{ minHeight: "100vh", color: "var(--text)" }}>
         {/* Portfolio header card */}
         <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 16, padding: "16px 24px", marginBottom: 20 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
@@ -120,13 +123,12 @@ export default function DashboardPage() {
         </div>
 
         {/* Tabs */}
-        <div style={{ display: "flex", gap: 2, marginBottom: 28, background: "#111", padding: 4, borderRadius: 12, border: "1px solid rgba(255,255,255,0.08)", width: "fit-content" }}>
-          {(["hoy", "historico"] as Tab[]).map(t => (
-            <button key={t} onClick={() => setTab(t)}
-              style={{ padding: "8px 22px", borderRadius: 8, cursor: "pointer", fontSize: "0.875rem", fontWeight: tab === t ? 500 : 400, color: tab === t ? "#f5f5f7" : "#6e6e73", border: tab === t ? "1px solid rgba(255,255,255,0.08)" : "none", background: tab === t ? "#1a1a1a" : "transparent", transition: "all 0.15s", fontFamily: "inherit" }}>
-              {t === "hoy" ? "Hoy" : "Histórico"}
-            </button>
-          ))}
+        <div style={{ marginBottom: 28 }}>
+          <MagneticTabs
+            items={[{ value: "hoy", label: "Hoy" }, { value: "historico", label: "Histórico" }]}
+            value={tab}
+            onChange={(v) => setTab(v as Tab)}
+          />
         </div>
 
         {tab === "hoy" && (
@@ -139,12 +141,12 @@ export default function DashboardPage() {
 
             {/* Real-time positions */}
             {tiempo_real ? <PosicionesSection tr={tiempo_real} /> : (
-              <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 18, padding: 40, textAlign: "center", marginBottom: 16 }}>
-                <p style={{ color: "#6e6e73", marginBottom: 16 }}>Sin inversiones registradas.</p>
+              <GlassPanel style={{ padding: 40, textAlign: "center" }}>
+                <p style={{ color: "var(--text-3)", marginBottom: 16 }}>Sin inversiones registradas.</p>
                 <Link href={`/portafolio/${archivo}/seguimiento`}>
-                  <Button style={{ background: "#0071e3", color: "#fff", borderRadius: 980 }}>Registrar primera inversión</Button>
+                  <LiquidButton className="text-white font-semibold !px-8 !py-3">Registrar primera inversión</LiquidButton>
                 </Link>
-              </div>
+              </GlassPanel>
             )}
           </>
         )}
@@ -156,17 +158,16 @@ export default function DashboardPage() {
           <div style={{ color: "#6e6e73", fontSize: 11, marginBottom: 12 }}>
             Última actualización: <span>{lastUpdate || "—"}</span>
           </div>
-          <Button
-            variant="outline"
+          <LiquidButton
             disabled={updating}
             onClick={handleRefresh}
-            style={{ background: "rgba(255,255,255,0.05)", color: "#a1a1a6", border: "1px solid rgba(255,255,255,0.08)", padding: "10px 28px", borderRadius: 980, fontSize: 13 }}
+            className="text-white font-semibold !px-8 !py-3"
           >
-            {updating ? "⏳ Descargando datos..." : "Actualizar datos"}
-          </Button>
+            {updating ? "Descargando datos..." : "Actualizar datos"}
+          </LiquidButton>
         </div>
       </div>
-    </div>
+    </GlassBackground>
   );
 }
 
@@ -213,13 +214,13 @@ function MacroSection({ macro }: { macro: NonNullable<DashboardData["macro"]> })
   return (
     <>
       <SectionTitle>Indicadores Macro</SectionTitle>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, marginBottom: 24 }}>
         {tiles.map(t => (
-          <div key={t.label} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 18, padding: 24 }}>
-            <h3 style={{ fontSize: "0.72rem", fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#6e6e73", marginBottom: 12 }}>{t.label}</h3>
-            <div style={{ fontSize: "2rem", fontWeight: 600, letterSpacing: "-0.03em", lineHeight: 1, marginBottom: 4, color: "#f5f5f7" }}>{t.value}</div>
-            <div style={{ fontSize: "0.8rem", color: t.subColor ?? "#6e6e73" }}>{t.sub}</div>
-          </div>
+          <GlowCard key={t.label} glowColor="blue" className="flex flex-col justify-between" >
+            <h3 style={{ fontSize: "0.72rem", fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-3)", marginBottom: 12 }}>{t.label}</h3>
+            <div style={{ fontSize: "2rem", fontWeight: 600, letterSpacing: "-0.03em", lineHeight: 1, marginBottom: 4, color: "var(--text)" }}>{t.value}</div>
+            <div style={{ fontSize: "0.8rem", color: t.subColor ?? "var(--text-3)" }}>{t.sub}</div>
+          </GlowCard>
         ))}
       </div>
 
@@ -236,6 +237,7 @@ function TRMChart({ trm_hist }: { trm_hist: { fechas: string[]; valores: number[
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (!trm_hist || !trm_hist.fechas) return;
     const load = async () => {
       const Plotly = (await import("plotly.js-dist-min" as never)) as typeof import("plotly.js");
       const n = Math.min(days, trm_hist.fechas.length);
@@ -258,7 +260,7 @@ function TRMChart({ trm_hist }: { trm_hist: { fechas: string[]; valores: number[
   }, [days, trm_hist]);
 
   return (
-    <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 18, padding: 24, marginBottom: 16 }}>
+    <GlassPanel>
       <div style={{ display: "flex", gap: 6, marginBottom: 12, alignItems: "center" }}>
         <p style={{ color: "#f5f5f7", fontSize: 14, fontWeight: 600, margin: 0, flex: 1 }}>Tasa Representativa del Mercado (TRM)</p>
         {[7, 30, 60, 90].map(d => (
@@ -270,7 +272,7 @@ function TRMChart({ trm_hist }: { trm_hist: { fechas: string[]; valores: number[
       </div>
       <div id="trm-chart" style={{ width: "100%", height: 240 }} />
       <div style={{ marginTop: 8, fontSize: "0.7rem", color: "#6e6e73", textAlign: "right" }}>Fuente: Banco de la República</div>
-    </div>
+    </GlassPanel>
   );
 }
 
@@ -288,7 +290,7 @@ function ComposicionSection({ composicion, archivo, aportes_activos }: { composi
           { title: "Ya entraste", items: entrados, badge: { bg: "rgba(48,209,88,0.12)", color: "#30d158", border: "rgba(48,209,88,0.2)", label: "ENTRADO" } },
           { title: "Pendientes",  items: pendientes, badge: { bg: "rgba(255,214,10,0.12)", color: "#ffd60a", border: "rgba(255,214,10,0.2)", label: "PENDIENTE" } },
         ].map(({ title, items, badge }) => (
-          <div key={title} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 18, padding: 24 }}>
+          <GlassPanel key={title} style={{ marginBottom: 0 }}>
             <h3 style={{ fontSize: "0.72rem", fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#6e6e73", marginBottom: 12 }}>{title}</h3>
             {items.length === 0
               ? <div style={{ color: title === "Pendientes" ? "#30d158" : "#6e6e73", padding: "8px 0", fontSize: 14 }}>{title === "Pendientes" ? "Ya entraste a todos" : "Sin entradas aún"}</div>
@@ -298,7 +300,7 @@ function ComposicionSection({ composicion, archivo, aportes_activos }: { composi
                   <span style={{ background: badge.bg, color: badge.color, border: `1px solid ${badge.border}`, borderRadius: 980, padding: "3px 10px", fontSize: "0.7rem", fontWeight: 500 }}>{badge.label}</span>
                 </div>
               ))}
-          </div>
+          </GlassPanel>
         ))}
       </div>
     </>
@@ -312,8 +314,8 @@ function PosicionesSection({ tr }: { tr: NonNullable<DashboardData["tiempo_real"
   return (
     <>
       <SectionTitle>Portafolio en Tiempo Real</SectionTitle>
-      <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 18, padding: 24, marginBottom: 16, textAlign: "center" }}>
-        <div style={{ color: "#6e6e73", fontSize: "0.85rem", marginBottom: 8 }}>Ganancia Real Total (pesos de hoy)</div>
+      <GlassPanel style={{ textAlign: "center" }}>
+        <div style={{ color: "var(--text-3)", fontSize: "0.85rem", marginBottom: 8 }}>Ganancia Real Total (pesos de hoy)</div>
         <div style={{ fontSize: "3rem", fontWeight: 600, letterSpacing: "-0.04em", color: gc, lineHeight: 1 }}>
           {tr.ganancia_total > 0 ? "+" : ""}${tr.ganancia_total.toLocaleString("es-CO", { maximumFractionDigits: 0 })}
         </div>
@@ -322,9 +324,10 @@ function PosicionesSection({ tr }: { tr: NonNullable<DashboardData["tiempo_real"
           {" → "}Hoy: <strong style={{ color: "#f5f5f7" }}>${tr.total_valor.toLocaleString("es-CO", { maximumFractionDigits: 0 })}</strong>
           {" "}<span style={{ color: gc }}>({tr.rentabilidad_total > 0 ? "+" : ""}{tr.rentabilidad_total}%)</span>
         </div>
-      </div>
-      <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 18, padding: 24, overflowX: "auto" }}>
+      </GlassPanel>
+      <GlassPanel style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <div style={{ color: "var(--text-3)", fontSize: "0.85rem", marginBottom: 8 }}>Ganancia Real Total (pesos de hoy)</div>
           <thead>
             <tr>
               {["Activo", "Precio hoy", "Fracciones", "Valor COP", "Ganancia", "Rentabilidad"].map(h => (
@@ -362,7 +365,7 @@ function PosicionesSection({ tr }: { tr: NonNullable<DashboardData["tiempo_real"
             })}
           </tbody>
         </table>
-      </div>
+      </GlassPanel>
     </>
   );
 }
@@ -371,9 +374,9 @@ function PosicionesSection({ tr }: { tr: NonNullable<DashboardData["tiempo_real"
 
 function HistoricoSection({ historico }: { historico: DashboardData["historico"] }) {
   if (!historico.length) return (
-    <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 18, padding: 24 }}>
-      <p style={{ color: "#6e6e73", textAlign: "center" }}>Aún no hay registros históricos. El sistema guardará uno automáticamente cada día.</p>
-    </div>
+    <GlassPanel>
+      <p style={{ color: "var(--text-3)", textAlign: "center" }}>Aún no hay registros históricos. El sistema guardará uno automáticamente cada día.</p>
+    </GlassPanel>
   );
   const ul  = historico[historico.length - 1];
   const pr  = historico[0];
@@ -382,23 +385,24 @@ function HistoricoSection({ historico }: { historico: DashboardData["historico"]
   return (
     <>
       <SectionTitle>Resumen Acumulado</SectionTitle>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 12, marginBottom: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, marginBottom: 24 }}>
         {[
           { label: "Días registrados", value: historico.length, sub: `desde ${pr.fecha}` },
           { label: "Valor actual",     value: `$${ul.resumen.total_valor.toLocaleString("es-CO", { maximumFractionDigits: 0 })}`, sub: "COP", color: "#30d158" },
           { label: "Ganancia acumulada", value: `${gac > 0 ? "+" : ""}$${gac.toLocaleString("es-CO", { maximumFractionDigits: 0 })}`, sub: "COP real", color: gac > 0 ? "#30d158" : "#ff453a" },
           { label: "Rentabilidad total", value: `${rac > 0 ? "+" : ""}${rac}%`, sub: "desde inicio", color: rac > 0 ? "#30d158" : "#ff453a" },
         ].map(t => (
-          <div key={t.label} style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 18, padding: 24 }}>
-            <h3 style={{ fontSize: "0.72rem", fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "#6e6e73", marginBottom: 12 }}>{t.label}</h3>
-            <div style={{ fontSize: "2rem", fontWeight: 600, letterSpacing: "-0.03em", lineHeight: 1, marginBottom: 4, color: (t as { color?: string }).color ?? "#f5f5f7" }}>{t.value}</div>
-            <div style={{ fontSize: "0.8rem", color: "#6e6e73" }}>{t.sub}</div>
-          </div>
+          <GlowCard key={t.label} glowColor="blue" className="flex flex-col justify-between">
+            <h3 style={{ fontSize: "0.72rem", fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-3)", marginBottom: 12 }}>{t.label}</h3>
+            <div style={{ fontSize: "2rem", fontWeight: 600, letterSpacing: "-0.03em", lineHeight: 1, marginBottom: 4, color: (t as { color?: string }).color ?? "var(--text)" }}>{t.value}</div>
+            <div style={{ fontSize: "0.8rem", color: "var(--text-3)" }}>{t.sub}</div>
+          </GlowCard>
         ))}
       </div>
       <SectionTitle>Registro Diario</SectionTitle>
-      <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 18, padding: 24, overflowX: "auto" }}>
+      <GlassPanel style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <div style={{ color: "var(--text-3)", fontSize: "0.85rem", marginBottom: 8 }}>Ganancia Real Total (pesos de hoy)</div>
           <thead>
             <tr>
               {["Fecha","TRM","Valor COP","Ganancia","Rentabilidad"].map(h => (
@@ -422,7 +426,7 @@ function HistoricoSection({ historico }: { historico: DashboardData["historico"]
             })}
           </tbody>
         </table>
-      </div>
+      </GlassPanel>
     </>
   );
 }

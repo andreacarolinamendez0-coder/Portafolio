@@ -1,4 +1,4 @@
-__pycache__/
+﻿__pycache__/
 *.pyc
 *.pyo
 .env
@@ -14,4 +14,3 @@ logs/
 datos/portafolios/
 datos/usuarios.json
 datos/logs_actividad.json
-frontend/
