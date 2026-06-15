@@ -43,6 +43,21 @@ UMBRAL_ENTRADA = 6.5
 UMBRAL_VIGILAR = 4.5
 DIAS_SIN_SENAL_MAX = 5
 
+COINGECKO_MAP = {
+    "BTC-USD":  "bitcoin",
+    "ETH-USD":  "ethereum",
+    "SOL-USD":  "solana",
+    "BNB-USD":  "binancecoin",
+    "XRP-USD":  "ripple",
+    "ADA-USD":  "cardano",
+    "DOGE-USD": "dogecoin",
+    "AVAX-USD": "avalanche-2",
+    "DOT-USD":  "polkadot",
+    "MATIC-USD":"matic-network",
+    "LTC-USD":  "litecoin",
+    "LINK-USD": "chainlink",
+}
+
 # ─────────────────────────────────────────────────────────────
 # ZONAS HORARIAS
 # ─────────────────────────────────────────────────────────────
@@ -160,7 +175,6 @@ def telegram(chat_id, texto, reply_markup=None):
             json=payload,
             timeout=10,
         )
-        print(f"  📤 Telegram → {chat_id}: {resp.status_code} {resp.json().get('ok')} — {resp.json().get('description', 'ok')}")
     except Exception as e:
         print(f"❌ Telegram error: {e}")
 
@@ -177,6 +191,37 @@ def teclado_decision(ticker):
         ]
     }
 
+# ─────────────────────────────────────────────────────────────
+# COINGECKO — PRECIO EN TIEMPO REAL
+# ─────────────────────────────────────────────────────────────
+
+def coingecko_quote(ticker):
+    """Precio crypto desde CoinGecko — gratis, sin API key."""
+    coin_id = COINGECKO_MAP.get(ticker)
+    if not coin_id:
+        return None
+    try:
+        resp = requests.get(
+            "https://api.coingecko.com/api/v3/simple/price",
+            params={
+                "ids": coin_id,
+                "vs_currencies": "usd",
+                "include_24hr_change": "true"
+            },
+            timeout=8,
+        )
+        resp.raise_for_status()
+        data = resp.json().get(coin_id, {})
+        precio = data.get("usd", 0)
+        cambio = data.get("usd_24h_change", 0)
+        if not precio:
+            print(f"⚠️ CoinGecko sin precio para {ticker}")
+            return None
+        # Retorna formato compatible con finnhub_quote
+        return {"c": precio, "dp": round(cambio, 2)}
+    except Exception as e:
+        print(f"❌ CoinGecko error ({ticker}): {e}")
+        return None
 
 # ─────────────────────────────────────────────────────────────
 # FINNHUB — PRECIO EN TIEMPO REAL
@@ -189,6 +234,9 @@ def finnhub_quote(ticker):
     Retorna dict con: c=precio actual, o=apertura, h=max, l=min,
                       pc=cierre anterior, dp=cambio %
     """
+    if ticker in COINGECKO_MAP:
+        return coingecko_quote(ticker)
+    
     try:
         resp = requests.get(
             "https://finnhub.io/api/v1/quote",
@@ -472,12 +520,11 @@ def vigilar_precios(archivo, portafolio, rangos_del_dia, precios_cache=None):
             if dec == "entro":
                 continue
 
-            clave = f"ciclos_sin_respuesta_{ticker}"
             # Anti-spam: máximo 3 alertas sin respuesta
             if ya_alerte_hoy(estado, ticker) and dec != "sigue":
+                clave = f"ciclos_sin_respuesta_{ticker}"
                 ciclos = estado.get(clave, 0) + 1
                 estado[clave] = ciclos
-                print(f"  📊 {ticker} tiene {ciclos} ciclos sin respuesta")
                 if ciclos >= 3:
                     print(f"  🚫 Silenciando {ticker} por falta de respuesta tras 3 alertas")
                     continue
