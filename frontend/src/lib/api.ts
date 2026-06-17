@@ -146,7 +146,7 @@ export const getUltimaActualizacion = () =>
 // ── Config ──────────────────────────────────────────────
 
 export const getConfig = (archivo: string) =>
-  apiFetch<{ nombre: string; activo: boolean; divisa: string }>(`/api/config/${archivo}`);
+  apiFetch<{ nombre: string; activo: boolean; divisa: string; perfil: string; propietario: string; fecha_inicio: string }>(`/api/config/${archivo}`);
 
 export const updateConfig = (archivo: string, divisa: string) =>
   apiFetch<{ ok: boolean; mensaje: string; divisa: string }>(`/api/config/${archivo}`, {

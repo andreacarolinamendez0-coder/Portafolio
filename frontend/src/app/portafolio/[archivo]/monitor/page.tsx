@@ -11,6 +11,7 @@ import { GlassPanel } from "@/components/ui/glass-panel";
 import { GlowPanel } from "@/components/ui/glow-panel";
 import { LiquidButton } from "@/components/ui/liquid-glass-button";
 
+
 interface PrecioRT {
   precio:        number;
   cambio_dia:    number;
@@ -56,13 +57,8 @@ export default function MonitorPage() {
   if (loading) return <div className="min-h-screen flex items-center justify-center" style={{ background: "var(--bg)", color: "var(--text-3)", fontSize: 14 }}>Cargando...</div>;
   
   return (
-    <GlassBackground>
-      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "24px" }}>
+    <>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
-          <LogoMark size={32} />
-          <Link href={`/portafolio/${archivo}`} style={{ color: "var(--text-3)", fontSize: 12, textDecoration: "none" }}>← Dashboard</Link>
-          <span style={{ color: "var(--text-3)", fontSize: 12 }}>/ Monitor</span>
-          <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
             {mercadoAbierto
               ? <span style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 12, color: "#30d158", padding: "5px 12px", borderRadius: 980, background: "rgba(48,209,88,0.08)", border: "1px solid rgba(48,209,88,0.2)" }}>
                   <span style={{ width: 5, height: 5, borderRadius: "50%", background: "#30d158", animation: "pulse-dot 2s infinite", display: "inline-block" }} />
@@ -70,7 +66,6 @@ export default function MonitorPage() {
                 </span>
               : <span style={{ fontSize: 12, color: "#6e6e73" }}>Mercado cerrado</span>}
             <button onClick={async () => { await authLogout(); router.push("/login"); }} style={{ background: "none", border: "none", color: "#6e6e73", fontSize: 12, cursor: "pointer" }}>Salir</button>
-          </div>
         </div>
 
         {Object.keys(precios).length === 0 ? (
@@ -126,7 +121,6 @@ export default function MonitorPage() {
             </LiquidButton>
           </Link>
         </div>
-      </div>
-    </GlassBackground>
+    </>
   );
 }

@@ -370,6 +370,69 @@ def proyectar_con_dca(
 # PASO 6 — REPORTE FINAL
 # ============================================================
 
+def calcular_datos_reporte(
+    pesos,
+    inversion_inicial,
+    ret_real,
+    perfil,
+    horizonte,
+    risk_free,
+    inflacion_col,
+    tasa_cdt,
+    aporte_periodico=0,
+    frecuencia_meses=1,
+):
+    """Calcula las métricas y proyecciones y las DEVUELVE como dict (sin imprimir)."""
+    rf = risk_free["Risk_Free"].iloc[-1] / 100
+    activos_port = pesos.index.tolist()
+    ret_port = ret_real[activos_port].dot(pesos)
+    ret_anual = ret_port.mean() * 12
+    vol_anual = ret_port.std() * np.sqrt(12)
+    sharpe = (ret_anual - rf) / vol_anual
+    cumprod = (ret_port + 1).cumprod()
+    max_dd = (cumprod / cumprod.cummax() - 1).min()
+
+    años_proyeccion = sorted(set([3, 5, horizonte]))
+    proyecciones = []
+    for años in años_proyeccion:
+        sin_dca, con_dca, cdt_p = proyectar_con_dca(
+            ret_port, inversion_inicial, aporte_periodico,
+            frecuencia_meses, años, inflacion_col, tasa_cdt,
+        )
+        n_aportes = (años * 12 // frecuencia_meses) if aporte_periodico > 0 else 0
+        total_aportado = inversion_inicial + (aporte_periodico * n_aportes)
+        cdt_nominal = inversion_inicial * (1 + tasa_cdt / 100) ** años
+        cdt_real = cdt_nominal / (1 + inflacion_col / 100) ** años
+        cdt_real_dca = cdt_real + (aporte_periodico * n_aportes) / (1 + inflacion_col / 100) ** años
+
+        proyecciones.append({
+            "anios": años,
+            "total_aportado": round(total_aportado, 0),
+            "sin_dca": {"pesimista": round(sin_dca[0], 0), "base": round(sin_dca[1], 0), "optimista": round(sin_dca[2], 0)},
+            "con_dca": {"pesimista": round(con_dca[0], 0), "base": round(con_dca[1], 0), "optimista": round(con_dca[2], 0)} if aporte_periodico > 0 else None,
+            "cdt_real": round(cdt_real, 0),
+            "cdt_real_dca": round(cdt_real_dca, 0) if aporte_periodico > 0 else None,
+            "ventaja_vs_cdt": round(sin_dca[1] - cdt_real, 0),
+            "ventaja_dca_vs_cdt": round(con_dca[1] - cdt_real_dca, 0) if aporte_periodico > 0 else None,
+        })
+
+    return {
+        "perfil": perfil,
+        "horizonte": horizonte,
+        "composicion": {a: round(float(p), 4) for a, p in pesos.sort_values(ascending=False).items()},
+        "metricas": {
+            "retorno_anual": round(ret_anual * 100, 2),
+            "volatilidad": round(vol_anual * 100, 2),
+            "sharpe": round(float(sharpe), 2),
+            "max_drawdown": round(max_dd * 100, 2),
+        },
+        "inflacion_col": round(inflacion_col, 1),
+        "cdt_ref": round(tasa_cdt, 2),
+        "inversion_inicial": round(inversion_inicial, 0),
+        "aporte_dca": round(aporte_periodico, 0),
+        "frecuencia_meses": frecuencia_meses,
+        "proyecciones": proyecciones,
+    }
 
 def generar_reporte(
     pesos,
@@ -383,16 +446,14 @@ def generar_reporte(
     aporte_periodico=0,
     frecuencia_meses=1,
 ):
-
-    rf = risk_free["Risk_Free"].iloc[-1] / 100
-    activos_port = pesos.index.tolist()
-    ret_port = ret_real[activos_port].dot(pesos)
-    ret_anual = ret_port.mean() * 12
-    vol_anual = ret_port.std() * np.sqrt(12)
-    sharpe = (ret_anual - rf) / vol_anual
-    cumprod = (ret_port + 1).cumprod()
-    max_dd = (cumprod / cumprod.cummax() - 1).min()
-
+    # Un solo lugar calcula: reusa calcular_datos_reporte
+    d = calcular_datos_reporte(
+        pesos=pesos, inversion_inicial=inversion_inicial, ret_real=ret_real,
+        perfil=perfil, horizonte=horizonte, risk_free=risk_free,
+        inflacion_col=inflacion_col, tasa_cdt=tasa_cdt,
+        aporte_periodico=aporte_periodico, frecuencia_meses=frecuencia_meses,
+    )
+    m = d["metricas"]
     freq_texto = {1: "mensual", 3: "trimestral", 12: "anual"}
 
     print(f"\n{'='*65}")
@@ -400,111 +461,59 @@ def generar_reporte(
     print(f"{'='*65}")
 
     print(f"\n📊 COMPOSICIÓN:")
-    for activo, peso in pesos.sort_values(ascending=False).items():
+    for activo, peso in d["composicion"].items():
         barra = "█" * int(peso * 30)
         print(f"   {activo:<12} {peso*100:5.1f}%  {barra}")
 
     print(f"\n📈 MÉTRICAS:")
-    print(f"   Retorno anual esperado : {ret_anual*100:.2f}%")
-    print(f"   Volatilidad anual      : {vol_anual*100:.2f}%")
-    print(f"   Sharpe ratio           : {sharpe:.2f}")
-    print(f"   Max Drawdown           : {max_dd*100:.2f}%")
+    print(f"   Retorno anual esperado : {m['retorno_anual']:.2f}%")
+    print(f"   Volatilidad anual      : {m['volatilidad']:.2f}%")
+    print(f"   Sharpe ratio           : {m['sharpe']:.2f}")
+    print(f"   Max Drawdown           : {m['max_drawdown']:.2f}%")
 
     print(f"\n💡 NOTA: Todos los valores están en PESOS DE HOY")
     print(f"   (deflactados con inflación Colombia {inflacion_col:.1f}% anual)")
     print(f"   CDT de referencia: {tasa_cdt:.2f}% anual")
 
-    años_proyeccion = sorted(set([3, 5, horizonte]))
-
     print(f"\n💰 PROYECCIÓN (inversión inicial ${inversion_inicial:,.0f} COP):")
-
-    for años in años_proyeccion:
-        sin_dca, con_dca, cdt_p = proyectar_con_dca(
-            ret_port,
-            inversion_inicial,
-            aporte_periodico,
-            frecuencia_meses,
-            años,
-            inflacion_col,
-            tasa_cdt,
-        )
-
-        total_aportado = inversion_inicial + (
-            aporte_periodico * (años * 12 // frecuencia_meses)
-            if aporte_periodico > 0
-            else 0
-        )
-
-        # CDT con aportes (simple — suma directa deflactada)
-        cdt_nominal = inversion_inicial * (1 + tasa_cdt / 100) ** años
-        cdt_real = cdt_nominal / (1 + inflacion_col / 100) ** años
-        cdt_real_dca = (
-            cdt_real
-            + (
-                aporte_periodico * (años * 12 // frecuencia_meses)
-                if aporte_periodico > 0
-                else 0
-            )
-            / (1 + inflacion_col / 100) ** años
-        )
-
-        print(
-            f"\n   📅 En {años} años"
-            f"{f' (total aportado: ${total_aportado:,.0f})' if aporte_periodico > 0 else ''}:"
-        )
+    for p in d["proyecciones"]:
+        años = p["anios"]
+        if aporte_periodico > 0:
+            extra = f" (total aportado: ${p['total_aportado']:,.0f})"
+        else:
+            extra = ""
+        print(f"\n   📅 En {años} años{extra}:")
         print(f"   {'─'*60}")
         print(f"   {'Escenario':<28} {'Pesimista':>12} {'Base':>12} {'Optimista':>12}")
         print(f"   {'─'*60}")
+        s = p["sin_dca"]
         print(
             f"   {'Portafolio (sin aportes)':<28} "
-            f"${sin_dca[0]:>10,.0f} "
-            f"${sin_dca[1]:>10,.0f} "
-            f"${sin_dca[2]:>10,.0f}"
+            f"${s['pesimista']:>10,.0f} ${s['base']:>10,.0f} ${s['optimista']:>10,.0f}"
         )
-
-        if aporte_periodico > 0:
+        if aporte_periodico > 0 and p["con_dca"]:
+            c = p["con_dca"]
             freq = freq_texto.get(frecuencia_meses, f"c/{frecuencia_meses}m")
             print(
                 f"   {'Portafolio + DCA '+freq:<28} "
-                f"${con_dca[0]:>10,.0f} "
-                f"${con_dca[1]:>10,.0f} "
-                f"${con_dca[2]:>10,.0f}"
+                f"${c['pesimista']:>10,.0f} ${c['base']:>10,.0f} ${c['optimista']:>10,.0f}"
             )
-
-        print(
-            f"   {'CDT (referencia)':<28} "
-            f"{'':>12} "
-            f"${cdt_real:>10,.0f} "
-            f"{'':>12}"
-        )
-
-        if aporte_periodico > 0:
-            print(
-                f"   {'CDT + aportes':<28} "
-                f"{'':>12} "
-                f"${cdt_real_dca:>10,.0f} "
-                f"{'':>12}"
-            )
-
-        # Ventaja vs CDT
-        ventaja = sin_dca[1] - cdt_real
-        ventaja_dca = con_dca[1] - cdt_real_dca if aporte_periodico > 0 else 0
+        print(f"   {'CDT (referencia)':<28} {'':>12} ${p['cdt_real']:>10,.0f} {'':>12}")
+        if aporte_periodico > 0 and p["cdt_real_dca"] is not None:
+            print(f"   {'CDT + aportes':<28} {'':>12} ${p['cdt_real_dca']:>10,.0f} {'':>12}")
         print(f"   {'─'*60}")
-        print(f"   💡 Ventaja portafolio vs CDT (base): ${ventaja:>10,.0f}")
-        if aporte_periodico > 0:
-            print(f"   💡 Ventaja DCA vs CDT+aportes (base): ${ventaja_dca:>10,.0f}")
+        print(f"   💡 Ventaja portafolio vs CDT (base): ${p['ventaja_vs_cdt']:>10,.0f}")
+        if aporte_periodico > 0 and p["ventaja_dca_vs_cdt"] is not None:
+            print(f"   💡 Ventaja DCA vs CDT+aportes (base): ${p['ventaja_dca_vs_cdt']:>10,.0f}")
 
     # Guardar reporte
     fecha = datetime.now().strftime("%Y%m%d")
     archivo = f"{CARPETA_REPORTES}/reporte_{perfil}_{fecha}.csv"
-    pd.DataFrame(
-        {
-            "Activo": pesos.index,
-            "Peso_%": (pesos * 100).round(2),
-        }
-    ).to_csv(archivo, index=False)
+    pd.DataFrame({
+        "Activo": list(d["composicion"].keys()),
+        "Peso_%": [round(v * 100, 2) for v in d["composicion"].values()],
+    }).to_csv(archivo, index=False)
     print(f"\n💾 Reporte guardado: {archivo}")
-
 
 # ============================================================
 # EJECUCIÓN PRINCIPAL

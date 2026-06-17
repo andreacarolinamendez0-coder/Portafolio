@@ -62,16 +62,7 @@ export default function BotPage() {
   if (!ready) return <div className="min-h-screen flex items-center justify-center" style={{ background: "var(--bg)", color: "var(--text-3)", fontSize: 14 }}>Cargando...</div>;
 
   return (
-    <div style={{ background: "var(--bg)", minHeight: "100vh", color: "var(--text)", display: "flex", flexDirection: "column" }}>
-      <div style={{ maxWidth: 800, margin: "0 auto", padding: "24px 24px 0", width: "100%" }}>
-        {/* Mini nav */}
-        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
-          <LogoMark size={32} />
-          <Link href={`/portafolio/${archivo}`} style={{ color: "var(--text-3)", fontSize: 12, textDecoration: "none" }}>← Dashboard</Link>
-          <span style={{ color: "var(--text-3)", fontSize: 12 }}>/ Asistente IA</span>
-          <button onClick={async () => { await authLogout(); router.push("/login"); }} style={{ marginLeft: "auto", background: "none", border: "none", color: "var(--text-3)", fontSize: 12, cursor: "pointer" }}>Salir</button>
-        </div>
-      </div>
+    <>
 
       {/* Messages */}
       <div style={{ flex: 1, overflowY: "auto", padding: "0 24px", maxWidth: 800, margin: "0 auto", width: "100%" }}>
@@ -120,6 +111,6 @@ export default function BotPage() {
           </LiquidButton>
         </div>
       </div>
-    </div>
+    </>
   );
 }

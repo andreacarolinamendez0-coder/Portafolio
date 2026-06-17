@@ -72,55 +72,7 @@ export default function DashboardPage() {
   const gc     = tiempo_real && tiempo_real.ganancia_total > 0 ? "#30d158" : "#ff453a";
 
   return (
-    <GlassBackground>
-      <div style={{ minHeight: "100vh", color: "var(--text)" }}>
-        {/* Portfolio header card */}
-        <div style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)", borderRadius: 16, padding: "16px 24px", marginBottom: 20 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-              <LogoMark size={42} />
-              <div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <h1 style={{ color: "#f5f5f7", fontSize: 17, fontWeight: 600, letterSpacing: "-0.02em", margin: 0 }}>
-                    {portafolio.nombre}
-                  </h1>
-                  <Badge variant="outline" style={perfil === "agresivo"
-                    ? { background: "rgba(255,214,10,0.12)", color: "#ffd60a", border: "1px solid rgba(255,214,10,0.2)", fontSize: "0.65rem" }
-                    : { background: "rgba(0,113,227,0.12)", color: "#4da3ff", border: "1px solid rgba(0,113,227,0.2)", fontSize: "0.65rem" }}>
-                    {perfil.toUpperCase()}
-                  </Badge>
-                </div>
-                <p style={{ color: "#6e6e73", fontSize: 12, margin: "2px 0 0" }}>
-                  {portafolio.propietario} · Desde {portafolio.fecha_inicio}
-                </p>
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: 24, alignItems: "center" }}>
-              {tiempo_real && (
-                <>
-                  <div style={{ textAlign: "right" }}>
-                    <p style={{ color: "#6e6e73", fontSize: 10, margin: 0, letterSpacing: "0.04em", textTransform: "uppercase" }}>Valor hoy</p>
-                    <p style={{ color: gc, fontSize: 15, fontWeight: 600, margin: 0, letterSpacing: "-0.02em" }}>
-                      ${tiempo_real.total_valor.toLocaleString("es-CO", { maximumFractionDigits: 0 })}
-                    </p>
-                  </div>
-                  <div style={{ textAlign: "right" }}>
-                    <p style={{ color: "#6e6e73", fontSize: 10, margin: 0, letterSpacing: "0.04em", textTransform: "uppercase" }}>Ganancia</p>
-                    <p style={{ color: gc, fontSize: 15, fontWeight: 600, margin: 0 }}>
-                      {tiempo_real.rentabilidad_total > 0 ? "+" : ""}{tiempo_real.rentabilidad_total}%
-                    </p>
-                  </div>
-                </>
-              )}
-              <button onClick={handleLogout} style={{ background: "none", border: "none", color: "#6e6e73", fontSize: 12, cursor: "pointer" }}>
-                Salir
-              </button>
-            </div>
-          </div>
-
-          {/* Nav */}
-          <NavBar archivo={archivo} active="dashboard" />
-        </div>
+    <>
 
         {/* Tabs */}
         <div style={{ marginBottom: 28 }}>
@@ -166,8 +118,7 @@ export default function DashboardPage() {
             {updating ? "Descargando datos..." : "Actualizar datos"}
           </LiquidButton>
         </div>
-      </div>
-    </GlassBackground>
+      </>
   );
 }
 

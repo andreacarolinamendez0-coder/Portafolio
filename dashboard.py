@@ -1085,9 +1085,7 @@ def analista_view(archivo):
         f'Para opciones 1-5: genera JSON con valores actuales más el cambio solicitado. '
         f'{"SIEMPRE incluye activos con la composicion actual." if composicion else "No incluyas activos en el JSON."}\n'
         f'Evalúa si el cambio tiene sentido para el perfil. Si es riesgoso, díselo antes de proceder.'
-        f'REGLAS: Una pregunta por mensaje. JSON solo y sin texto adicional. Español. Sin asteriscos. Horizonte entre 1 y 30, nunca 0.'
-        f'FORMATO: Texto plano únicamente. Cero asteriscos, cero markdown, cero bullets. '
-        f'Si usas asteriscos o markdown, estás fallando en tu trabajo.'
+        f'REGLAS: Una pregunta por mensaje, pero acompáñala SIEMPRE de 1-2 frases que expliquen por qué la preguntas o qué implica, en lenguaje sencillo para alguien que no sabe de inversiones. Educa mientras preguntas. No asumas que el usuario sabe qué es un perfil de riesgo, DCA, horizonte: explícalos brevemente la primera vez. Sé cálido y claro, no seco. Máximo 4-5 frases por mensaje (sé conciso por costos). JSON solo y sin texto adicional cuando llegue el momento del JSON. Español. Sin asteriscos ni markdown. Horizonte entre 1 y 30, nunca 0.'
     )
 
     contenido = (
@@ -1411,9 +1409,62 @@ def api_analista_chat(archivo):
         data = request.get_json()
         if not data:
             return jsonify({'respuesta': 'Error: no se recibieron datos'})
+
+        portafolio  = leer_portafolio(archivo)
+        composicion = portafolio.get('composicion', {})
+        tiene_inv   = len(portafolio.get('aportes', [])) > 0
+
+        if composicion:
+            opcion_6 = (
+                f'6. La composición de activos (redistribuir entre tus actuales: '
+                f'{", ".join(composicion.keys())}, o agregar/quitar activos)'
+            )
+            instruccion_6 = (
+                'Si elige opción 6: pregunta qué quiere cambiar de la composición actual. '
+                'Luego genera el JSON incluyendo "activos" con la composición final. '
+                'SIEMPRE incluye "activos" cuando hay composición existente.'
+            )
+        else:
+            opcion_6 = '6. Definir la composición de activos (aún no tienes ninguna — te sugiero una optimizada para tu perfil)'
+            instruccion_6 = (
+                'Si elige opción 6: genera INMEDIATAMENTE el JSON con es_nuevo=true '
+                'usando los datos ya conocidos del portafolio. NO hagas más preguntas.'
+            )
+
+        composicion_actual_txt = ''
+        if composicion:
+            composicion_actual_txt = 'COMPOSICIÓN ACTUAL:\n' + '\n'.join(
+                f'  - {a}: {v*100:.1f}%' for a, v in composicion.items()
+            )
+
+        sistema = (
+            f'Eres un analista financiero senior especializado en portafolios de renta variable americana '
+            f'para inversionistas colombianos. Tu cliente es {portafolio["propietario"]}.\n\n'
+            f'PORTAFOLIO:\n'
+            f'- Perfil: {portafolio.get("perfil", "no definido")} '
+            f'({"10 años, maximizar retorno ajustado por riesgo" if portafolio.get("perfil") == "agresivo" else "5 años, menor volatilidad"})\n'
+            f'- Capital: ${portafolio.get("inversion_inicial", 0):,.0f} COP\n'
+            f'- DCA: ${portafolio.get("aporte_dca", 0):,.0f} COP cada {portafolio.get("frecuencia_meses", 1)} mes(es)\n'
+            f'- Con inversiones: {"sí" if tiene_inv else "no"}\n'
+            f'{composicion_actual_txt}\n\n'
+            f'TU ESTILO:\n'
+            f'- Una pregunta a la vez. Nunca varias en un mismo mensaje.\n'
+            f'- Tienes criterio: si algo no conviene al cliente, lo dices con datos antes de ejecutar.\n'
+            f'- Nunca pides información que ya tienes arriba.\n\n'
+            f'FLUJO A — PORTAFOLIO NUEVO: recoge en orden (uno por mensaje): perfil → monto → DCA → horizonte.\n'
+            f'Cuando tengas todo, responde SOLO el JSON:\n'
+            f'{{"accion":"analizar","perfil":"agresivo","inversion":1000000,"aporte_dca":0,"frecuencia_meses":1,"horizonte":10,"es_nuevo":true}}\n\n'
+            f'FLUJO B — ACTUALIZAR EXISTENTE: ya tienes los datos. Pregunta UNA VEZ qué quiere cambiar. '
+            f'Evalúa si el cambio tiene sentido para su perfil. Si es riesgoso, díselo antes de proceder. '
+            f'Luego genera el JSON con los valores finales (actuales + cambios). SIEMPRE incluye "activos" en actualizaciones.\n'
+            f'{opcion_6}\n{instruccion_6}\n\n'
+            f'REGLAS: Una pregunta por mensaje, pero acompáñala SIEMPRE de 1-2 frases que expliquen por qué la preguntas o qué implica, en lenguaje sencillo para alguien que no sabe de inversiones. Educa mientras preguntas. No asumas que el usuario sabe qué es un perfil de riesgo, DCA u horizonte: explícalos brevemente la primera vez. Sé cálido y claro, no seco. Máximo 4-5 frases por mensaje (sé conciso por costos). Cuando llegue el momento del JSON, responde SOLO el JSON sin texto adicional. Español.'
+            f'FORMATO CRÍTICO: Está PROHIBIDO usar asteriscos (*), guiones de lista, viñetas (•) o markdown de cualquier tipo. Si necesitas enumerar, usa números seguidos de punto (1. 2. 3.) en líneas separadas, con texto plano. Nada de **negritas**. Horizonte entre 1 y 30, nunca 0.'
+        )
+
         resp = groq_chat(
             data.get('historial', []),
-            system=data.get('sistema', ''),
+            system=sistema,
             max_tokens=600,
             temperature=0.5
         )
@@ -1582,38 +1633,34 @@ def api_recalcular_proyecciones(archivo):
             pd.read_parquet(os.path.join(DATOS_DIR, "macro/inflacion_col.parquet"))['Inflacion_COL'].iloc[-1]
         )
 
-        reporte_txt = ''
+        datos = None
         if pesos_con_historico:
+            from analista import calcular_datos_reporte
             total = sum(pesos_con_historico.values())
             pesos_norm = {k: v/total for k, v in pesos_con_historico.items()}
             pesos_series = pd.Series(pesos_norm)
-            old = sys.stdout; sys.stdout = buf = io.StringIO()
-            try:
-                generar_reporte(
-                    pesos=pesos_series,
-                    inversion_inicial=inversion,
-                    ret_real=ret_real,
-                    perfil=perfil,
-                    horizonte=horizonte,
-                    risk_free=risk_free,
-                    inflacion_col=inf_col_actual,
-                    tasa_cdt=float(tasa_cdt),
-                    aporte_periodico=aporte,
-                    frecuencia_meses=freq
-                )
-            finally:
-                sys.stdout = old
-            reporte_txt = buf.getvalue()
-
-        if pesos_sin_historico:
-            tickers_nuevos = ', '.join(pesos_sin_historico.keys())
-            reporte_txt += (
-                f'\n\nNOTA: {tickers_nuevos} fue agregado manualmente. '
-                f'Las proyecciones anteriores corresponden al resto del portafolio. '
-                f'El histórico de {tickers_nuevos} ya fue descargado y estará disponible en el próximo análisis completo.'
+            datos = calcular_datos_reporte(
+                pesos=pesos_series,
+                inversion_inicial=inversion,
+                ret_real=ret_real,
+                perfil=perfil,
+                horizonte=horizonte,
+                risk_free=risk_free,
+                inflacion_col=inf_col_actual,
+                tasa_cdt=float(tasa_cdt),
+                aporte_periodico=aporte,
+                frecuencia_meses=freq
             )
 
-        return jsonify({'ok': True, 'reporte': reporte_txt})
+        nota_nuevos = ''
+        if pesos_sin_historico:
+            tickers_nuevos = ', '.join(pesos_sin_historico.keys())
+            nota_nuevos = (
+                f'{tickers_nuevos} fue agregado manualmente. Las proyecciones corresponden '
+                f'al resto del portafolio; su histórico estará disponible en el próximo análisis completo.'
+            )
+
+        return jsonify({'ok': True, 'datos': datos, 'nota_nuevos': nota_nuevos})
 
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)})
@@ -3357,6 +3404,9 @@ def api_config(archivo):
             'nombre': portafolio.get('nombre'),
             'activo': portafolio.get('activo', False),
             'divisa': portafolio.get('divisa', 'USD'),
+            'perfil': portafolio.get('perfil', 'agresivo'),
+            'propietario': portafolio.get('propietario', ''),
+            'fecha_inicio': portafolio.get('fecha_inicio', ''),
         })
 
     # PUT: guardar la divisa preferida

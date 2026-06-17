@@ -56,12 +56,8 @@ export default function SeguimientoPage() {
   const sinComposicion = data.progreso.total === 0;
 
   return (
-    <GlassBackground>
-      <div style={{ maxWidth: 900, margin: "0 auto", padding: 24, color: "var(--text)" }}>
-
-        <Link href={`/portafolio/${archivo}`} style={{ color: "#6e6e73", fontSize: 12, textDecoration: "none" }}>← Volver al portafolio</Link>
-        <h2 style={{ fontSize: "1.4rem", margin: "16px 0 24px" }}>Seguimiento — {data.nombre}</h2>
-
+    <>
+      
         {msg.text && (
           <div style={{ padding: "10px 14px", borderRadius: 10, marginBottom: 16, fontSize: 13,
             background: msg.ok ? "rgba(48,209,88,0.1)" : "rgba(255,69,58,0.1)",
@@ -169,8 +165,7 @@ export default function SeguimientoPage() {
             )}
           </>
         )}
-      </div>
-    </GlassBackground>
+    </>
   );
 }
 
