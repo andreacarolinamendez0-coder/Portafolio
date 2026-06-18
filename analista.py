@@ -322,10 +322,19 @@ def proyectar_con_dca(
     # Tasa CDT mensual
     tasa_cdt_mensual = (1 + tasa_cdt / 100) ** (1 / 12) - 1
 
+    valor_cdt = inversion_inicial * (1 + tasa_cdt_mensual) ** meses
+    valor_cdt_real = valor_cdt / (1 + inf_anual) ** horizonte_años
+
+    valor_cdt_dca = inversion_inicial
+    for i in range(meses):
+        valor_cdt_dca *= 1 + tasa_cdt_mensual
+        if aporte_periodico > 0 and i % frecuencia_meses == 0 and i > 0:
+            valor_cdt_dca += aporte_periodico
+    valor_cdt_dca_real = valor_cdt_dca / (1 + inf_anual) ** horizonte_años
+
     np.random.seed(42)
     resultados_global = []
     resultados_dca = []
-    resultados_cdt = []
 
     for _ in range(n_sim):
         # ── SUMA GLOBAL (portafolio) ──
@@ -347,14 +356,6 @@ def proyectar_con_dca(
         valor_real = valor / (1 + inf_anual) ** horizonte_años
         resultados_dca.append(valor_real)
 
-        # ── CDT (sin aportes adicionales) ──
-        valor_cdt = inversion_inicial
-        for _ in range(meses):
-            valor_cdt *= 1 + tasa_cdt_mensual
-        # CDT también se deflacta
-        valor_cdt_real = valor_cdt / (1 + inf_anual) ** horizonte_años
-        resultados_cdt.append(valor_cdt_real)
-
     def percentiles(res):
         r = sorted(res)
         return (r[int(n_sim * 0.10)], r[int(n_sim * 0.50)], r[int(n_sim * 0.90)])
@@ -362,7 +363,8 @@ def proyectar_con_dca(
     return (
         percentiles(resultados_global),
         percentiles(resultados_dca),
-        percentiles(resultados_cdt),
+        valor_cdt_real,
+        valor_cdt_dca_real,
     )
 
 
@@ -395,15 +397,12 @@ def calcular_datos_reporte(
     años_proyeccion = sorted(set([3, 5, horizonte]))
     proyecciones = []
     for años in años_proyeccion:
-        sin_dca, con_dca, cdt_p = proyectar_con_dca(
+        sin_dca, con_dca, cdt_real, cdt_real_dca = proyectar_con_dca(
             ret_port, inversion_inicial, aporte_periodico,
             frecuencia_meses, años, inflacion_col, tasa_cdt,
         )
         n_aportes = (años * 12 // frecuencia_meses) if aporte_periodico > 0 else 0
         total_aportado = inversion_inicial + (aporte_periodico * n_aportes)
-        cdt_nominal = inversion_inicial * (1 + tasa_cdt / 100) ** años
-        cdt_real = cdt_nominal / (1 + inflacion_col / 100) ** años
-        cdt_real_dca = cdt_real + (aporte_periodico * n_aportes) / (1 + inflacion_col / 100) ** años
 
         proyecciones.append({
             "anios": años,
