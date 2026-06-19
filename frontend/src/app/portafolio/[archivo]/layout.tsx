@@ -5,6 +5,8 @@ import Link from "next/link";
 import { motion, useMotionValue, useSpring } from "framer-motion";
 import { LogoMark } from "@/components/ui/logo";
 import { getConfig, authLogout } from "@/lib/api";
+import { SelectorPortafolios } from "@/components/ui/selector-portafolios";
+import { NuevoPortafolioDialog } from "@/components/portfolio/nuevo-portafolio-dialog";
 
 const TABS = [
   { id: "dashboard",   sub: "",             label: "Dashboard" },
@@ -22,8 +24,13 @@ export default function PortafolioLayout({ children }: { children: React.ReactNo
   const archivo  = params.archivo as string;
 
   const [info, setInfo] = useState<{ nombre: string; perfil: string; propietario: string; fecha_inicio: string } | null>(null);
+  const [selectorAbierto, setSelectorAbierto] = useState(false);
+  const [crearAbierto, setCrearAbierto] = useState(false);
 
   useEffect(() => {
+    if (typeof window !== "undefined" && archivo) {
+      localStorage.setItem("ultimoPortafolio", archivo);
+    }
     getConfig(archivo).then(d => setInfo({ nombre: d.nombre, perfil: d.perfil, propietario: d.propietario, fecha_inicio: d.fecha_inicio })).catch(() => {});
   }, [archivo]);
 
@@ -66,8 +73,9 @@ export default function PortafolioLayout({ children }: { children: React.ReactNo
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 18 }}>
           <LogoMark size={34} />
           <div style={{ flex: 1 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <p style={{ fontSize: 15, fontWeight: 600, margin: 0, letterSpacing: "-0.01em" }}>{info?.nombre || "Portafolio"}</p>
+            <button onClick={() => setSelectorAbierto(true)} style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", padding: 0 }}>
+              <p style={{ fontSize: 15, fontWeight: 600, margin: 0, letterSpacing: "-0.01em", color: "var(--text)" }}>{info?.nombre || "Portafolio"}</p>
+              <span style={{ color: "var(--text-3)", fontSize: 12 }}>▾</span>
               {info?.perfil && (
                 <span style={{
                   fontSize: "0.62rem", padding: "2px 8px", borderRadius: 980, fontWeight: 500, letterSpacing: "0.04em",
@@ -78,7 +86,7 @@ export default function PortafolioLayout({ children }: { children: React.ReactNo
                   {info.perfil.toUpperCase()}
                 </span>
               )}
-            </div>
+            </button>
             {info && (
               <p style={{ fontSize: 11, color: "var(--text-3)", margin: "2px 0 0" }}>
                 {info.propietario}{info.fecha_inicio ? ` · Desde ${info.fecha_inicio}` : ""}
@@ -121,6 +129,13 @@ export default function PortafolioLayout({ children }: { children: React.ReactNo
       <main style={{ position: "relative", zIndex: 1, maxWidth: 1100, margin: "0 auto", padding: "24px" }}>
         {children}
       </main>
+      <SelectorPortafolios
+        abierto={selectorAbierto}
+        onCerrar={() => setSelectorAbierto(false)}
+        archivoActual={archivo}
+        onCrear={() => setCrearAbierto(true)}
+      />
+      {crearAbierto && <NuevoPortafolioDialog onClose={() => setCrearAbierto(false)} onCreated={() => { setCrearAbierto(false); router.refresh(); }} />}
     </div>
   );
 }

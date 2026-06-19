@@ -43,7 +43,18 @@ export default function LoginPage() {
     setLoading(true);
     try {
       await authLogin(email, password);
-      router.push("/portafolios");
+      // Decidir a dónde ir tras login
+      const { getPortafolios } = await import("@/lib/api");
+      const { portafolios } = await getPortafolios();
+      if (portafolios.length === 0) {
+        // Sin portafolios → crear el primero
+        router.push("/portafolios");
+      } else {
+        // Ir al último usado si existe y sigue válido, si no al primero
+        const ultimo = typeof window !== "undefined" ? localStorage.getItem("ultimoPortafolio") : null;
+        const existe = ultimo && portafolios.some(p => p.archivo === ultimo);
+        router.push(`/portafolio/${existe ? ultimo : portafolios[0].archivo}`);
+      }
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Error de conexión");
     } finally {
