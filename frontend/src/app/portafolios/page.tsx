@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { LogoMark } from "@/components/ui/logo";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { authMe, authLogout, getPortafolios, activarPortafolio, type PortafolioSummary } from "@/lib/api";
+import { authMe, authLogout, getPortafolios, activarPortafolio, updateConfig, type PortafolioSummary } from "@/lib/api";
 import { NuevoPortafolioDialog } from "@/components/portfolio/nuevo-portafolio-dialog";
 
 export default function PortafoliosPage() {
@@ -41,6 +41,11 @@ export default function PortafoliosPage() {
 
   async function handleActivar(archivo: string) {
     await activarPortafolio(archivo);
+    load();
+  }
+
+  async function handleRename(archivo: string, nombre: string) {
+    await updateConfig(archivo, { nombre });
     load();
   }
 
@@ -115,7 +120,7 @@ export default function PortafoliosPage() {
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             {portafolios.map(p => (
-              <PortafolioCard key={p.archivo} portafolio={p} onActivar={handleActivar} />
+              <PortafolioCard key={p.archivo} portafolio={p} onActivar={handleActivar} onRename={handleRename} />
             ))}
           </div>
         )}
@@ -126,9 +131,19 @@ export default function PortafoliosPage() {
   );
 }
 
-function PortafolioCard({ portafolio: p, onActivar }: { portafolio: PortafolioSummary; onActivar: (a: string) => void }) {
+function PortafolioCard({ portafolio: p, onActivar, onRename }: { portafolio: PortafolioSummary; onActivar: (a: string) => void; onRename: (a: string, nombre: string) => void }) {
   const borde = p.monitoreo_activo ? "rgba(48,209,88,0.25)" : "rgba(255,255,255,0.07)";
   const fondo = p.monitoreo_activo ? "rgba(48,209,88,0.04)" : "rgba(255,255,255,0.04)";
+
+  const [editando, setEditando] = useState(false);
+  const [nombre, setNombre]     = useState(p.nombre);
+
+  function guardar() {
+    const limpio = nombre.trim();
+    if (limpio && limpio !== p.nombre) onRename(p.archivo, limpio);
+    else setNombre(p.nombre);
+    setEditando(false);
+  }
 
   return (
     <div style={{ position: "relative" }}>
@@ -145,7 +160,38 @@ function PortafolioCard({ portafolio: p, onActivar }: { portafolio: PortafolioSu
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
             <div>
               <div style={{ fontSize: "1.15rem", fontWeight: 600, color: "#f5f5f7", marginBottom: 2, letterSpacing: "-0.02em", display: "flex", alignItems: "center", gap: 8 }}>
-                {p.nombre}
+                {editando ? (
+                  <input
+                    autoFocus
+                    value={nombre}
+                    onClick={e => e.preventDefault()}
+                    onChange={e => setNombre(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter") { e.preventDefault(); guardar(); } if (e.key === "Escape") { setNombre(p.nombre); setEditando(false); } }}
+                    onBlur={guardar}
+                    style={{
+                      background: "rgba(255,255,255,0.08)", border: "1px solid rgba(0,113,227,0.4)",
+                      borderRadius: 6, color: "#f5f5f7", fontSize: "1.15rem", fontWeight: 600,
+                      padding: "1px 6px", outline: "none", width: 220,
+                    }}
+                  />
+                ) : (
+                  <>
+                    {p.nombre}
+                    <button
+                      onClick={e => { e.preventDefault(); setNombre(p.nombre); setEditando(true); }}
+                      title="Renombrar portafolio"
+                      style={{
+                        background: "none", border: "none", cursor: "pointer", padding: 2,
+                        color: "#6e6e73", display: "inline-flex", alignItems: "center", fontSize: 13,
+                        lineHeight: 1, opacity: 0.7,
+                      }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.opacity = "1"; (e.currentTarget as HTMLButtonElement).style.color = "#4da3ff"; }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.opacity = "0.7"; (e.currentTarget as HTMLButtonElement).style.color = "#6e6e73"; }}
+                    >
+                      ✏️
+                    </button>
+                  </>
+                )}
                 {p.monitoreo_activo && (
                   <span style={{ fontSize: 11, color: "#30d158", fontWeight: 400 }}>● en vivo</span>
                 )}
@@ -155,8 +201,8 @@ function PortafolioCard({ portafolio: p, onActivar }: { portafolio: PortafolioSu
             <Badge
               variant="outline"
               style={p.perfil === "agresivo"
-                ? { background: "rgba(255,214,10,0.12)", color: "#ffd60a", border: "1px solid rgba(255,214,10,0.2)", fontSize: "0.7rem" }
-                : { background: "rgba(0,113,227,0.12)", color: "#4da3ff", border: "1px solid rgba(0,113,227,0.2)", fontSize: "0.7rem" }}
+                ? { background: "rgba(255,214,10,0.12)", color: "#ffd60a", border: "1px solid rgba(255,214,10,0.2)", fontSize: "0.7rem", padding: "5px 8px" }
+                : { background: "rgba(0,113,227,0.12)", color: "#4da3ff", border: "1px solid rgba(0,113,227,0.2)", fontSize: "0.7rem", padding: "5px 8px" }}
             >
               {p.perfil.toUpperCase()}
             </Badge>

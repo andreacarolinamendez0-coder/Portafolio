@@ -44,6 +44,17 @@ def cargar_datos():
 
     return precios, trm, inf_usa, inf_col, risk_free, tasa_cdt
 
+def completar_precios(precios, tickers):
+    """Si algún ticker no está en precios, lo baja on-demand y lo agrega."""
+    extras = [t for t in tickers if t not in precios.columns]
+    if not extras:
+        return precios
+    import yfinance as yf
+    nuevos = yf.download(extras, period="5y", auto_adjust=True, progress=False)["Close"]
+    if isinstance(nuevos, pd.Series):
+        nuevos = nuevos.to_frame(extras[0])
+    precios = pd.concat([precios, nuevos], axis=1)
+    return precios.loc[:, ~precios.columns.duplicated()]
 
 # ============================================================
 # PASO 2 — PANEL MAESTRO
@@ -134,13 +145,14 @@ def calcular_retornos_reales(panel, activos):
 # ============================================================
 
 
-def optimizar_portafolio(ret_real, panel, perfil, risk_free, inversion_inicial):
+def optimizar_portafolio(ret_real, panel, perfil, risk_free, inversion_inicial, tickers_fijos=None):
     print(f"\n🧠 Optimizando portafolio {perfil.upper()}...")
 
     rf = risk_free["Risk_Free"].iloc[-1] / 100
-
-    tech_volatil = ["XLK", "QQQ", "NVDA", "BTC-USD", "ETH-USD", "SOL-USD"]
-    cripto = ["BTC-USD", "ETH-USD", "SOL-USD"]
+    
+    from recolector import CRIPTO, TICKER_SECTOR, ACTIVOS_POR_SECTOR
+    cripto = CRIPTO
+    tech_volatil = list(set(ACTIVOS_POR_SECTOR.get("Technology", []) + cripto + ["QQQ", "XLK"]))
     defensivos = ["GLD", "TLT", "KO", "WMT", "JNJ"]
     agresivos_macro = ["NVDA", "MSFT", "GOOGL", "AMZN", "AAPL"]
 
@@ -167,62 +179,68 @@ def optimizar_portafolio(ret_real, panel, perfil, risk_free, inversion_inicial):
         ret_real = ret_real[[a for a in ret_real.columns if a not in cripto]]
         print(f"   🚫 Criptos excluidas del perfil conservador")
 
-    # Filtro de correlación
-    print(f"   Eliminando activos redundantes por alta correlación...")
-    corr_matrix = ret_real.corr()
-    activos_unicos = list(ret_real.columns)
-    sharpe_simple = (ret_real.mean() * 12) / (ret_real.std() * np.sqrt(12))
-    eliminados = []
+    if tickers_fijos:
+        top_8 = [t for t in tickers_fijos if t in ret_real.columns]
+        ret_top = ret_real[top_8]
+        print(f"   Universo fijo (elegido por el usuario): {top_8}")
+    else:
+        print(f"   Eliminando activos redundantes por alta correlación...")
+        corr_matrix = ret_real.corr()
+        activos_unicos = list(ret_real.columns)
+        sharpe_simple = (ret_real.mean() * 12) / (ret_real.std() * np.sqrt(12))
+        eliminados = []
 
-    for i in range(len(activos_unicos)):
-        for j in range(i + 1, len(activos_unicos)):
-            a1 = activos_unicos[i]
-            a2 = activos_unicos[j]
-            if a1 in eliminados or a2 in eliminados:
-                continue
-            if corr_matrix.loc[a1, a2] > 0.85:
-                if sharpe_simple[a1] >= sharpe_simple[a2]:
-                    eliminados.append(a2)
-                    print(
-                        f"   ⚠️  {a2} eliminado — correlación {corr_matrix.loc[a1,a2]:.2f} con {a1}"
-                    )
-                else:
-                    eliminados.append(a1)
-                    print(
-                        f"   ⚠️  {a1} eliminado — correlación {corr_matrix.loc[a1,a2]:.2f} con {a2}"
-                    )
+        for i in range(len(activos_unicos)):
+            for j in range(i + 1, len(activos_unicos)):
+                a1 = activos_unicos[i]
+                a2 = activos_unicos[j]
+                if a1 in eliminados or a2 in eliminados:
+                    continue
+                if corr_matrix.loc[a1, a2] > 0.85:
+                    if sharpe_simple[a1] >= sharpe_simple[a2]:
+                        eliminados.append(a2)
+                        print(f"   ⚠️  {a2} eliminado — correlación {corr_matrix.loc[a1,a2]:.2f} con {a1}")
+                    else:
+                        eliminados.append(a1)
+                        print(f"   ⚠️  {a1} eliminado — correlación {corr_matrix.loc[a1,a2]:.2f} con {a2}")
 
-    activos_limpios = [a for a in activos_unicos if a not in eliminados]
-    ret_real = ret_real[activos_limpios]
-    print(f"   Activos tras filtro de correlación: {len(activos_limpios)}")
+        activos_limpios = [a for a in activos_unicos if a not in eliminados]
+        ret_real = ret_real[activos_limpios]
+        print(f"   Activos tras filtro de correlación: {len(activos_limpios)}")
 
-    # Filtro de consistencia
-    n_filas = len(ret_real)
-    tercio = n_filas // 3
-    retorno_p1 = ret_real.iloc[:tercio].mean() * 12
-    retorno_p2 = ret_real.iloc[tercio : tercio * 2].mean() * 12
-    retorno_p3 = ret_real.iloc[tercio * 2 :].mean() * 12
+        # Filtro de consistencia
+        n_filas = len(ret_real)
+        tercio = n_filas // 3
+        retorno_p1 = ret_real.iloc[:tercio].mean() * 12
+        retorno_p2 = ret_real.iloc[tercio : tercio * 2].mean() * 12
+        retorno_p3 = ret_real.iloc[tercio * 2 :].mean() * 12
 
-    consistencia = (
-        (retorno_p1 > 0).astype(int)
-        + (retorno_p2 > 0).astype(int)
-        + (retorno_p3 > 0).astype(int)
-    )
-    activos_consistentes = consistencia[consistencia >= 2].index.tolist()
-    print(f"   Activos que pasaron filtro de consistencia: {len(activos_consistentes)}")
+        consistencia = (
+            (retorno_p1 > 0).astype(int)
+            + (retorno_p2 > 0).astype(int)
+            + (retorno_p3 > 0).astype(int)
+        )
+        activos_consistentes = consistencia[consistencia >= 2].index.tolist()
+        print(f"   Activos que pasaron filtro de consistencia: {len(activos_consistentes)}")
 
-    if len(activos_consistentes) < 3:
-        activos_consistentes = ret_real.columns.tolist()
+        if len(activos_consistentes) < 3:
+            activos_consistentes = ret_real.columns.tolist()
 
-    ret_filtrado = ret_real[activos_consistentes]
+        ret_filtrado = ret_real[activos_consistentes]
 
-    # Top 8 por Sharpe
-    media_f = ret_filtrado.mean() * 12
-    vol_f = ret_filtrado.std() * np.sqrt(12)
-    sharpe_f = (media_f - rf) / vol_f
-    top_8 = sharpe_f.nlargest(8).index.tolist()
-    ret_top = ret_real[top_8]
-    print(f"   Top 8 seleccionados: {top_8}")
+        # Top 8 por Sharpe, máximo 2 por sector
+        media_f = ret_filtrado.mean() * 12
+        vol_f = ret_filtrado.std() * np.sqrt(12)
+        sharpe_f = (media_f - rf) / vol_f
+
+        sector_map = universo.set_index("ticker")["sector"]
+        sharpe_df = sharpe_f.to_frame("sharpe")
+        sharpe_df["sector"] = sharpe_df.index.map(sector_map).fillna("Otro")
+        candidatos = sharpe_df.sort_values("sharpe", ascending=False).groupby("sector").head(2)
+        top_8 = candidatos["sharpe"].nlargest(8).index.tolist()
+
+        ret_top = ret_real[top_8]
+        print(f"   Top 8 seleccionados: {top_8}")
 
     # Optimización
     media = ret_top.mean() * 12
@@ -271,24 +289,29 @@ def optimizar_portafolio(ret_real, panel, perfil, risk_free, inversion_inicial):
     )
 
     pesos = pd.Series(resultado.x, index=top_8)
-    top_5 = pesos.nlargest(5)
-    top_5 = top_5 / top_5.sum()
+
+    if tickers_fijos:
+        top_n = pesos[pesos > 0.01]
+        top_n = top_n / top_n.sum()
+    else:
+        top_n = pesos.nlargest(5)
+        top_n = top_n / top_n.sum()
 
     # Límite tech post-normalización en conservador
     if perfil == "conservador":
-        tech_en_top5 = [a for a in top_5.index if a in tech_volatil]
-        peso_tech_actual = top_5[tech_en_top5].sum()
+        tech_en_top = [a for a in top_n.index if a in tech_volatil]
+        peso_tech_actual = top_n[tech_en_top].sum()
         if peso_tech_actual > 0.20:
             exceso = peso_tech_actual - 0.20
-            for activo in tech_en_top5:
-                top_5[activo] -= exceso * (top_5[activo] / peso_tech_actual)
-            no_tech = [a for a in top_5.index if a not in tech_volatil]
+            for activo in tech_en_top:
+                top_n[activo] -= exceso * (top_n[activo] / peso_tech_actual)
+            no_tech = [a for a in top_n.index if a not in tech_volatil]
             for activo in no_tech:
-                top_5[activo] += exceso / len(no_tech)
+                top_n[activo] += exceso / len(no_tech)
             print(f"   ✅ Límite tech: {peso_tech_actual*100:.1f}% → 20%")
-        top_5 = top_5 / top_5.sum()
+        top_n = top_n / top_n.sum()
 
-    return top_5, inversion_inicial
+    return top_n, inversion_inicial
 
 
 # ============================================================
