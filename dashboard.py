@@ -3291,6 +3291,38 @@ def registrar_webhook_telegram():
 # MAIN
 # ============================================================
 
+@app.route('/api/auth/register', methods=['POST'])
+def api_auth_register():
+    if session.get('username'):
+        return jsonify({'ok': False, 'error': 'Ya hay una sesión activa'}), 400
+
+    data     = request.get_json(silent=True) or {}
+    username = (data.get('username') or '').strip()
+    email    = (data.get('email') or '').strip()
+    password = (data.get('password') or '').strip()
+    telegram = (data.get('telegram') or '').strip()
+
+    if not username or not email or not password:
+        return jsonify({'ok': False, 'error': 'Nombre, email y contraseña son obligatorios.'}), 400
+    if len(password) < 6:
+        return jsonify({'ok': False, 'error': 'La contraseña debe tener al menos 6 caracteres.'}), 400
+
+    resultado = registrar_usuario(username, email, password, telegram)
+    if resultado is not True:
+        # registrar_usuario devuelve un string de error cuando falla
+        return jsonify({'ok': False, 'error': resultado}), 400
+
+    # Éxito: iniciar sesión igual que la ruta vieja
+    session['username'] = username
+    session['es_admin'] = False
+    session.permanent   = True
+    ip          = request.headers.get('X-Forwarded-For', request.remote_addr or '—').split(',')[0].strip()
+    dispositivo = request.headers.get('User-Agent', '—')[:120]
+    registrar_actividad('registro_nuevo', username, email=email,
+        detalle='Nuevo usuario registrado (API)', ip=ip, dispositivo=dispositivo)
+
+    return jsonify({'ok': True, 'username': username})
+
 @app.route('/api/auth/login', methods=['POST'])
 def api_auth_login():
     data     = request.get_json(silent=True) or {}
