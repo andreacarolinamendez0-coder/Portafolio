@@ -7,6 +7,9 @@ import Link from "next/link";
 import { getConfig, updateConfig, activarPortafolio } from "@/lib/api";
 import { LiquidButton } from "@/components/ui/liquid-glass-button";
 import { GlowPanel } from "@/components/ui/glow-panel";
+import { PageIntro } from "@/components/ui/page-intro";
+import { desactivarPortafolio } from "@/lib/api";
+
 
 
 const DIVISAS = [
@@ -43,7 +46,7 @@ export default function ConfigPage() {
     }
   }
 
-  async function activar() {
+  async function desactivar() {
     try {
       await activarPortafolio(archivo);
       setActivo(true);
@@ -52,6 +55,16 @@ export default function ConfigPage() {
       setMsg({ text: e instanceof Error ? e.message : "Error", ok: false });
     }
   }
+
+  async function activar() {
+  try {
+    await activarPortafolio(archivo);   // ← esta sí llama a lib/api.ts
+    setActivo(true);
+    setMsg({ text: "Portafolio activado para monitoreo", ok: true });
+  } catch (e: unknown) {
+    setMsg({ text: e instanceof Error ? e.message : "Error", ok: false });
+  }
+}
 
   if (loading) return <div style={{ background: "var(--bg)", color: "var(--text-3)", minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>Cargando...</div>;
 
@@ -66,7 +79,10 @@ export default function ConfigPage() {
             {msg.text}
           </div>
         )}
-
+        <PageIntro
+                       archivo={archivo}
+                       texto="Configura tu portafolio: activa el monitoreo en tiempo real, ajusta tus preferencias y gestiona la conexión con el bot de Telegram."
+                     /> 
         {/* Divisa */}
         <GlowPanel>
           <h3 style={{ fontSize: "1rem", marginBottom: 6 }}>Divisa de visualización</h3>
@@ -101,11 +117,26 @@ export default function ConfigPage() {
               ? <span style={{ color: "#30d158" }}>● ACTIVO para monitoreo</span>
               : <span style={{ color: "#6e6e73" }}>○ INACTIVO</span>}
           </p>
-          {!activo && (
-          <LiquidButton onClick={activar} className="text-white font-semibold !px-12 !py-3.5 text-base">
-  Activar para monitoreo
-</LiquidButton>
-          )}
+          {activo ? (
+  <LiquidButton
+    onClick={async () => {
+      try {
+        await desactivarPortafolio(archivo);
+        setActivo(false);
+        setMsg({ text: "Monitoreo detenido", ok: true });
+      } catch (e: unknown) {
+        setMsg({ text: e instanceof Error ? e.message : "Error", ok: false });
+      }
+    }}
+    className="text-white font-semibold !px-12 !py-3.5 text-base"
+  >
+    Detener monitoreo
+  </LiquidButton>
+) : (
+  <LiquidButton onClick={activar} className="text-white font-semibold !px-12 !py-3.5 text-base">
+    Activar para monitoreo
+  </LiquidButton>
+)}
         </GlowPanel>
 
     </>

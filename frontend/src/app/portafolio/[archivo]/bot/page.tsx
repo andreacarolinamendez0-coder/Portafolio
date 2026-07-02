@@ -2,15 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import Link from "next/link";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { LogoMark } from "@/components/ui/logo";
-import { authMe, authLogout } from "@/lib/api";
-import { GlassBackground } from "@/components/ui/glass-background";
-import { GlassPanel } from "@/components/ui/glass-panel";
-import { GlowPanel } from "@/components/ui/glow-panel";
+import { authMe } from "@/lib/api";
 import { LiquidButton } from "@/components/ui/liquid-glass-button";
+import { PageIntro } from "@/components/ui/page-intro";
 
 interface Msg { role: "user" | "bot"; text: string }
 
@@ -32,9 +27,7 @@ export default function BotPage() {
     }).catch(() => router.push("/login"));
   }, [router]);
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [msgs]);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, loading]);
 
   async function send() {
     if (!input.trim() || loading) return;
@@ -63,23 +56,40 @@ export default function BotPage() {
 
   return (
     <>
+      <style>{`
+        @keyframes typing { 0%,60%,100% { opacity: 0.25; } 30% { opacity: 1; } }
+        .typing-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-3); display: inline-block; animation: typing 1.2s infinite; }
+        .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes logoGlow { 0%,100% { filter: drop-shadow(0 0 14px rgba(0,113,227,0.25)); } 50% { filter: drop-shadow(0 0 26px rgba(0,113,227,0.45)); } }
+      `}</style>
 
-      {/* Messages */}
+       <PageIntro
+                       archivo={archivo}
+                       texto="Este es el chat con Atom. Pregúntale sobre tu portafolio, los mercados o cualquier estrategia de inversión."
+                     />
+
+      {/* Mensajes */}
       <div style={{ flex: 1, overflowY: "auto", padding: "0 24px", maxWidth: 800, margin: "0 auto", width: "100%" }}>
         {msgs.length === 0 && (
           <div style={{ textAlign: "center", padding: "80px 0", color: "var(--text-3)" }}>
-            <LogoMark size={52} />
-            <p style={{ marginTop: 16, fontSize: 14 }}>Pregúntame sobre tu portafolio, mercados o estrategias de inversión.</p>
+            <div style={{ animation: "logoGlow 3s ease-in-out infinite", display: "inline-block" }}>
+              <LogoMark size={52} />
+            </div>
+            <p style={{ marginTop: 20, fontSize: 15, color: "var(--text-2)" }}>¿En qué te ayudo hoy?</p>
+            <p style={{ marginTop: 6, fontSize: 13 }}>Pregúntame sobre tu portafolio, mercados o estrategias de inversión.</p>
           </div>
         )}
         {msgs.map((m, i) => (
           <div key={i} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start", marginBottom: 12 }}>
             <div style={{
-              maxWidth: "80%", padding: "12px 16px", borderRadius: m.role === "user" ? "18px 18px 4px 18px" : "18px 18px 18px 4px",
+              maxWidth: "80%", padding: "12px 16px",
+              borderRadius: m.role === "user" ? "18px 18px 4px 18px" : "18px 18px 18px 4px",
               background: m.role === "user" ? "#0071e3" : "var(--glass)",
               border: m.role === "bot" ? "1px solid rgba(255,255,255,0.08)" : "none",
-              color: "var(--text-3)", fontSize: "0.9rem", lineHeight: 1.5,
-              whiteSpace: "pre-wrap",
+              boxShadow: m.role === "user" ? "0 4px 16px -6px rgba(0,113,227,0.5)" : "none",
+              color: m.role === "user" ? "#fff" : "#f5f5f7",
+              fontSize: "0.9rem", lineHeight: 1.55, whiteSpace: "pre-wrap",
             }}>
               {m.text}
             </div>
@@ -87,8 +97,8 @@ export default function BotPage() {
         ))}
         {loading && (
           <div style={{ display: "flex", marginBottom: 12 }}>
-            <div style={{ padding: "12px 16px", borderRadius: "18px 18px 18px 4px", background: "var(--glass)", border: "1px solid rgba(255,255,255,0.08)", color: "var(--text-3)", fontSize: "0.9rem" }}>
-              Pensando...
+            <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "14px 18px", borderRadius: "18px 18px 18px 4px", background: "var(--glass)", border: "1px solid rgba(255,255,255,0.08)" }}>
+              <span className="typing-dot" /><span className="typing-dot" /><span className="typing-dot" />
             </div>
           </div>
         )}
@@ -97,7 +107,7 @@ export default function BotPage() {
 
       {/* Input */}
       <div style={{ padding: "16px 24px 32px", maxWidth: 800, margin: "0 auto", width: "100%" }}>
-        <div style={{ display: "flex", gap: 8, background: "var(--glass)", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 16, padding: "8px 8px 8px 16px", alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 8, background: "var(--glass)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 16, padding: "8px 8px 8px 16px", alignItems: "center", backdropFilter: "blur(12px)" }}>
           <input
             value={input}
             onChange={e => setInput(e.target.value)}
@@ -106,9 +116,7 @@ export default function BotPage() {
             disabled={loading}
             style={{ flex: 1, background: "none", border: "none", outline: "none", color: "var(--text)", fontSize: "0.9rem", fontFamily: "inherit" }}
           />
-          <LiquidButton onClick={send} disabled={loading || !input.trim()} className="text-white font-semibold !px-6 !py-2.5">
-            Enviar
-          </LiquidButton>
+          <LiquidButton onClick={send} disabled={loading || !input.trim()} className="text-white font-semibold !px-6 !py-2.5">Enviar</LiquidButton>
         </div>
       </div>
     </>

@@ -198,3 +198,10 @@ body {
   50%  { background-position: 100% 50%; }
   100% { background-position: 0% 0%; }
 }
+
+.atom-hint:hover { background: rgba(0,113,227,0.2); border-color: rgba(0,113,227,0.5); }
+.atom-glow { animation: atomGlow 3s ease-in-out infinite; }
+@keyframes atomGlow {
+  0%,100% { filter: drop-shadow(0 0 6px rgba(0,113,227,0.35)); }
+  50%     { filter: drop-shadow(0 0 12px rgba(0,113,227,0.6)); }
+}

@@ -70,6 +70,9 @@ export const crearPortafolio = (data: {
 export const activarPortafolio = (archivo: string) =>
   apiFetch<{ ok: boolean }>(`/api/portafolios/${archivo}/activar`, { method: "POST" });
 
+export const desactivarPortafolio = (archivo: string) =>
+  apiFetch<{ ok: boolean }>(`/api/portafolios/${archivo}/desactivar`, { method: "POST" });
+
 // ── Dashboard ───────────────────────────────────────────────
 
 export interface Posicion {
@@ -97,6 +100,7 @@ export interface Macro {
   inf_usa:    number;
   risk_free:  number;
   banrep:     number;
+  tasa_eur:   number;
   cdt:        number;
   spread:     number;
   trm_hist:   { fechas: string[]; valores: number[] };
@@ -118,6 +122,9 @@ export interface DashboardData {
 
 export const getDashboard = (archivo: string) =>
   apiFetch<DashboardData>(`/api/dashboard/${archivo}`);
+
+export const getTrmAnalisis = () =>
+  apiFetch<{ analisis: string; fecha: string; cacheado?: boolean }>("/api/trm-analisis");
 
 // ── Profile ─────────────────────────────────────────────────
 

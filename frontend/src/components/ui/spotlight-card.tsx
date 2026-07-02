@@ -4,7 +4,8 @@ import React, { useEffect, useRef, ReactNode } from 'react';
 interface GlowCardProps {
   children: ReactNode;
   className?: string;
-  glowColor?: 'blue' | 'purple' | 'green' | 'red' | 'orange';
+  glowColor?: 'blue' | 'purple' | 'green' | 'red' | 'orange' | 'teal';
+  padding?: string;
 }
 
 const glowColorMap = {
@@ -13,9 +14,10 @@ const glowColorMap = {
   green:  { base: 120, spread: 200 },
   red:    { base: 0,   spread: 200 },
   orange: { base: 30,  spread: 200 },
+  teal:   { base: 180, spread: 200 },
 };
 
-export function GlowCard({ children, className = '', glowColor = 'blue' }: GlowCardProps) {
+export function GlowCard({ children, className = '', glowColor = 'blue', padding = '22px 24px' }: GlowCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -59,7 +61,7 @@ export function GlowCard({ children, className = '', glowColor = 'blue' }: GlowC
     borderRadius: 'calc(var(--radius) * 1px)',
     backdropFilter: 'blur(12px)',
     WebkitBackdropFilter: 'blur(12px)',
-    padding: '22px 24px',
+    padding,
   } as React.CSSProperties;
 
   const beforeAfterStyles = `

@@ -7,6 +7,7 @@ import { GlassBackground } from "@/components/ui/glass-background";
 import { GlassPanel } from "@/components/ui/glass-panel";
 import { GlowPanel } from "@/components/ui/glow-panel";
 import { LiquidButton } from "@/components/ui/liquid-glass-button";
+import { PageIntro } from "@/components/ui/page-intro";
 
 export default function SeguimientoPage() {
   const params  = useParams();
@@ -63,7 +64,10 @@ export default function SeguimientoPage() {
             background: msg.ok ? "rgba(48,209,88,0.1)" : "rgba(255,69,58,0.1)",
             color: msg.ok ? "#30d158" : "#ff453a" }}>{msg.text}</div>
         )}
-
+        <PageIntro
+                       archivo={archivo}
+                       texto="Registra tus inversiones reales —qué compraste, cuándo y a qué precio— para que el sistema calcule tu ganancia con datos verdaderos."
+                     /> 
         {sinComposicion ? (
           <GlassPanel>
             <p style={{ color: "#a1a1a6", fontSize: 14 }}>

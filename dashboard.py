@@ -147,6 +147,35 @@ def cargar_macro():
     except Exception as e:
         print(f"❌ Error macro: {e}"); return None
 
+def obtener_tasa_usd_eur():
+    """EUR por 1 USD. Cacheada un día. Fuente: ECB vía Frankfurter (gratis, sin key)."""
+    hoy = datetime.now().strftime("%Y-%m-%d")
+    cache = os.path.join(DATOS_DIR, "macro", "tasa_eur.json")
+    if os.path.exists(cache):
+        try:
+            with open(cache, encoding="utf-8") as f:
+                data = json.load(f)
+            if data.get("fecha") == hoy:
+                return data["tasa"]
+        except Exception:
+            pass
+    try:
+        r = requests.get("https://api.frankfurter.app/latest",
+                         params={"from": "USD", "to": "EUR"}, timeout=8)
+        r.raise_for_status()
+        tasa = r.json()["rates"]["EUR"]
+        with open(cache, "w", encoding="utf-8") as f:
+            json.dump({"fecha": hoy, "tasa": tasa}, f)
+        return tasa
+    except Exception:
+        if os.path.exists(cache):
+            try:
+                with open(cache, encoding="utf-8") as f:
+                    return json.load(f)["tasa"]
+            except Exception:
+                pass
+        return None
+
 def precio_actual_usd(ticker):
     try:
         hoy = datetime.now()
@@ -299,11 +328,14 @@ def grafica_trm(trm_hist):
             system=(
                 'Eres analista cambiario senior del mercado colombiano con 15 años de experiencia. '
                 'Das interpretaciones técnicas precisas, no descripciones de datos. '
-                'Cuando ves una tendencia, dices qué significa para el inversionista, no solo que existe. '
-                'Nunca inventas causas que no están en los datos o noticias.'
-                f'CRÍTICO: Cuando tengas TODOS los datos necesarios, responde ÚNICA Y EXCLUSIVAMENTE con el JSON. '
-                f'Ni una sola palabra antes ni después del JSON. Solo el JSON. '
-                f'Si incluyes cualquier texto junto al JSON, el sistema falla.'
+                'Nunca inventas causas que no están en los datos o noticias. '
+                'PERSPECTIVA DEL USUARIO (crítica, no la confundas): el usuario es colombiano y COMPRA dólares '
+                'para invertir en acciones de EE.UU. Por tanto: un dólar MÁS BARATO (peso fuerte, TRM baja) le '
+                'FAVORECE al entrar, porque con los mismos pesos compra MÁS dólares y más acciones — ese es un BUEN '
+                'momento para invertir. Un dólar MÁS CARO (peso débil, TRM alta) lo PERJUDICA al comprar, pero '
+                'favorece el valor en pesos de lo que YA tiene invertido. Distingue siempre entre comprar ahora '
+                '(donde peso fuerte = ventaja) y valorar lo ya invertido (donde peso fuerte = menor valor en COP). '
+                'Nunca digas que un dólar barato es malo para quien va a comprar acciones US.'
             ),
             max_tokens=400, temperature=0.2)
     except:
@@ -366,6 +398,84 @@ def grafica_trm(trm_hist):
     ) if analisis_trm else ''
     fuente_html = '<div style="margin-top:8px;font-size:0.7rem;color:#6e6e73;text-align:right">Fuente: Banco de la República</div>'
     return grafica_html + analisis_html + fuente_html
+
+def generar_analisis_trm(trm_hist):
+    """Genera el texto de análisis IA de la TRM (sin HTML). Reusa la lógica de grafica_trm."""
+    trm_values = trm_hist['TRM'].values.tolist()
+    if len(trm_values) < 2:
+        return ''
+    try:
+        noticias = []
+        for termino in ["dolar peso colombiano TRM", "tasa cambio Colombia hoy"]:
+            try:
+                r = requests.get(
+                    f"https://news.google.com/rss/search?q={termino.replace(' ','+')}&hl=es&gl=CO&ceid=CO:es",
+                    headers={'User-Agent': 'Mozilla/5.0'}, timeout=6)
+                for item in ET.fromstring(r.content).findall('.//item')[:2]:
+                    t = item.find('title'); d = item.find('pubDate')
+                    if t is not None:
+                        noticias.append(f"- {t.text[:120]} ({d.text[:16] if d is not None else ''})")
+            except Exception as e:
+                print(f"News fetch failed: {e}")
+                continue
+        noticias_txt = '\n'.join(noticias) if noticias else 'Sin noticias recientes disponibles.'
+
+        trm_series = pd.Series(trm_values)
+        trm_hoy    = float(trm_values[-1])
+        trm_ayer   = float(trm_values[-2]) if len(trm_values) > 1 else trm_hoy
+        trm_7d     = float(trm_values[-7]) if len(trm_values) > 7 else trm_hoy
+        trm_30d    = float(trm_values[-30]) if len(trm_values) > 30 else trm_hoy
+        trm_90d    = float(trm_values[0])
+        trm_max90  = max(trm_values)
+        trm_min90  = min(trm_values)
+        trm_ma7    = float(trm_series.rolling(7).mean().iloc[-1])
+        trm_ma30   = float(trm_series.rolling(30).mean().iloc[-1])
+
+        cambio_diario = ((trm_hoy - trm_ayer) / trm_ayer) * 100
+        cambio_7d     = ((trm_hoy - trm_7d) / trm_7d) * 100
+        cambio_30d    = ((trm_hoy - trm_30d) / trm_30d) * 100
+        cambio_90d    = ((trm_hoy - trm_90d) / trm_90d) * 100
+        distancia_max = ((trm_hoy - trm_max90) / trm_max90) * 100
+        distancia_min = ((trm_hoy - trm_min90) / trm_min90) * 100
+
+        tendencia = "alcista" if trm_hoy > trm_ma7 > trm_ma30 else \
+                    "bajista" if trm_hoy < trm_ma7 < trm_ma30 else "lateral"
+        volatilidad = float(trm_series.tail(30).std())
+        vol_nivel   = "alta" if volatilidad > 80 else "moderada" if volatilidad > 40 else "baja"
+        rango_90d   = trm_max90 - trm_min90
+        posicion_rango = ((trm_hoy - trm_min90) / rango_90d * 100) if rango_90d > 0 else 50
+
+        return groq_chat(
+            [{'role': 'user', 'content':
+              f'Eres analista cambiario senior del mercado colombiano. '
+              f'Tienes los datos reales de la TRM de los últimos 90 días. Interprétalos.\n\n'
+              f'DATOS TÉCNICOS DE LA TRM:\n'
+              f'- Hoy: ${trm_hoy:,.0f} COP/USD\n'
+              f'- Ayer: ${trm_ayer:,.0f} | Cambio diario: {cambio_diario:+.2f}%\n'
+              f'- Hace 7 días: ${trm_7d:,.0f} | Cambio 7d: {cambio_7d:+.2f}%\n'
+              f'- Hace 30 días: ${trm_30d:,.0f} | Cambio 30d: {cambio_30d:+.2f}%\n'
+              f'- Hace 90 días: ${trm_90d:,.0f} | Cambio 90d: {cambio_90d:+.2f}%\n'
+              f'- Máximo 90d: ${trm_max90:,.0f} ({distancia_max:+.1f}% vs hoy)\n'
+              f'- Mínimo 90d: ${trm_min90:,.0f} ({distancia_min:+.1f}% vs hoy)\n'
+              f'- Media móvil 7d: ${trm_ma7:,.0f} | Media móvil 30d: ${trm_ma30:,.0f}\n'
+              f'- Tendencia: {tendencia}\n'
+              f'- Volatilidad 30d: {vol_nivel} (σ = {volatilidad:,.0f} COP)\n'
+              f'- Posición en rango 90d: {posicion_rango:.0f}% (0% = mínimo, 100% = máximo)\n\n'
+              f'NOTICIAS RECIENTES:\n{noticias_txt}\n\n'
+              f'Escribe exactamente 4 oraciones, en este orden:\n'
+              f'1. SITUACIÓN ACTUAL: dónde está el peso HOY dentro de su rango de 90 días.\n'
+              f'2. TENDENCIA: qué dice la relación precio vs medias móviles sobre la dirección del dólar.\n'
+              f'3. CAUSA: según las noticias, qué factor está dominando el movimiento.\n'
+              f'4. IMPLICACIÓN: qué significa para alguien que invierte en acciones americanas desde Colombia.\n\n'
+              f'Reglas: usa los números exactos. Sin frases genéricas. Sin asteriscos. Español directo.'}],
+            system=(
+                'Eres analista cambiario senior del mercado colombiano con 15 años de experiencia. '
+                'Das interpretaciones técnicas precisas, no descripciones de datos. '
+                'Nunca inventas causas que no están en los datos o noticias.'),
+            max_tokens=400, temperature=0.2)
+    except Exception as e:
+        print(f"Error análisis TRM: {e}")
+        return ''
 
 def grafica_torta(pesos, titulo):
     cf = ['rgba(0,113,227,0.45)','rgba(48,209,88,0.45)','rgba(255,214,10,0.45)',
@@ -2483,56 +2593,6 @@ def monitor_view(archivo):
     )
     return pagina(f'Monitor — {portafolio["nombre"]}', contenido)
  
-
-@app.route('/api/toggle-monitor/<archivo>', methods=['POST'])
-def api_toggle_monitor(archivo):
-    redir = verificar_acceso(archivo)
-    if redir: return redir
-    try:
-        ruta = f'datos/portafolios/{archivo}'
-        with open(ruta, 'r', encoding='utf-8') as f:
-            d = json.load(f)
- 
-        nuevo_estado = not d.get('monitoreo_activo', False)
-        d['monitoreo_activo'] = nuevo_estado
- 
-        # Si se está ACTIVANDO: desactivar todos los demás portafolios del usuario
-        if nuevo_estado:
-            username = session.get('username', '')
-            todos = listar_portafolios_de_usuario(username)
-            for p in todos:
-                if p['archivo'] != archivo:
-                    otra_ruta = f'datos/portafolios/{p["archivo"]}'
-                    try:
-                        with open(otra_ruta, 'r', encoding='utf-8') as f2:
-                            otro = json.load(f2)
-                        if otro.get('monitoreo_activo'):
-                            otro['monitoreo_activo'] = False
-                            with open(otra_ruta, 'w', encoding='utf-8') as f2:
-                                json.dump(otro, f2, indent=2, ensure_ascii=False)
-                            print(f"🔴 Monitor desactivado en {p['archivo']} (exclusividad)")
-                    except:
-                        pass
- 
-        with open(ruta, 'w', encoding='utf-8') as f:
-            json.dump(d, f, indent=2, ensure_ascii=False)
- 
-        # Si se acaba de activar, disparar primer ciclo inmediatamente
-        if nuevo_estado:
-            from monitor import ciclo_portafolio
-            def primer_ciclo():
-                import time
-                time.sleep(2)
-                try:
-                    ciclo_portafolio(archivo, d)
-                except Exception as e:
-                    print(f"❌ Primer ciclo error: {e}")
-            threading.Thread(target=primer_ciclo, daemon=True).start()
- 
-    except Exception as e:
-        print(f"❌ toggle-monitor error: {e}")
-    return redirect(url_for('monitor_view', archivo=archivo))
- 
 @app.route('/api/reset-monitor/<archivo>', methods=['POST'])
 def api_reset_monitor(archivo):
     redir = verificar_acceso(archivo)
@@ -3162,12 +3222,24 @@ def api_precios_rt(archivo):
                 'mercado_rt':    mercado_rt,
                 'timestamp':     r.get('timestamp', ''),
             }
+        
+        # Si no hay precios en vivo (mercado cerrado), exponer los rangos calculados
+        rangos_data = {}
+        ruta_rangos = os.path.join(DATOS_DIR, "portafolios", f"rangos_{archivo}")
+        if os.path.exists(ruta_rangos):
+            try:
+                with open(ruta_rangos, 'r', encoding='utf-8') as f:
+                    rangos_data = json.load(f)
+            except Exception:
+                pass
 
         return jsonify({
-            'ok':             True,
-            'precios':        precios,
+            'ok':              True,
+            'precios':         precios,
             'mercado_abierto': mercado_rt,
-            'ultimo_update':  estado.get('timestamp', ''),
+            'ultimo_update':   estado.get('timestamp', ''),
+            'rangos':          rangos_data.get('rangos', {}),
+            'rangos_fecha':    rangos_data.get('fecha', ''),
         })
 
     except Exception as e:
@@ -3401,9 +3473,17 @@ def api_dashboard(archivo):
     tiempo_real = calcular_tiempo_real(portafolio)
     macro       = cargar_macro()
 
-    macro_json = None
+    
     if macro:
         macro_json = {k: v for k, v in macro.items() if k != 'trm_hist'}
+        if 'trm_hist' in macro:
+            trm_df = macro['trm_hist']
+            macro_json['trm_hist'] = {
+                'fechas':  [str(f)[:10] for f in trm_df.index],
+                'valores': trm_df['TRM'].values.tolist(),
+            }
+        macro_json['tasa_eur'] = obtener_tasa_usd_eur()   # EUR por 1 USD
+        # 'trm' ya está en macro_json (COP por 1 USD) → sirve para dividir COP→USD
 
     return jsonify({
         'portafolio': {
@@ -3415,6 +3495,7 @@ def api_dashboard(archivo):
         'composicion': portafolio.get('composicion', {}),
         'tiempo_real': tiempo_real,
         'macro':       macro_json,
+        'historico': portafolio.get('historial',[]),
     })
     
 @app.route('/api/auth/logout', methods=['POST'])
@@ -3434,7 +3515,7 @@ def api_config(archivo):
     if request.method == 'GET':
         return jsonify({
             'nombre': portafolio.get('nombre'),
-            'activo': portafolio.get('activo', False),
+            'activo': portafolio.get('monitoreo_activo', False),
             'divisa': portafolio.get('divisa', 'USD'),
             'perfil': portafolio.get('perfil', 'agresivo'),
             'propietario': portafolio.get('propietario', ''),
@@ -3515,6 +3596,107 @@ def api_seguimiento(archivo):
         'entrados':    entrados,
         'aportes':     aportes,
     })
+
+@app.route('/api/trm-analisis')
+def api_trm_analisis():
+    username = session.get('username')
+    if not username:
+        return jsonify({'error': 'No autorizado'}), 401
+
+    hoy = datetime.now().strftime("%Y-%m-%d")
+    ruta_cache = os.path.join(DATOS_DIR, "macro/trm_analisis.json")
+
+    # ¿Hay análisis de hoy ya guardado?
+    try:
+        if os.path.exists(ruta_cache):
+            with open(ruta_cache, 'r', encoding='utf-8') as f:
+                cache = json.load(f)
+            if cache.get('fecha') == hoy and cache.get('texto'):
+                return jsonify({'analisis': cache['texto'], 'fecha': hoy, 'cacheado': True})
+    except Exception as e:
+        print(f"Error leyendo cache TRM: {e}")
+
+    # No hay de hoy → generar
+    macro = cargar_macro()
+    if not macro or 'trm_hist' not in macro:
+        return jsonify({'analisis': '', 'error': 'Sin datos de TRM'}), 200
+
+    analisis = generar_analisis_trm(macro['trm_hist'])
+
+    # Guardar en cache con la fecha de hoy
+    try:
+        os.makedirs(os.path.dirname(ruta_cache), exist_ok=True)
+        with open(ruta_cache, 'w', encoding='utf-8') as f:
+            json.dump({'fecha': hoy, 'texto': analisis}, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"Error guardando cache TRM: {e}")
+
+    return jsonify({'analisis': analisis, 'fecha': hoy, 'cacheado': False})
+
+@app.route('/api/portafolios/<archivo>/activar', methods=['POST'])
+def api_activar_portafolio_json(archivo):
+    if verificar_acceso(archivo):
+        return jsonify({'ok': False, 'error': 'No autorizado'}), 401
+    try:
+        ruta = f'datos/portafolios/{archivo}'
+        with open(ruta, 'r', encoding='utf-8') as f:
+            d = json.load(f)
+
+        d['monitoreo_activo'] = True
+
+        # Exclusividad: solo un portafolio activo a la vez (igual que api_toggle_monitor)
+        username = session.get('username', '')
+        for p in listar_portafolios_de_usuario(username):
+            if p['archivo'] != archivo:
+                otra = f'datos/portafolios/{p["archivo"]}'
+                try:
+                    with open(otra, 'r', encoding='utf-8') as f2:
+                        o = json.load(f2)
+                    if o.get('monitoreo_activo'):
+                        o['monitoreo_activo'] = False
+                        with open(otra, 'w', encoding='utf-8') as f2:
+                            json.dump(o, f2, indent=2, ensure_ascii=False)
+                except Exception:
+                    pass
+
+        with open(ruta, 'w', encoding='utf-8') as f:
+            json.dump(d, f, indent=2, ensure_ascii=False)
+
+        # Primer ciclo SIN hilo — corre ya y muestra errores
+        try:
+            import monitor
+            print(f"🔧 Activando {archivo} | composición: {list(d.get('composicion', {}).keys())}")
+            rangos = monitor.precalcular_rangos(archivo, d)
+            if rangos:
+                print(f"✅ Rangos calculados para {archivo}")
+                if monitor.mercado_abierto():
+                    monitor.vigilar_precios(archivo, d, rangos)
+                    print(f"✅ Vigilancia inicial OK")
+            else:
+                print(f"⚠️ precalcular_rangos devolvió None — revisa la composición")
+        except Exception as e:
+            import traceback
+            print(f"❌ Error en primer ciclo: {e}")
+            traceback.print_exc()
+
+        return jsonify({'ok': True, 'activo': True})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+@app.route('/api/portafolios/<archivo>/desactivar', methods=['POST'])
+def api_desactivar_portafolio_json(archivo):
+    if verificar_acceso(archivo):
+        return jsonify({'ok': False, 'error': 'No autorizado'}), 401
+    try:
+        ruta = f'datos/portafolios/{archivo}'
+        with open(ruta, 'r', encoding='utf-8') as f:
+            d = json.load(f)
+        d['monitoreo_activo'] = False
+        with open(ruta, 'w', encoding='utf-8') as f:
+            json.dump(d, f, indent=2, ensure_ascii=False)
+        return jsonify({'ok': True, 'activo': False})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 500
 
 if __name__=="__main__":
     print("="*55)

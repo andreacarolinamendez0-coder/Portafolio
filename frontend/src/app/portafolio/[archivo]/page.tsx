@@ -1,4 +1,5 @@
 "use client";
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { MagneticTabs } from "@/components/ui/magnetic-tabs";
 import { LiquidButton } from "@/components/ui/liquid-glass-button";
 import { GlassPanel } from "@/components/ui/glass-panel";
@@ -11,7 +12,12 @@ import { LogoMark } from "@/components/ui/logo";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SectionTitle } from "@/components/ui/card";
-import { authMe, authLogout, getDashboard, triggerRecolector, getUltimaActualizacion, type DashboardData } from "@/lib/api";
+import { authMe, authLogout, triggerRecolector, getUltimaActualizacion, type DashboardData } from "@/lib/api";
+import { getDashboard, getTrmAnalisis } from "@/lib/api";
+import { style } from "framer-motion/client";
+import { PageIntro } from "@/components/ui/page-intro";
+import {getConfig} from "@/lib/api";
+import { mostrarMonto, type Divisa } from "@/lib/divisas";
 
 // Tabs: "hoy" | "historico"
 type Tab = "hoy" | "historico";
@@ -27,6 +33,7 @@ export default function DashboardPage() {
   const [updating, setUpdating]   = useState(false);
   const [lastUpdate, setLastUpdate] = useState("");
   const [username, setUsername]   = useState("");
+  const [divisa, setDivisa] = useState<"USD" | "EUR" | "COP">("COP");
 
   const load = useCallback(async () => {
     try {
@@ -35,6 +42,8 @@ export default function DashboardPage() {
       setUsername(me.username);
       const d = await getDashboard(archivo);
       setData(d);
+      const cfg = await getConfig(archivo);   // ← trae la divisa guardada
+      setDivisa(cfg.divisa as "USD" | "EUR" | "COP");
       const { timestamp } = await getUltimaActualizacion();
       setLastUpdate(timestamp);
     } catch {
@@ -73,18 +82,57 @@ export default function DashboardPage() {
 
   return (
     <>
+    <style>{`
+   .atom-hint:hover { background: rgba(0,113,227,0.2); border-color: rgba(0,113,227,0.5); }
+   .atom-glow { animation: atomGlow 3s ease-in-out infinite; }
+    @keyframes atomGlow {
+    0%,100% { filter: drop-shadow(0 0 6px rgba(0,113,227,0.35)); }
+    50%     { filter: drop-shadow(0 0 12px rgba(0,113,227,0.6)); }
+    }
+`   }</style>
+        {/* Barra de ayuda de la página */}
+<PageIntro
+  archivo={archivo}
+  texto="Aquí ves el resumen de tu portafolio: cuánto invertiste, cuánto vale hoy, tu ganancia y los indicadores macro que afectan tus inversiones."
+/>
 
-        {/* Tabs */}
-        <div style={{ marginBottom: 28 }}>
-          <MagneticTabs
-            items={[{ value: "hoy", label: "Hoy" }, { value: "historico", label: "Histórico" }]}
-            value={tab}
-            onChange={(v) => setTab(v as Tab)}
-          />
-        </div>
+{/* Toggle Hoy / Histórico (botones glass, distinto del nav) */}
+<div style={{ display: "flex", gap: 8, marginBottom: 28 }}>
+  {([{ v: "hoy", l: "Hoy" }, { v: "historico", l: "Histórico" }] as const).map(t => {
+    const active = tab === t.v;
+    return (
+      <button
+        key={t.v}
+        onClick={() => setTab(t.v as Tab)}
+        style={{
+          fontFamily: "inherit", cursor: "pointer", fontSize: 13,
+          fontWeight: active ? 600 : 500,
+          color: active ? "#f5f5f7" : "#8a8a92",
+          padding: "9px 22px", borderRadius: 12,
+          background: active ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.02)",
+          border: active ? "1px solid rgba(255,255,255,0.16)" : "1px solid rgba(255,255,255,0.06)",
+          boxShadow: active ? "inset 0 1px 0 rgba(255,255,255,0.1), 0 4px 14px -6px rgba(0,0,0,0.5)" : "none",
+          backdropFilter: "blur(12px)",
+          transition: "all 0.18s ease",
+        }}
+      >
+        {t.l}
+      </button>
+    );
+  })}
+</div>
 
         {tab === "hoy" && (
           <>
+            {/* Mis métricas */}
+            {tiempo_real && macro && (
+         <MisMetricas
+         tr={tiempo_real}
+         divisa={divisa}
+         tasas={{ trm: macro.trm, tasa_eur: macro.tasa_eur }}
+  />
+)}
+
             {/* Macro tiles */}
             {macro && <MacroSection macro={macro} />}
 
@@ -181,49 +229,187 @@ function MacroSection({ macro }: { macro: NonNullable<DashboardData["macro"]> })
   );
 }
 
+// ── Mis métricas (resumen del portafolio) ────────────────────
+function MisMetricas({ tr, divisa, tasas }: {
+  tr: NonNullable<DashboardData["tiempo_real"]>;
+  divisa: Divisa;
+  tasas: { trm: number; tasa_eur: number };
+}) {
+  const gPos = tr.ganancia_total >= 0;
+  const rPos = tr.rentabilidad_total >= 0;
+
+  const cards = [
+    { label: "Invertido",    value: mostrarMonto(tr.total_invertido, divisa, tasas), sub: divisa, color: "#f0f0f3" },
+    { label: "Valor hoy",    value: mostrarMonto(tr.total_valor, divisa, tasas),     sub: divisa, color: "#f0f0f3" },
+    { label: "Ganancia",     value: `${gPos ? "+" : ""}${mostrarMonto(tr.ganancia_total, divisa, tasas)}`, sub: divisa, color: gPos ? "#30d158" : "#ff453a" },
+    { label: "Rentabilidad", value: `${rPos ? "+" : ""}${tr.rentabilidad_total.toFixed(1)}%`, sub: "total", color: rPos ? "#30d158" : "#ff453a" },
+  ];
+
+  return (
+    <GlassPanel style={{ marginBottom: -1, maxWidth: 1500 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", padding: "0px 20px" }}>
+        {cards.map((c, i) => (
+          <div key={c.label} style={{ padding: "0 10px", borderLeft: i === 0 ? "none" : "1px solid rgba(255,255,255,0.07)" }}>
+            <p style={{ fontSize: 12, color: "var(--text-3)", margin: "0 0 7px", textTransform: "uppercase", letterSpacing: "0.06em" }}>{c.label}</p>
+            <p style={{ fontSize: 17, fontWeight: 600, margin: 0, color: c.color, letterSpacing: "-0.02em" }}>{c.value}</p>
+            <p style={{ fontSize: 12, color: "var(--text-3)", margin: "6px 0 0" }}>{c.sub}</p>
+          </div>
+        ))}
+      </div>
+    </GlassPanel>
+  );
+}
+
+function TickerLogo({ ticker, size = 22 }: { ticker: string; size?: number }) {
+  const [err, setErr] = useState(false);
+  // "BTC-USD" -> "BTC"; los servicios de acciones no usan el sufijo
+  const sym = ticker.split("-")[0].toUpperCase();
+
+  if (err) {
+    // Fallback: badge con iniciales y color estable derivado del ticker
+    const hue = [...ticker].reduce((a, c) => a + c.charCodeAt(0), 0) % 360;
+    return (
+      <span style={{
+        width: size, height: size, borderRadius: 6, flexShrink: 0,
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        fontSize: size * 0.4, fontWeight: 700, color: "#fff",
+        background: `hsl(${hue}, 45%, 42%)`,
+      }}>
+        {sym.slice(0, 2)}
+      </span>
+    );
+  }
+
+  return (
+    <img
+      src={`https://img.logo.dev/ticker/${sym}?token=pk_a7xVdMF8Qlu9rwAfmcdrBQ=${size * 2}&format=png`}
+      alt={ticker}
+      width={size}
+      height={size}
+      onError={() => setErr(true)}
+      style={{ borderRadius: 6, flexShrink: 0, objectFit: "contain", background: "rgba(255,255,255,0.06)" }}
+    />
+  );
+}
+
+
 // ── TRM Chart (lazy-loaded Plotly) ───────────────────────────
 
 function TRMChart({ trm_hist }: { trm_hist: { fechas: string[]; valores: number[] } }) {
   const [days, setDays] = useState(90);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (!trm_hist || !trm_hist.fechas) return;
-    const load = async () => {
-      const Plotly = (await import("plotly.js-dist-min" as never)) as typeof import("plotly.js");
-      const n = Math.min(days, trm_hist.fechas.length);
-      const fechas = trm_hist.fechas.slice(-n);
-      const vals   = trm_hist.valores.slice(-n);
-      const ma7: (number | null)[] = vals.map((_, i) => i < 6 ? null : vals.slice(i - 6, i + 1).reduce((a, b) => a + b, 0) / 7);
+  if (!trm_hist || !trm_hist.fechas) return null;
 
-      Plotly.react("trm-chart", [
-        { x: fechas, y: vals, type: "scatter", mode: "lines", line: { color: "#0071e3", width: 2 }, hovertemplate: "<b>$%{y:,.0f} COP/USD</b><br>%{x}<extra>TRM</extra>" },
-        { x: fechas, y: ma7, type: "scatter", mode: "lines", line: { color: "#30d158", width: 1.5, dash: "dot" }, opacity: 0.8, hovertemplate: "<b>$%{y:,.0f}</b><extra>Media 7d</extra>" },
-      ] as Plotly.Data[], {
-        paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(17,17,17,0.6)",
-        margin: { l: 80, r: 16, t: 8, b: 36 }, showlegend: false, hovermode: "x unified",
-        hoverlabel: { bgcolor: "rgba(12,12,12,0.97)", bordercolor: "rgba(255,255,255,0.1)", font: { size: 12, color: "#f5f5f7" } },
-        xaxis: { gridcolor: "rgba(255,255,255,0.05)", color: "#6e6e73", tickfont: { size: 11, color: "#6e6e73" } },
-        yaxis: { gridcolor: "rgba(255,255,255,0.05)", color: "#6e6e73", tickfont: { size: 11, color: "#6e6e73" }, tickformat: "$,.0f", ticksuffix: " COP", range: [3000, Math.max(...vals) * 1.05] },
-      } as Plotly.Layout, { responsive: true, displayModeBar: false });
-    };
-    load();
-  }, [days, trm_hist]);
+  const n = Math.min(days, trm_hist.fechas.length);
+  const fechas = trm_hist.fechas.slice(-n);
+  const vals   = trm_hist.valores.slice(-n);
+  const ma7 = vals.map((_, i) => i < 6 ? null : vals.slice(i - 6, i + 1).reduce((a, b) => a + b, 0) / 7);
+
+  // Transformar a array de objetos para Recharts
+  const data = fechas.map((fecha, i) => ({
+    fecha,
+    trm: vals[i],
+    ma7: ma7[i],
+  }));
+
+  const minVal = Math.min(...vals);
+  const maxVal = Math.max(...vals);
+  const pad = (maxVal - minVal) * 0.1 || 50;
+
+  const fmtFecha = (f: string) => {
+    const d = new Date(f);
+    return d.toLocaleDateString("es-CO", { day: "2-digit", month: "short" });
+  };
 
   return (
     <GlassPanel>
       <div style={{ display: "flex", gap: 6, marginBottom: 12, alignItems: "center" }}>
-        <p style={{ color: "#f5f5f7", fontSize: 14, fontWeight: 600, margin: 0, flex: 1 }}>Tasa Representativa del Mercado (TRM)</p>
+        <p style={{ color: "var(--text)", fontSize: 14, fontWeight: 600, margin: 0, flex: 1 }}>Tasa Representativa del Mercado (TRM)</p>
         {[7, 30, 60, 90].map(d => (
           <button key={d} onClick={() => setDays(d)}
-            style={{ padding: "5px 12px", borderRadius: 7, fontSize: 11, cursor: "pointer", fontFamily: "inherit", border: days === d ? "1px solid rgba(0,113,227,0.5)" : "1px solid rgba(255,255,255,0.08)", background: days === d ? "rgba(0,113,227,0.2)" : "rgba(255,255,255,0.05)", color: days === d ? "#4da3ff" : "#6e6e73", transition: "all 0.15s" }}>
+            style={{ padding: "5px 12px", borderRadius: 7, fontSize: 11, cursor: "pointer", fontFamily: "inherit", border: days === d ? "1px solid rgba(0,113,227,0.5)" : "1px solid var(--glass-border)", background: days === d ? "rgba(0,113,227,0.2)" : "rgba(255,255,255,0.05)", color: days === d ? "#4da3ff" : "var(--text-3)", transition: "all 0.15s" }}>
             {d}d
           </button>
         ))}
       </div>
-      <div id="trm-chart" style={{ width: "100%", height: 240 }} />
-      <div style={{ marginTop: 8, fontSize: "0.7rem", color: "#6e6e73", textAlign: "right" }}>Fuente: Banco de la República</div>
+
+      <div style={{ width: "100%", height: 240 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={data} margin={{ top: 8, right: 12, left: 8, bottom: 4 }}>
+            <defs>
+              <linearGradient id="trmGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#0071e3" stopOpacity={0.35} />
+                <stop offset="100%" stopColor="#0071e3" stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid stroke="rgba(255,255,255,0.05)" vertical={false} />
+            <XAxis
+              dataKey="fecha"
+              tickFormatter={fmtFecha}
+              tick={{ fontSize: 11, fill: "var(--text-3)" }}
+              stroke="rgba(255,255,255,0.1)"
+              minTickGap={40}
+            />
+            <YAxis
+              domain={[minVal - pad, maxVal + pad]}
+              tickFormatter={(v) => `$${Math.round(v).toLocaleString("es-CO")}`}
+              tick={{ fontSize: 11, fill: "var(--text-3)" }}
+              stroke="rgba(255,255,255,0.1)"
+              width={70}
+            />
+            <Tooltip
+              contentStyle={{ background: "rgba(12,12,12,0.97)", border: "1px solid var(--glass-border)", borderRadius: 10, fontSize: 12 }}
+              labelStyle={{ color: "var(--text)", marginBottom: 4 }}
+              labelFormatter={(f) => fmtFecha(f as string)}
+              formatter={(value, name) => [
+                `$${Math.round(Number(value)).toLocaleString("es-CO")} COP`,
+                name === "trm" ? "TRM" : "Media 7d",
+              ]}
+            />
+            <Area type="monotone" dataKey="trm" stroke="#0071e3" strokeWidth={2} fill="url(#trmGradient)" dot={false} />
+            <Area type="monotone" dataKey="ma7" stroke="#30d158" strokeWidth={1.5} strokeDasharray="4 3" fill="none" dot={false} connectNulls />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+
+      <AnalisisTRM />
+
+      <div style={{ marginTop: 8, fontSize: "0.7rem", color: "var(--text-3)", textAlign: "right" }}>Fuente: Banco de la República</div>
     </GlassPanel>
+  );
+}
+
+// ── Análisis IA de la TRM (carga aparte, con caché diario) ──
+function AnalisisTRM() {
+  const [analisis, setAnalisis] = useState<string | null>(null);
+  const [cargando, setCargando] = useState(true);
+
+  useEffect(() => {
+    getTrmAnalisis()
+      .then(d => setAnalisis(d.analisis || ""))
+      .catch(() => setAnalisis(""))
+      .finally(() => setCargando(false));
+  }, []);
+
+  // Si no hay análisis y ya cargó, no mostramos nada
+  if (!cargando && !analisis) return null;
+
+  return (
+    <div style={{ marginTop: 14, padding: "14px 16px", background: "var(--glass)", border: "1px solid var(--glass-border)", borderRadius: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+        <LogoMark size={20} />
+        <span style={{ fontSize: "0.68rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-3)" }}>Análisis de Atom</span>
+      </div>
+      {cargando ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#0071e3", animation: "pulse-trm 1.2s infinite" }} />
+          <p style={{ fontSize: "0.82rem", color: "var(--text-3)", margin: 0 }}>Analizando el mercado…</p>
+          <style>{`@keyframes pulse-trm { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }`}</style>
+        </div>
+      ) : (
+        <p style={{ fontSize: "0.82rem", color: "var(--text-2)", lineHeight: 1.65, margin: 0, whiteSpace: "pre-line" }}>{analisis}</p>
+      )}
+    </div>
   );
 }
 
@@ -247,7 +433,10 @@ function ComposicionSection({ composicion, archivo, aportes_activos }: { composi
               ? <div style={{ color: title === "Pendientes" ? "#30d158" : "#6e6e73", padding: "8px 0", fontSize: 14 }}>{title === "Pendientes" ? "Ya entraste a todos" : "Sin entradas aún"}</div>
               : items.map(a => (
                 <div key={a} style={{ padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,0.06)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <TickerLogo ticker={a} />
                   <span style={{ color: "#f5f5f7" }}>{a}</span>
+                  </span>
                   <span style={{ background: badge.bg, color: badge.color, border: `1px solid ${badge.border}`, borderRadius: 980, padding: "3px 10px", fontSize: "0.7rem", fontWeight: 500 }}>{badge.label}</span>
                 </div>
               ))}
@@ -278,7 +467,6 @@ function PosicionesSection({ tr }: { tr: NonNullable<DashboardData["tiempo_real"
       </GlassPanel>
       <GlassPanel style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
-        <div style={{ color: "var(--text-3)", fontSize: "0.85rem", marginBottom: 8 }}>Ganancia Real Total (pesos de hoy)</div>
           <thead>
             <tr>
               {["Activo", "Precio hoy", "Fracciones", "Valor COP", "Ganancia", "Rentabilidad"].map(h => (
@@ -324,7 +512,7 @@ function PosicionesSection({ tr }: { tr: NonNullable<DashboardData["tiempo_real"
 // ── Historical section ───────────────────────────────────────
 
 function HistoricoSection({ historico }: { historico: DashboardData["historico"] }) {
-  if (!historico.length) return (
+  if (!historico || !historico.length) return (
     <GlassPanel>
       <p style={{ color: "var(--text-3)", textAlign: "center" }}>Aún no hay registros históricos. El sistema guardará uno automáticamente cada día.</p>
     </GlassPanel>
@@ -353,7 +541,6 @@ function HistoricoSection({ historico }: { historico: DashboardData["historico"]
       <SectionTitle>Registro Diario</SectionTitle>
       <GlassPanel style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
-        <div style={{ color: "var(--text-3)", fontSize: "0.85rem", marginBottom: 8 }}>Ganancia Real Total (pesos de hoy)</div>
           <thead>
             <tr>
               {["Fecha","TRM","Valor COP","Ganancia","Rentabilidad"].map(h => (

@@ -8,6 +8,7 @@ import { GlassPanel } from "@/components/ui/glass-panel";
 import { GlowPanel } from "@/components/ui/glow-panel";
 import { LiquidButton } from "@/components/ui/liquid-glass-button";
 import { PropuestaEditor, type Propuesta } from "@/components/ui/propuesta-editor";
+import { PageIntro } from "@/components/ui/page-intro";
 
 interface Msg { role: "user" | "assistant"; content: string }
 
@@ -128,7 +129,10 @@ export default function AnalistaPage() {
     <>
     
         <h2 style={{ fontSize: "1.4rem", margin: "16px 0 24px" }}>Analista — {data.portafolio.nombre}</h2>
-
+         <PageIntro
+               archivo={archivo}
+               texto="Atom estudia tu perfil y arma una propuesta de portafolio. Puedes simular escenarios y ajustar los pesos antes de aplicarla."
+             /> 
         {/* Chat */}
         <GlassPanel style={{ padding: 0, overflow: "hidden" }}>
           <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--glass-border)", display: "flex", alignItems: "center", gap: 10 }}>
