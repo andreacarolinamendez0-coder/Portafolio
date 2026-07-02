@@ -1161,6 +1161,9 @@ def analista_view(archivo):
             f'  - {a}: {v*100:.1f}%' for a, v in composicion.items()
         )
 
+    from recolector import ACTIVOS_POR_SECTOR
+    sectores_disponibles = ', '.join(sorted(ACTIVOS_POR_SECTOR.keys()))
+    
     sistema = (
         f'Eres un analista financiero senior especializado en portafolios de renta variable americana '
         f'para inversionistas colombianos. Tu cliente es {portafolio["propietario"]}.\n\n'
@@ -1175,6 +1178,13 @@ def analista_view(archivo):
         f'- Una pregunta a la vez. Nunca varias en un mismo mensaje.\n'
         f'- Tienes criterio: si algo no conviene al cliente, lo dices con datos antes de ejecutar.\n'
         f'- Nunca pides información que ya tienes arriba.\n\n'
+        f'Tu universo base son grandes empresas (líderes por sector) en: {sectores_disponibles}, '
+        f'más ETFs sectoriales/temáticos y un puñado de criptomonedas principales. '
+        f'Si el usuario pide algo más nicho o específico (ej. un ETF de biotech, ciberseguridad, energía limpia) puedes sugerir tickers reales fuera de esa base — '
+        f'el sistema los descarga automáticamente la primera vez que se usan, así que no te limites a la lista si el tema lo amerita. '
+        f'Eso sí: usa siempre tickers reales y reconocibles, nunca inventes símbolos.\n\n'
+        f'IMPORTANTE: "activos" SIEMPRE debe ser tickers reales de bolsa (ej. "NVDA","VWO","XLK"), nunca categorías ni descripciones ("tecnología disruptiva", "mercados emergentes"). '
+        f'Si sugieres una distribución temática, tradúcela a 5-8 tickers concretos antes de generar el JSON.\n\n'
         f'FLUJO A — PORTAFOLIO NUEVO: recoge en orden (uno por mensaje): perfil → monto → DCA → horizonte.\n'
         f'Cuando tengas todo, responde SOLO el JSON:\n'
         f'{{"accion":"analizar","perfil":"agresivo","inversion":1000000,"aporte_dca":0,"frecuencia_meses":1,"horizonte":10,"es_nuevo":true}}\n\n'
@@ -1561,8 +1571,12 @@ def api_analista_chat(archivo):
             f'- Una pregunta a la vez. Nunca varias en un mismo mensaje.\n'
             f'- Tienes criterio: si algo no conviene al cliente, lo dices con datos antes de ejecutar.\n'
             f'- Nunca pides información que ya tienes arriba.\n\n'
-            f'FLUJO A — PORTAFOLIO NUEVO: recoge en orden (uno por mensaje): perfil → monto → DCA → horizonte.\n'
-            f'Cuando tengas todo, responde SOLO el JSON:\n'
+            f'FLUJO A — PORTAFOLIO NUEVO: recoge en orden (uno por mensaje): perfil → monto → DCA → horizonte. '
+            f'Si en la conversación el usuario mencionó sectores, temas o tickers de interés, tradúcelos a 5-8 tickers reales antes del JSON final.\n'
+            f'Cuando tengas todo, responde SOLO el JSON. Si hubo preferencias de sector/tema, incluye "activos":\n'
+            f'{{"accion":"analizar","perfil":"agresivo","inversion":1000000,"aporte_dca":0,"frecuencia_meses":1,"horizonte":10,"es_nuevo":true,'
+            f'"activos":{{"ARKG":0.25,"NVDA":0.20,"HACK":0.15,"ICLN":0.15,"SMH":0.15,"GOOGL":0.10}}}}\n'
+            f'Si NO mencionó preferencias de sector, omite "activos" y deja que el optimizador elija automáticamente.\n\n'
             f'{{"accion":"analizar","perfil":"agresivo","inversion":1000000,"aporte_dca":0,"frecuencia_meses":1,"horizonte":10,"es_nuevo":true}}\n\n'
             f'FLUJO B — ACTUALIZAR EXISTENTE: ya tienes los datos. Pregunta UNA VEZ qué quiere cambiar. '
             f'Evalúa si el cambio tiene sentido para su perfil. Si es riesgoso, díselo antes de proceder. '
@@ -1588,7 +1602,7 @@ def api_generar_propuesta(archivo):
     if verificar_acceso(archivo): return jsonify({'ok':False,'error':'No autorizado'})
     try:
         import sys; sys.path.insert(0,'.')
-        from analista import cargar_datos, construir_panel, calcular_retornos_reales, optimizar_portafolio
+        from analista import cargar_datos, construir_panel, calcular_retornos_reales, optimizar_portafolio, completar_precios
         data       = request.get_json()
         perfil     = data.get('perfil','agresivo')
         inversion  = float(data.get('inversion', 1000000))
@@ -1600,13 +1614,37 @@ def api_generar_propuesta(archivo):
             horizonte = 10
         portafolio = leer_portafolio(archivo)
         tiene_inv  = len(portafolio.get('aportes',[])) > 0
+
+        import re
+
+        raw_activos = data.get('activos', {})
+        # El LLM a veces manda lista de objetos {"ticker":..,"porcentaje":..} en vez de {ticker: peso}
+        if isinstance(raw_activos, list):
+            raw_activos = {
+                a.get('ticker'): a.get('porcentaje', a.get('peso', 0))
+                for a in raw_activos
+                if isinstance(a, dict) and a.get('ticker')
+    }
+        activos_propuestos = {
+            k: v for k, v in raw_activos.items()
+            if isinstance(k, str) and isinstance(v, (int, float)) and re.fullmatch(r'[A-Z]{1,6}(-USD)?', k)
+        } if isinstance(raw_activos, dict) else {}
+        if raw_activos and not activos_propuestos:
+            return jsonify({'ok': False, 'error': 'El analista propuso categorías en vez de tickers reales (ej. "Biotecnología y genómica" en vez de "ARKG" o "IBB"). Pídele que traduzca la idea a tickers concretos.'})        
+        
         precios, trm, inf_usa, inf_col, risk_free, tasa_cdt = cargar_datos()
         panel    = construir_panel(precios, trm, inf_usa, inf_col, risk_free)
         activos_todos = [c for c in precios.columns if c not in ['JPMV','META']]
         ret_real = calcular_retornos_reales(panel, activos_todos)
 
+        if activos_propuestos:
+            pesos, _ = optimizar_portafolio(ret_real, panel, perfil, risk_free, inversion,
+                                            tickers_fijos=list(activos_propuestos.keys()))
+        else:
+            pesos, _ = optimizar_portafolio(ret_real, panel, perfil, risk_free, inversion)
+            reporte_txt = ''
+        
         # Si el analista ya propuso pesos específicos, usarlos directamente
-        activos_propuestos = data.get('activos', {})
         if activos_propuestos:
             # Normalizar para que sumen 1
             total = sum(activos_propuestos.values())
@@ -1715,14 +1753,17 @@ def api_generar_propuesta(archivo):
             'aporte_dca': aporte_dca, 'frecuencia_meses': freq,
             'horizonte': horizonte, 'archivo': archivo
         }})
-    except Exception as e: return jsonify({'ok':False,'error':str(e)})
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'ok': False, 'error': str(e)})
 
 @app.route('/api/recalcular-proyecciones/<archivo>', methods=['POST'])
 def api_recalcular_proyecciones(archivo):
     if verificar_acceso(archivo): return jsonify({'ok':False,'error':'No autorizado'})
     try:
         import sys, io
-        from analista import cargar_datos, construir_panel, calcular_retornos_reales, generar_reporte
+        from analista import cargar_datos, construir_panel, calcular_retornos_reales, generar_reporte, completar_precios
 
         data      = request.get_json()
         pesos_raw = data.get('pesos', {})
@@ -1733,6 +1774,7 @@ def api_recalcular_proyecciones(archivo):
         horizonte = int(data.get('horizonte', 10))
 
         precios, trm, inf_usa, inf_col, risk_free, tasa_cdt = cargar_datos()
+        precios = completar_precios(precios, pesos_raw)
         panel    = construir_panel(precios, trm, inf_usa, inf_col, risk_free)
         ret_real = calcular_retornos_reales(panel, list(precios.columns))
 
@@ -3522,20 +3564,45 @@ def api_config(archivo):
             'fecha_inicio': portafolio.get('fecha_inicio', ''),
         })
 
-    # PUT: guardar la divisa preferida
+    # PUT: guardar divisa y/o nombre
     data = request.get_json(silent=True) or {}
-    divisa = data.get('divisa', 'USD').strip().upper()
-    if divisa not in ('USD', 'EUR', 'COP'):
-        return jsonify({'error': 'Divisa no válida'}), 400
 
     ruta = f'datos/portafolios/{archivo}'
     with open(ruta, 'r', encoding='utf-8') as f:
         d = json.load(f)
-    d['divisa'] = divisa
+
+    mensajes = []
+
+    if 'divisa' in data:
+        divisa = data.get('divisa', 'USD').strip().upper()
+        if divisa not in ('USD', 'EUR', 'COP'):
+            return jsonify({'error': 'Divisa no válida'}), 400
+        d['divisa'] = divisa
+        mensajes.append(f'Divisa cambiada a {divisa}')
+
+    if 'nombre' in data:
+        nombre = data.get('nombre', '').strip()
+        if not nombre:
+            return jsonify({'error': 'El nombre no puede estar vacío'}), 400
+        d['nombre'] = nombre
+        mensajes.append('Nombre actualizado')
+
+        # Sincronizar el nombre en el estado del monitor, si existe
+        ruta_monitor = os.path.join(DATOS_DIR, 'portafolios', f'monitor_{archivo}')
+        if os.path.exists(ruta_monitor):
+            try:
+                with open(ruta_monitor, 'r', encoding='utf-8') as f:
+                    estado = json.load(f)
+                estado['nombre_portafolio'] = nombre
+                with open(ruta_monitor, 'w', encoding='utf-8') as f:
+                    json.dump(estado, f, indent=2, ensure_ascii=False)
+            except Exception:
+                pass
+
     with open(ruta, 'w', encoding='utf-8') as f:
         json.dump(d, f, indent=2, ensure_ascii=False)
 
-    return jsonify({'ok': True, 'mensaje': f'Divisa cambiada a {divisa}', 'divisa': divisa})
+    return jsonify({'ok': True, 'mensaje': ' / '.join(mensajes) or 'Sin cambios', 'divisa': d.get('divisa', 'USD'), 'nombre': d.get('nombre', '')})
 
 @app.route('/api/seguimiento/<archivo>', methods=['GET', 'POST'])
 def api_seguimiento(archivo):

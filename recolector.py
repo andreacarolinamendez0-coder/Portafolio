@@ -5,6 +5,7 @@ import json
 import io
 import os
 from datetime import datetime, timedelta
+import time
 
 # ============================================================
 # RUTAS ABSOLUTAS — funciona igual en local y en Railway
@@ -21,33 +22,44 @@ CARPETA_LOGS = os.path.join(DATOS_DIR, "Logs")
 # CONFIGURACIÓN — activos
 # ============================================================
 
-ACTIVOS = [
-    "AAPL",
-    "MSFT",
-    "GOOGL",
-    "NVDA",
-    "META",
-    "JPM",
-    "V",
-    "MA",
-    "JNJ",
-    "LLY",
-    "AMZN",
-    "WMT",
-    "KO",
-    "XOM",
-    "CVX",
-    "GLD",
-    "TLT",
-    "VOO",
-    "VTI",
-    "VWO",
-    "QQQ",
-    "XLK",
-    "BTC-USD",
-    "ETH-USD",
-    "SOL-USD",
-]
+CRIPTO = ["BTC-USD", "ETH-USD", "SOL-USD"]
+
+ACTIVOS_POR_SECTOR = {
+    "Technology":              ["AAPL", "MSFT", "GOOGL", "NVDA", "AVGO"],
+    "Communication Services":  ["META", "NFLX", "DIS", "TMUS"],
+    "Consumer Cyclical":       ["AMZN", "TSLA", "HD", "MCD"],
+    "Consumer Defensive":      ["WMT", "KO", "PG", "COST"],
+    "Financial Services":      ["JPM", "V", "MA", "BAC"],
+    "Healthcare":              ["LLY", "JNJ", "UNH", "ABBV"],
+    "Industrials":             ["CAT", "BA", "GE", "HON"],
+    "Energy":                  ["XOM", "CVX", "COP"],
+    "Utilities":               ["NEE", "DUK", "SO"],
+    "Real Estate":             ["PLD", "AMT"],
+    "Basic Materials":         ["LIN", "FCX"],
+}
+
+ETFS = {
+    "US Broad":      ["VOO", "VTI", "SPY", "QQQ", "IWM", "DIA"],
+    "Sectoriales":   ["XLK", "XLF", "XLE", "XLV", "XLI", "XLP",
+                      "XLY", "XLU", "XLB", "XLRE", "XLC"],
+    "Bonos":         ["BND", "AGG", "TLT", "IEF", "SHY", "LQD", "HYG", "TIP"],
+    "Internacional": ["VEA", "VWO", "EFA", "EEM", "VXUS"],
+    "Commodities":   ["GLD", "GLDM", "SLV", "DBC"],
+    "Dividendo":     ["SCHD", "VIG", "VYM", "DGRO"],
+    "REITs":         ["VNQ"],
+}
+
+TICKER_SECTOR = {t: sector for sector, lst in ACTIVOS_POR_SECTOR.items() for t in lst}
+TICKER_SECTOR.update({t: "ETF" for lst in ETFS.values() for t in lst})
+TICKER_SECTOR.update({t: "Crypto" for t in CRIPTO})
+
+ACTIVOS = sorted(set(TICKER_SECTOR.keys()))
+
+def _esta_fresco(archivo, dias=1):
+    if not os.path.exists(archivo):
+        return False
+    edad = datetime.now() - datetime.fromtimestamp(os.path.getmtime(archivo))
+    return edad.days < dias
 
 # ============================================================
 # UTILIDADES
@@ -86,50 +98,60 @@ def registrar(mensaje, tipo="INFO"):
 # ============================================================
 
 
-def recolectar_precios():
-    registrar("Iniciando descarga de precios...")
+def recolectar_precios(forzar=False, dias=1, chunk=80):
     archivo = os.path.join(CARPETA_PRECIOS, "precios.parquet")
+
+    if not forzar and _esta_fresco(archivo, dias):
+        registrar("Precios frescos (ya descargados hoy) — omito descarga.", "INFO")
+        return
+
+    registrar("Iniciando descarga de precios...")
+    tickers = ACTIVOS
 
     if os.path.exists(archivo):
         df_existente = pd.read_parquet(archivo)
         ultima_fecha = df_existente.index.max()
-        inicio = ultima_fecha + timedelta(days=1)
-        registrar(
-            f"Datos existentes hasta {ultima_fecha.date()}. Descargando desde {inicio.date()}..."
-        )
+        inicio = ultima_fecha - timedelta(days=1)
+        registrar(f"Datos existentes hasta {ultima_fecha.date()}. Descargando desde {inicio.date()}...")
     else:
         df_existente = pd.DataFrame()
         inicio = datetime.now() - timedelta(days=365 * 10)
         registrar("Primera descarga — obteniendo 10 años de historia...")
 
     fin = datetime.now()
+    partes = []
+    for i in range(0, len(tickers), chunk):
+        lote = tickers[i:i + chunk]
+        try:
+            df = yf.download(lote, start=inicio, end=fin, auto_adjust=True, progress=False)["Close"]
+            if isinstance(df, pd.Series):
+                df = df.to_frame(lote[0])
+            partes.append(df)
+        except Exception as e:
+            registrar(f"❌ Lote {i // chunk + 1} falló: {e}", "ERROR")
+        time.sleep(2)
 
-    try:
-        df_nuevo = yf.download(ACTIVOS, start=inicio, end=fin, auto_adjust=True)[
-            "Close"
-        ]
-        df_nuevo = df_nuevo.dropna(how="all")
+    if not partes:
+        registrar("❌ No se pudo descargar ningún lote.", "ERROR")
+        return
 
-        if df_nuevo.empty:
-            registrar(
-                "No hay datos nuevos hoy (mercado cerrado o fin de semana).", "AVISO"
-            )
-            return
+    df_nuevo = pd.concat(partes, axis=1)
+    df_nuevo = df_nuevo.loc[:, ~df_nuevo.columns.duplicated()]
+    df_nuevo = df_nuevo.dropna(how="all")
 
-        if not df_existente.empty:
-            df_final = pd.concat([df_existente, df_nuevo])
-            df_final = df_final[~df_final.index.duplicated(keep="last")]
-        else:
-            df_final = df_nuevo
+    if df_nuevo.empty:
+        registrar("No hay datos nuevos hoy (mercado cerrado o fin de semana).", "AVISO")
+        return
 
-        df_final.sort_index(inplace=True)
-        df_final.to_parquet(archivo)
-        registrar(
-            f"✅ Precios guardados. {len(df_nuevo)} días nuevos. Total: {len(df_final)} días."
-        )
+    if not df_existente.empty:
+        df_final = pd.concat([df_existente, df_nuevo])
+        df_final = df_final[~df_final.index.duplicated(keep="last")]
+    else:
+        df_final = df_nuevo
 
-    except Exception as e:
-        registrar(f"❌ Error descargando precios: {e}", "ERROR")
+    df_final.sort_index(inplace=True)
+    df_final.to_parquet(archivo)
+    registrar(f"✅ Precios guardados. {len(df_nuevo)} días nuevos. Total: {len(df_final)} días.")
 
 
 # ============================================================
@@ -379,7 +401,7 @@ if __name__ == "__main__":
     print("=" * 50)
 
     crear_carpetas()
-    recolectar_precios()
+    recolectar_precios(forzar=True, dias=1)
     recolectar_trm()
     recolectar_inflacion_usa()
     recolectar_inflacion_col()

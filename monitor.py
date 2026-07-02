@@ -10,7 +10,7 @@ ARQUITECTURA NUEVA:
                    Determina rangos de precio para ENTRAR y VIGILAR
                    Guarda en disco → sobrevive reinicios de Railway
 
-  8:30am-3:00pm →  vigilar_precios()  CADA 9 SEGUNDOS
+  8:30am-3:00pm →  vigilar_precios()  CADA ~10-15 SEGUNDOS
                    Solo consulta precio actual a Finnhub
                    Compara precio vs rangos precalculados
                    Si cruza un rango → alerta Telegram inmediata
@@ -20,15 +20,15 @@ ARQUITECTURA NUEVA:
 
 FUENTES DE DATOS:
 ─────────────────────────────────────────────
-  Finnhub  →  precio actual TIEMPO REAL cada 9 segundos
+  Finnhub  →  precio actual TIEMPO REAL cada ~10-15 segundos
   yfinance →  histórico 90 días UNA VEZ a las 8am
 """
 
 import os, json, time, threading, requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import pandas as pd
 import yfinance as yf
-import pytz
+from zoneinfo import ZoneInfo
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -44,17 +44,16 @@ UMBRAL_VIGILAR = 4.5
 DIAS_SIN_SENAL_MAX = 5
 
 COINGECKO_MAP = {
-    "BTC-USD":  "bitcoin",
-    "ETH-USD":  "ethereum",
-    "SOL-USD":  "solana",
-    "BNB-USD":  "binancecoin",
-    "XRP-USD":  "ripple",
-    "ADA-USD":  "cardano",
+    "BTC-USD": "bitcoin",
+    "ETH-USD": "ethereum",
+    "SOL-USD": "solana",
+    "BNB-USD": "binancecoin",
+    "XRP-USD": "ripple",
+    "ADA-USD": "cardano",
     "DOGE-USD": "dogecoin",
     "AVAX-USD": "avalanche-2",
-    "DOT-USD":  "polkadot",
-    "MATIC-USD":"matic-network",
-    "LTC-USD":  "litecoin",
+    "DOT-USD": "polkadot",
+    "LTC-USD": "litecoin",
     "LINK-USD": "chainlink",
 }
 
@@ -62,8 +61,8 @@ COINGECKO_MAP = {
 # ZONAS HORARIAS
 # ─────────────────────────────────────────────────────────────
 
-TZ_COLOMBIA = pytz.timezone("America/Bogota")
-TZ_NUEVA_YORK = pytz.timezone("America/New_York")
+TZ_COLOMBIA = ZoneInfo("America/Bogota")
+TZ_NUEVA_YORK = ZoneInfo("America/New_York")
 
 
 def hora_colombia():
@@ -81,6 +80,15 @@ def hora_nueva_york():
 # ─────────────────────────────────────────────────────────────
 
 
+def _en_ventana(h_ini, m_ini, h_fin, m_fin, tz=TZ_COLOMBIA):
+    ahora = datetime.now(tz)
+    if ahora.weekday() >= 5:
+        return False
+    inicio = ahora.replace(hour=h_ini, minute=m_ini, second=0, microsecond=0)
+    fin = ahora.replace(hour=h_fin, minute=m_fin, second=0, microsecond=0)
+    return inicio <= ahora <= fin
+
+
 def mercado_abierto():
     """
     NYSE abre 9:30am–3:00pm hora Colombia (ajustado para cuenta individual).
@@ -94,41 +102,23 @@ def mercado_abierto():
     return apertura <= ahora_ny <= cierre
 
 
+# True entre 8:00am y 8:10am hora Colombia. Ventana para descargar histórico y calcular rangos del día.
 def es_hora_precalculo():
-    """
-    True entre 8:00am y 8:10am hora Colombia.
-    Ventana para descargar histórico y calcular rangos del día.
-    """
-    ahora = hora_colombia()
-    if ahora.weekday() >= 5:
-        return False
-    inicio = ahora.replace(hour=8, minute=0, second=0, microsecond=0)
-    fin = ahora.replace(hour=8, minute=10, second=0, microsecond=0)
-    return inicio <= ahora <= fin
+    return _en_ventana(8, 0, 8, 10)
 
 
+# True entre 8:15am y 8:25am hora Colombia.
 def es_hora_buenos_dias():
-    """True entre 8:15am y 8:25am hora Colombia."""
-    ahora = hora_colombia()
-    if ahora.weekday() >= 5:
-        return False
-    inicio = ahora.replace(hour=8, minute=15, second=0, microsecond=0)
-    fin = ahora.replace(hour=8, minute=25, second=0, microsecond=0)
-    return inicio <= ahora <= fin
+    return _en_ventana(8, 15, 8, 25)
 
 
+# True entre 4:00pm y 4:45pm hora Nueva York.
 def es_hora_cierre():
-    """True entre 4:00pm y 4:45pm hora Nueva York."""
-    ahora_ny = hora_nueva_york()
-    if ahora_ny.weekday() >= 5:
-        return False
-    inicio = ahora_ny.replace(hour=16, minute=0, second=0, microsecond=0)
-    fin = ahora_ny.replace(hour=16, minute=45, second=0, microsecond=0)
-    return inicio <= ahora_ny <= fin
+    return _en_ventana(16, 0, 16, 45, tz=TZ_NUEVA_YORK)
 
 
-def es_viernes():
-    return hora_colombia().weekday() == 4
+def _es_portafolio_real(fn):
+    return fn.endswith(".json") and not fn.startswith(("monitor_", "rangos_"))
 
 
 def segundos_hasta_precalculo():
@@ -191,9 +181,11 @@ def teclado_decision(ticker):
         ]
     }
 
+
 # ─────────────────────────────────────────────────────────────
 # COINGECKO — PRECIO EN TIEMPO REAL
 # ─────────────────────────────────────────────────────────────
+
 
 def coingecko_quote(ticker):
     """Precio crypto desde CoinGecko — gratis, sin API key."""
@@ -206,7 +198,7 @@ def coingecko_quote(ticker):
             params={
                 "ids": coin_id,
                 "vs_currencies": "usd",
-                "include_24hr_change": "true"
+                "include_24hr_change": "true",
             },
             timeout=8,
         )
@@ -223,6 +215,7 @@ def coingecko_quote(ticker):
         print(f"❌ CoinGecko error ({ticker}): {e}")
         return None
 
+
 # ─────────────────────────────────────────────────────────────
 # FINNHUB — PRECIO EN TIEMPO REAL
 # ─────────────────────────────────────────────────────────────
@@ -236,7 +229,7 @@ def finnhub_quote(ticker):
     """
     if ticker in COINGECKO_MAP:
         return coingecko_quote(ticker)
-    
+
     try:
         resp = requests.get(
             "https://finnhub.io/api/v1/quote",
@@ -267,7 +260,7 @@ def yfinance_historico(ticker, dias=90):
     Se llama UNA VEZ a las 8am para calcular indicadores fijos.
     """
     try:
-        hoy = datetime.utcnow()
+        hoy = datetime.now(timezone.utc)
         inicio = (hoy - timedelta(days=dias)).strftime("%Y-%m-%d")
         df = yf.download(
             ticker,
@@ -438,7 +431,7 @@ def precalcular_rangos(archivo, portafolio):
 
 
 # ─────────────────────────────────────────────────────────────
-# VIGILAR PRECIOS — corre cada 9 segundos durante el mercado
+# VIGILAR PRECIOS — corre cada ~10-15 segundos durante el mercado
 # ─────────────────────────────────────────────────────────────
 
 
@@ -511,7 +504,7 @@ def vigilar_precios(archivo, portafolio, rangos_del_dia, precios_cache=None):
         }
 
         # ── Alertas — solo si la señal es ENTRAR ──────────────
-        if senal_actual == "ENTRAR":
+        if senal_actual == "ENTRAR" and chat_id:
             dec = decision_usuario(estado, ticker)
 
             # Silenciar según decisión del usuario
@@ -523,11 +516,19 @@ def vigilar_precios(archivo, portafolio, rangos_del_dia, precios_cache=None):
             # Anti-spam: máximo 3 alertas sin respuesta
             if ya_alerte_hoy(estado, ticker) and dec != "sigue":
                 clave = f"ciclos_sin_respuesta_{ticker}"
-                ciclos = estado.get(clave, 0) + 1
-                estado[clave] = ciclos
+                ciclos = estado.get(clave, 0)
                 if ciclos >= 3:
-                    print(f"  🚫 Silenciando {ticker} por falta de respuesta tras 3 alertas")
                     continue
+                
+                ciclos += 1
+                estado[clave] = ciclos
+                
+                if ciclos >= 3:
+                    print(
+                        f"  🚫 Silenciando {ticker} por falta de respuesta tras 3 alertas"
+                    )
+                    continue
+                
 
             # Construir y enviar alerta
             msg = (
@@ -557,18 +558,12 @@ def vigilar_precios(archivo, portafolio, rangos_del_dia, precios_cache=None):
         ultimo = estado.get("ultimo_dia_con_senal")
         if ultimo and ultimo != hoy_str:
             try:
+                d_hoy = datetime.strptime(hoy_str, "%Y-%m-%d")
+                d_ult = datetime.strptime(ultimo, "%Y-%m-%d")
                 dias = sum(
                     1
-                    for i in range(
-                        (
-                            datetime.strptime(hoy_str, "%Y-%m-%d")
-                            - datetime.strptime(ultimo, "%Y-%m-%d")
-                        ).days
-                    )
-                    if (
-                        datetime.strptime(ultimo, "%Y-%m-%d") + timedelta(days=i + 1)
-                    ).weekday()
-                    < 5
+                    for i in range((d_hoy - d_ult).days)
+                    if (d_ult + timedelta(days=i + 1)).weekday() < 5
                 )
                 estado["dias_consecutivos_sin_senal"] = dias
             except:
@@ -733,11 +728,7 @@ def leer_portafolios_activos():
     if not os.path.exists(PORTS_DIR):
         return activos
     for fn in os.listdir(PORTS_DIR):
-        if (
-            not fn.endswith(".json")
-            or fn.startswith("monitor_")
-            or fn.startswith("rangos_")
-        ):
+        if not _es_portafolio_real(fn):
             continue
         ruta = os.path.join(PORTS_DIR, fn)
         try:
@@ -757,9 +748,6 @@ def leer_portafolios_activos():
 
 def chat_id_de(portafolio):
     try:
-        import sys
-
-        sys.path.insert(0, BASE_DIR)
         from gestor_portafolio import get_usuario
 
         owner = portafolio.get("owner", "")
@@ -817,7 +805,7 @@ def enviar_buenos_dias(archivo, portafolio):
         f"☀️ <b>Buenos días — {dia_semana} {ahora.strftime('%d/%m')}</b>\n\n"
         f"📋 Portafolio: <b>{nombre_port}</b>\n\n"
         f"<b>Rangos calculados para hoy:</b>\n{resumen_rangos}\n"
-        f"🔍 Monitoreando cada 9 segundos de 8:30am a 3:00pm.\n"
+        f"🔍 Monitoreando cada ~10-15 segundos de 8:30am a 3:00pm.\n"
         f"Te aviso al instante si algún precio cruza su rango.\n\n"
         f"<i>Cuando recibas una alerta podrás responder:\n"
         f"✅ Ya entré · ❌ No voy a entrar · 📊 Sigue informando</i>"
@@ -890,7 +878,7 @@ def reporte_cierre(archivo, portafolio, estado):
     if ia_cierre:
         msg_final += f"\n\n💬 <b>Análisis:</b>\n<i>{ia_cierre}</i>"
 
-    if dias_sin >= DIAS_SIN_SENAL_MAX and es_viernes():
+    if dias_sin >= DIAS_SIN_SENAL_MAX and hora_colombia().weekday() == 4:
         ia_sub = analisis_ia(resultados, portafolio, tipo="suboptimal")
         msg_final += f"\n\n⚠️ <b>ALERTA: {dias_sin} días sin señal ideal</b>\n" + (
             f"<i>{ia_sub}</i>" if ia_sub else ""
@@ -902,6 +890,9 @@ def reporte_cierre(archivo, portafolio, estado):
     # Limpiar alertas del día
     estado["alertas_enviadas_hoy"] = {}
     estado["decisiones_usuario"] = {}
+    for k in [k for k in estado if k.startswith("ciclos_sin_respuesta_")]:
+        del estado[k]
+        
     estado["reporte_cierre"] = msg_final
     estado["reporte_cierre_fecha"] = hora_colombia().strftime("%Y-%m-%d")
     estado["cierre_enviado_hoy"] = hora_colombia().strftime("%Y-%m-%d")
@@ -947,11 +938,7 @@ def procesar_callback_telegram(callback_data, chat_id):
             return
 
         for fn in os.listdir(PORTS_DIR):
-            if (
-                not fn.endswith(".json")
-                or fn.startswith("monitor_")
-                or fn.startswith("rangos_")
-            ):
+            if not _es_portafolio_real(fn):
                 continue
             try:
                 with open(os.path.join(PORTS_DIR, fn), "r", encoding="utf-8") as f:
@@ -995,7 +982,7 @@ def _loop_monitor():
     Estados del loop:
     8:00am-8:10am  →  precalcular_rangos() UNA VEZ
     8:15am-8:25am  →  enviar buenos días
-    8:30am-3:00pm  →  vigilar_precios() cada 9 segundos
+    8:30am-3:00pm  →  vigilar_precios() cada ~10-15 segundos
     3:00pm-3:45pm  →  reporte de cierre
     resto          →  dormir hasta las 8am del próximo día hábil
     """
@@ -1004,18 +991,18 @@ def _loop_monitor():
     precalculo_hecho = {}  # archivo → fecha del último precálculo
     cierre_enviado = {}  # archivo → fecha del último cierre
 
-    portafolios = []          # ← cache en RAM
-    portafolios_cargados = None  # ← fecha del último scan de disco
+    portafolios = []  # ← cache en RAM
+    ultima_recarga = 0  # ← fecha del último scan de disco
 
     while True:
         try:
             ahora = hora_colombia()
             hoy = ahora.strftime("%Y-%m-%d")
 
-            # ── Recargar portafolios solo una vez por día ──────
-            if portafolios_cargados != hoy:
+            # ── Recargar portafolios cada 5 minutos ──────
+            if time.time() - ultima_recarga > 300:
                 portafolios = leer_portafolios_activos()
-                portafolios_cargados = hoy
+                ultima_recarga = time.time()
 
             # ── Cargar rangos desde disco si Railway reinició ──
             # Esto corre siempre — si ya están en RAM no hace nada
@@ -1029,11 +1016,9 @@ def _loop_monitor():
 
             # ── 8:00am — Precálculo de rangos ─────────────────
             if es_hora_precalculo():
-                for archivo, _ in portafolios:
+                for archivo, pf in portafolios:
                     if precalculo_hecho.get(archivo) != hoy:
                         try:
-                            with open(os.path.join(PORTS_DIR, archivo), "r", encoding="utf-8") as f:
-                                pf = json.load(f)
                             resultado = precalcular_rangos(archivo, pf)
                             if resultado:
                                 rangos_calculados[archivo] = resultado
@@ -1044,22 +1029,20 @@ def _loop_monitor():
 
             # ── 8:15am — Buenos días ───────────────────────────
             elif es_hora_buenos_dias():
-                for archivo, _ in portafolios:
+                for archivo, pf in portafolios:
                     if buenos_enviado.get(archivo) != hoy:
                         try:
-                            with open(os.path.join(PORTS_DIR, archivo), "r", encoding="utf-8") as f:
-                                pf = json.load(f)
                             enviar_buenos_dias(archivo, pf)
                         except Exception as e:
                             print(f"❌ Error buenos días {archivo}: {e}")
                         buenos_enviado[archivo] = hoy
                 time.sleep(60)
 
-            # ── 8:30am-3:00pm — Vigilancia cada 9 segundos ────
+            # ── 8:30am-3:00pm — Vigilancia cada ~10-15 segundos ────
             elif mercado_abierto():
                 # Recolectar todos los tickers únicos entre portafolios activos
                 tickers_unicos = {}  # ticker → precio (se consulta UNA vez)
-                for archivo, _ in portafolios:
+                for archivo, pf in portafolios:
                     rangos = rangos_calculados.get(archivo)
                     if not rangos:
                         continue
@@ -1074,29 +1057,27 @@ def _loop_monitor():
                     time.sleep(0.5)  # ← respetar rate limit: ~60 req/min
 
                 # Procesar cada portafolio con los precios ya obtenidos
-                for archivo, _ in portafolios:
+                for archivo, pf in portafolios:
                     rangos = rangos_calculados.get(archivo)
                     if not rangos:
                         print(f"  ⚠️ Sin rangos para {archivo} — esperando precálculo")
                         continue
                     try:
-                        with open(os.path.join(PORTS_DIR, archivo), "r", encoding="utf-8") as f:
-                            pf = json.load(f)
-                        vigilar_precios(archivo, pf, rangos, precios_cache=tickers_unicos)
+                        vigilar_precios(
+                            archivo, pf, rangos, precios_cache=tickers_unicos
+                        )
                         estado = leer_estado(archivo)
                         verificar_alerta_suboptimal(archivo, pf, estado)
                     except Exception as e:
                         print(f"❌ Error vigilando {archivo}: {e}")
 
-                time.sleep(9)  # ← cada 9 segundos
+                time.sleep(9)  # ← cada ~10-15 segundos
 
             # ── 4:00pm — Reporte de cierre ─────────────────────
             elif es_hora_cierre():
-                for archivo, _ in portafolios:
+                for archivo, pf in portafolios:
                     if cierre_enviado.get(archivo) != hoy:
                         try:
-                            with open(os.path.join(PORTS_DIR, archivo), "r", encoding="utf-8") as f:
-                                pf = json.load(f)
                             estado = leer_estado(archivo)
                             reporte_cierre(archivo, pf, estado)
                             cierre_enviado[archivo] = hoy

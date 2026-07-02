@@ -39,7 +39,7 @@ export default function ConfigPage() {
   async function guardarDivisa(nueva: string) {
     setDivisa(nueva); // actualiza la selección al instante
     try {
-      const res = await updateConfig(archivo, nueva);
+      const res = await updateConfig(archivo, { divisa: nueva });
       setMsg({ text: res.mensaje, ok: true });
     } catch (e: unknown) {
       setMsg({ text: e instanceof Error ? e.message : "Error", ok: false });

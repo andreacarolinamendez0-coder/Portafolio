@@ -155,10 +155,10 @@ export const getUltimaActualizacion = () =>
 export const getConfig = (archivo: string) =>
   apiFetch<{ nombre: string; activo: boolean; divisa: string; perfil: string; propietario: string; fecha_inicio: string }>(`/api/config/${archivo}`);
 
-export const updateConfig = (archivo: string, divisa: string) =>
-  apiFetch<{ ok: boolean; mensaje: string; divisa: string }>(`/api/config/${archivo}`, {
+export const updateConfig = (archivo: string, data: { divisa?: string; nombre?: string }) =>
+  apiFetch<{ ok: boolean; mensaje: string; divisa: string; nombre: string }>(`/api/config/${archivo}`, {
     method: "PUT",
-    body: JSON.stringify({ divisa }),
+    body: JSON.stringify(data),
   });
 
 // ── Seguimiento ─────────────────────────────────────────
