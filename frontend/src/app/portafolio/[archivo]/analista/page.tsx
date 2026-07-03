@@ -83,6 +83,13 @@ export default function AnalistaPage() {
       const d = await r.json();
       if (d.ok && d.propuesta) {
         setPropuesta(d.propuesta as Propuesta);
+        const composicionReal = Object.entries(d.propuesta.pesos)
+          .map(([k, v]) => `${k}: ${((v as number) * 100).toFixed(1)}%`)
+          .join(", ");
+        setMsgs(m => [...m, {
+          role: "assistant",
+          content: `Propuesta generada — composición real: ${composicionReal}. Inversión: ${d.propuesta.inversion} COP. DCA: ${d.propuesta.aporte_dca} COP cada ${d.propuesta.frecuencia_meses} mes(es). Horizonte: ${d.propuesta.horizonte} años. ¿Quieres ajustar algo?`,
+        }]);
       } else {
         setMsgs(m => [...m, { role: "assistant", content: `No pude generar la propuesta: ${d.error ?? "error desconocido"}` }]);
       }
@@ -165,7 +172,7 @@ export default function AnalistaPage() {
             <div ref={bottomRef} />
           </div>
 
-          {!propuesta && (
+          {
             <div style={{ padding: 16, borderTop: "1px solid var(--glass-border)" }}>
               <div style={{ display: "flex", gap: 8, alignItems: "center", background: "var(--bg-2)", border: "1px solid var(--glass-border)", borderRadius: 14, padding: "6px 6px 6px 14px" }}>
                 <input
@@ -179,7 +186,7 @@ export default function AnalistaPage() {
                 <LiquidButton onClick={enviar} disabled={enviando || !input.trim()} className="text-white font-semibold !px-6 !py-2">Enviar</LiquidButton>
               </div>
             </div>
-          )}
+          }
         </GlassPanel>
 
         {destinoSeguimiento && (
@@ -193,6 +200,7 @@ export default function AnalistaPage() {
         {/* Propuesta */}
         {propuesta && (
           <PropuestaEditor
+            key={Object.keys(propuesta.pesos).sort().join(",")}
             propuesta={propuesta}
             tieneInv={tieneInv}
             onAplicar={aplicar}

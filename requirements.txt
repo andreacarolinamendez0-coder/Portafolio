@@ -1,17 +1,13 @@
 flask
-flask-login
 werkzeug
 gunicorn
 pandas
 plotly
 yfinance
-groq
 requests
 pyarrow
-fastparquet
 numpy
 scipy
 anthropic
-flask-cors
 python-dotenv
 pytz

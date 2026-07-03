@@ -2,7 +2,7 @@ import json
 import os
 import hashlib
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
 
 logger = logging.getLogger(__name__)
@@ -46,17 +46,31 @@ def _escribir(ruta, data):
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
+def _es_portafolio_real(fn):
+    return fn.endswith(".json") and not fn.startswith(("monitor_", "rangos_"))
+
+
+def _slug(nombre):
+    s = nombre.lower().replace(" ", "_")
+    for a, b in [
+        ("á", "a"),
+        ("é", "e"),
+        ("í", "i"),
+        ("ó", "o"),
+        ("ú", "u"),
+        ("ñ", "n"),
+    ]:
+        s = s.replace(a, b)
+    return s
+
+
 # ============================================================
 # LISTAR PORTAFOLIOS
 # ============================================================
 
 
 def listar_portafolios():
-    archivos = [
-        f
-        for f in os.listdir(CARPETA_PORTAFOLIOS)
-        if f.endswith(".json") and not f.startswith("monitor_")
-    ]
+    archivos = [f for f in os.listdir(CARPETA_PORTAFOLIOS) if _es_portafolio_real(f)]
     portafolios = []
     for archivo in archivos:
         try:
@@ -64,7 +78,6 @@ def listar_portafolios():
 
             # Leer último análisis del monitor si existe
             ruta_monitor = f"{CARPETA_PORTAFOLIOS}/monitor_{archivo}"
-            ultimo_monitor = None
             ultima_senal = "—"
             ultimo_ts = "—"
             if os.path.exists(ruta_monitor):
@@ -104,60 +117,6 @@ def listar_portafolios():
 
 
 # ============================================================
-# CREAR PORTAFOLIO
-# ============================================================
-
-
-def crear_portafolio(
-    nombre,
-    perfil,
-    propietario,
-    inversion_inicial,
-    aporte_dca=0,
-    frecuencia_meses=0,
-    password="1234",
-    email="",
-    telegram_chat_id="",
-):
-    nombre_archivo = (
-        nombre.lower()
-        .replace(" ", "_")
-        .replace("á", "a")
-        .replace("é", "e")
-        .replace("í", "i")
-        .replace("ó", "o")
-        .replace("ú", "u")
-    )
-    archivo = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}.json"
-
-    if os.path.exists(archivo):
-        print(f"⚠️ Ya existe un portafolio con ese nombre.")
-        return None
-
-    portafolio = {
-        "nombre": nombre,
-        "perfil": perfil,
-        "propietario": propietario,
-        "password_hash": hash_password_secure(password),
-        "email": email,
-        "telegram_chat_id": telegram_chat_id,
-        "fecha_inicio": datetime.now().strftime("%Y-%m-%d"),
-        "inversion_inicial": inversion_inicial,
-        "aporte_dca": aporte_dca,
-        "frecuencia_meses": frecuencia_meses,
-        "activo": False,
-        "monitoreo_activo": False,
-        "composicion": {},
-        "aportes": [],
-        "historial": [],
-    }
-
-    _escribir(archivo, portafolio)
-    print(f"✅ Portafolio '{nombre}' creado para {propietario}.")
-    return archivo
-
-
-# ============================================================
 # LEER PORTAFOLIO
 # ============================================================
 
@@ -190,7 +149,7 @@ def leer_portafolio(nombre_archivo):
 
 def leer_portafolio_activo():
     for archivo in os.listdir(CARPETA_PORTAFOLIOS):
-        if archivo.endswith(".json") and not archivo.startswith("monitor_"):
+        if _es_portafolio_real(archivo):
             try:
                 data = _leer(f"{CARPETA_PORTAFOLIOS}/{archivo}")
                 if data.get("activo", False):
@@ -200,49 +159,6 @@ def leer_portafolio_activo():
                 continue
     print("⚠️ No hay portafolio activo.")
     return None
-
-
-# ============================================================
-# VERIFICAR PASSWORD
-# ============================================================
-
-
-def verificar_password(nombre_archivo, password):
-    ruta = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}"
-    try:
-        data = _leer(ruta)
-        return verify_password(data.get("password_hash", ""), password)
-    except Exception as e:
-        logger.error(f"Error verifying password for {nombre_archivo}: {e}")
-        return False
-
-
-# ============================================================
-# BUSCAR PORTAFOLIOS POR PASSWORD
-# ============================================================
-
-
-def buscar_portafolios_por_password(password):
-    resultados = []
-    for archivo in os.listdir(CARPETA_PORTAFOLIOS):
-        if not archivo.endswith(".json") or archivo.startswith("monitor_"):
-            continue
-        try:
-            data = _leer(f"{CARPETA_PORTAFOLIOS}/{archivo}")
-            stored = data.get("password_hash", "")
-            if stored and verify_password(stored, password):
-                resultados.append(
-                    {
-                        "archivo": archivo,
-                        "nombre": data["nombre"],
-                        "perfil": data["perfil"],
-                        "propietario": data["propietario"],
-                    }
-                )
-        except Exception as e:
-            logger.warning(f"Could not read portfolio {archivo}: {e}")
-            continue
-    return resultados
 
 
 # ============================================================
@@ -315,70 +231,6 @@ def guardar_registro_diario(nombre_archivo, registro):
 
 
 # ============================================================
-# MENÚ INTERACTIVO
-# ============================================================
-
-
-def menu_portafolios():
-    print("\n" + "=" * 50)
-    print("  GESTOR DE PORTAFOLIOS")
-    print("=" * 50)
-
-    portafolios = listar_portafolios()
-
-    if portafolios:
-        print(f"\n📋 Portafolios disponibles ({len(portafolios)}):")
-        for i, p in enumerate(portafolios, 1):
-            estado = "🟢 ACTIVO" if p["activo"] else "⚪"
-            print(
-                f"   {i}. {estado} {p['nombre']} ({p['perfil']}) — {p['propietario']}"
-            )
-    else:
-        print("\n📭 No hay portafolios creados aún.")
-
-    print("\n¿Qué quieres hacer?")
-    print("   1. Crear portafolio nuevo")
-    print("   2. Activar un portafolio")
-    print("   3. Salir")
-
-    opcion = input("\nEscribe 1, 2 o 3: ").strip()
-
-    if opcion == "1":
-        print("\n📝 CREAR PORTAFOLIO NUEVO")
-        nombre = input("   Nombre (ej: Agresivo Andrea 2026): ")
-        propietario = input("   Propietario (ej: Andrea): ")
-        print("   Perfil: 1=Conservador | 2=Agresivo")
-        perfil_op = input("   Escribe 1 o 2: ")
-        perfil = "conservador" if perfil_op == "1" else "agresivo"
-        inv_str = input("   Inversión inicial en COP: ")
-        inv = float(inv_str.replace(",", "").replace(".", ""))
-        tiene_dca = input("   ¿Tendrá DCA periódico? (SI/NO): ").upper()
-        if tiene_dca == "SI":
-            ap_str = input("   ¿Cuánto por aporte en COP? ")
-            aporte = float(ap_str.replace(",", "").replace(".", ""))
-            print("   Frecuencia: 1=Mensual | 3=Trimestral | 12=Anual")
-            freq = int(input("   Escribe 1, 3 o 12: "))
-        else:
-            aporte = 0
-            freq = 0
-        password = input("   Contraseña: ")
-        crear_portafolio(nombre, perfil, propietario, inv, aporte, freq, password)
-
-    elif opcion == "2":
-        if not portafolios:
-            print("❌ No hay portafolios para activar.")
-            return
-        num = int(input("\n   ¿Cuál número quieres activar? ")) - 1
-        if 0 <= num < len(portafolios):
-            activar_portafolio(portafolios[num]["archivo"])
-        else:
-            print("❌ Número inválido.")
-
-
-if __name__ == "__main__":
-    menu_portafolios()
-
-# ============================================================
 # GESTIÓN DE USUARIOS (NUEVO)
 # ============================================================
 
@@ -428,7 +280,6 @@ def registrar_usuario(username, email, password, telegram_chat_id=""):
 
 
 def login_usuario(email, password):
-    from datetime import datetime, timedelta
 
     usuarios = _leer_usuarios()
 
@@ -521,11 +372,7 @@ def actualizar_usuario(username, campos):
 
 def listar_portafolios_de_usuario(username):
     """Lista solo los portafolios que pertenecen a este usuario."""
-    archivos = [
-        f
-        for f in os.listdir(CARPETA_PORTAFOLIOS)
-        if f.endswith(".json") and not f.startswith("monitor_")
-    ]
+    archivos = [f for f in os.listdir(CARPETA_PORTAFOLIOS) if _es_portafolio_real(f)]
     resultado = []
     for archivo in archivos:
         try:
@@ -558,15 +405,7 @@ def crear_portafolio_para_usuario(
     frecuencia_meses=0,
 ):
     """Igual que crear_portafolio pero agrega el campo owner."""
-    nombre_archivo = (
-        nombre.lower()
-        .replace(" ", "_")
-        .replace("á", "a")
-        .replace("é", "e")
-        .replace("í", "i")
-        .replace("ó", "o")
-        .replace("ú", "u")
-    )
+    nombre_archivo = _slug(nombre)
     archivo = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}.json"
     if os.path.exists(archivo):
         return None  # ya existe
@@ -640,7 +479,7 @@ def eliminar_usuario(username):
     # Eliminar portafolios del usuario
     if os.path.exists(CARPETA_PORTAFOLIOS):
         for archivo in os.listdir(CARPETA_PORTAFOLIOS):
-            if archivo.endswith(".json") and not archivo.startswith("monitor_"):
+            if _es_portafolio_real(archivo):
                 try:
                     data = _leer(f"{CARPETA_PORTAFOLIOS}/{archivo}")
                     if data.get("owner") == username:
@@ -650,7 +489,9 @@ def eliminar_usuario(username):
                         if os.path.exists(monitor):
                             os.remove(monitor)
                 except Exception as e:
-                    logger.warning(f"Could not process portfolio {archivo} during user deletion: {e}")
+                    logger.warning(
+                        f"Could not process portfolio {archivo} during user deletion: {e}"
+                    )
                     continue
     # Eliminar usuario
     del usuarios[username]

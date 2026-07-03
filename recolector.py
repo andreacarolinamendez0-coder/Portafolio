@@ -1,7 +1,7 @@
 import yfinance as yf
 import pandas as pd
 import requests
-import json
+import re
 import io
 import os
 from datetime import datetime, timedelta
@@ -13,6 +13,7 @@ import time
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATOS_DIR = os.path.join(BASE_DIR, "datos")
+UA = {"User-Agent": "Mozilla/5.0"}
 
 CARPETA_PRECIOS = os.path.join(DATOS_DIR, "precios")
 CARPETA_MACRO = os.path.join(DATOS_DIR, "macro")
@@ -25,28 +26,39 @@ CARPETA_LOGS = os.path.join(DATOS_DIR, "Logs")
 CRIPTO = ["BTC-USD", "ETH-USD", "SOL-USD"]
 
 ACTIVOS_POR_SECTOR = {
-    "Technology":              ["AAPL", "MSFT", "GOOGL", "NVDA", "AVGO"],
-    "Communication Services":  ["META", "NFLX", "DIS", "TMUS"],
-    "Consumer Cyclical":       ["AMZN", "TSLA", "HD", "MCD"],
-    "Consumer Defensive":      ["WMT", "KO", "PG", "COST"],
-    "Financial Services":      ["JPM", "V", "MA", "BAC"],
-    "Healthcare":              ["LLY", "JNJ", "UNH", "ABBV"],
-    "Industrials":             ["CAT", "BA", "GE", "HON"],
-    "Energy":                  ["XOM", "CVX", "COP"],
-    "Utilities":               ["NEE", "DUK", "SO"],
-    "Real Estate":             ["PLD", "AMT"],
-    "Basic Materials":         ["LIN", "FCX"],
+    "Technology": ["AAPL", "MSFT", "GOOGL", "NVDA", "AVGO"],
+    "Communication Services": ["META", "NFLX", "DIS", "TMUS"],
+    "Consumer Cyclical": ["AMZN", "TSLA", "HD", "MCD"],
+    "Consumer Defensive": ["WMT", "KO", "PG", "COST"],
+    "Financial Services": ["JPM", "V", "MA", "BAC"],
+    "Healthcare": ["LLY", "JNJ", "UNH", "ABBV"],
+    "Industrials": ["CAT", "BA", "GE", "HON"],
+    "Energy": ["XOM", "CVX", "COP"],
+    "Utilities": ["NEE", "DUK", "SO"],
+    "Real Estate": ["PLD", "AMT"],
+    "Basic Materials": ["LIN", "FCX"],
 }
 
 ETFS = {
-    "US Broad":      ["VOO", "VTI", "SPY", "QQQ", "IWM", "DIA"],
-    "Sectoriales":   ["XLK", "XLF", "XLE", "XLV", "XLI", "XLP",
-                      "XLY", "XLU", "XLB", "XLRE", "XLC"],
-    "Bonos":         ["BND", "AGG", "TLT", "IEF", "SHY", "LQD", "HYG", "TIP"],
+    "US Broad": ["VOO", "VTI", "SPY", "QQQ", "IWM", "DIA"],
+    "Sectoriales": [
+        "XLK",
+        "XLF",
+        "XLE",
+        "XLV",
+        "XLI",
+        "XLP",
+        "XLY",
+        "XLU",
+        "XLB",
+        "XLRE",
+        "XLC",
+    ],
+    "Bonos": ["BND", "AGG", "TLT", "IEF", "SHY", "LQD", "HYG", "TIP"],
     "Internacional": ["VEA", "VWO", "EFA", "EEM", "VXUS"],
-    "Commodities":   ["GLD", "GLDM", "SLV", "DBC"],
-    "Dividendo":     ["SCHD", "VIG", "VYM", "DGRO"],
-    "REITs":         ["VNQ"],
+    "Commodities": ["GLD", "GLDM", "SLV", "DBC"],
+    "Dividendo": ["SCHD", "VIG", "VYM", "DGRO"],
+    "REITs": ["VNQ"],
 }
 
 TICKER_SECTOR = {t: sector for sector, lst in ACTIVOS_POR_SECTOR.items() for t in lst}
@@ -55,11 +67,13 @@ TICKER_SECTOR.update({t: "Crypto" for t in CRIPTO})
 
 ACTIVOS = sorted(set(TICKER_SECTOR.keys()))
 
+
 def _esta_fresco(archivo, dias=1):
     if not os.path.exists(archivo):
         return False
     edad = datetime.now() - datetime.fromtimestamp(os.path.getmtime(archivo))
     return edad.days < dias
+
 
 # ============================================================
 # UTILIDADES
@@ -112,7 +126,9 @@ def recolectar_precios(forzar=False, dias=1, chunk=80):
         df_existente = pd.read_parquet(archivo)
         ultima_fecha = df_existente.index.max()
         inicio = ultima_fecha - timedelta(days=1)
-        registrar(f"Datos existentes hasta {ultima_fecha.date()}. Descargando desde {inicio.date()}...")
+        registrar(
+            f"Datos existentes hasta {ultima_fecha.date()}. Descargando desde {inicio.date()}..."
+        )
     else:
         df_existente = pd.DataFrame()
         inicio = datetime.now() - timedelta(days=365 * 10)
@@ -121,9 +137,11 @@ def recolectar_precios(forzar=False, dias=1, chunk=80):
     fin = datetime.now()
     partes = []
     for i in range(0, len(tickers), chunk):
-        lote = tickers[i:i + chunk]
+        lote = tickers[i : i + chunk]
         try:
-            df = yf.download(lote, start=inicio, end=fin, auto_adjust=True, progress=False)["Close"]
+            df = yf.download(
+                lote, start=inicio, end=fin, auto_adjust=True, progress=False
+            )["Close"]
             if isinstance(df, pd.Series):
                 df = df.to_frame(lote[0])
             partes.append(df)
@@ -151,7 +169,9 @@ def recolectar_precios(forzar=False, dias=1, chunk=80):
 
     df_final.sort_index(inplace=True)
     df_final.to_parquet(archivo)
-    registrar(f"✅ Precios guardados. {len(df_nuevo)} días nuevos. Total: {len(df_final)} días.")
+    registrar(
+        f"✅ Precios guardados. {len(df_nuevo)} días nuevos. Total: {len(df_final)} días."
+    )
 
 
 # ============================================================
@@ -165,8 +185,7 @@ def recolectar_trm():
 
     try:
         url = "https://www.datos.gov.co/resource/ceyp-9c7c.csv?$limit=10000"
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(url, headers=headers, timeout=15)
+        response = requests.get(url, headers=UA, timeout=15)
 
         df = pd.read_csv(io.StringIO(response.text))
         df["Fecha"] = pd.to_datetime(df["vigenciadesde"])
@@ -190,20 +209,17 @@ def recolectar_inflacion_usa():
     registrar("Iniciando descarga de inflación USA...")
     archivo = os.path.join(CARPETA_MACRO, "inflacion_usa.parquet")
     try:
-        fred_key = os.environ.get("FRED_API_KEY", "")
-        
         # FRED API — fuente oficial
-        url = f"https://api.stlouisfed.org/fred/series/observations?series_id=CPIAUCSL&api_key={fred_key}&file_type=json&sort_order=asc"
-        r = requests.get(url, timeout=15)
+        url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=CPIAUCSL"
+        r = requests.get(url, headers=UA, timeout=15)
         r.raise_for_status()
-        datos = r.json()["observations"]
 
-        from io import StringIO
-        df = pd.DataFrame(datos)[["date", "value"]].rename(columns={"date": "Fecha", "value": "CPI"})
-        df = pd.read_csv(StringIO(df.to_csv(index=False)))
-        df.columns = ["Fecha", "CPI"]
-        df["Fecha"] = pd.to_datetime(df["Fecha"])
-        df = df.set_index("Fecha").sort_index()
+        df = (
+            pd.read_csv(io.StringIO(r.text), parse_dates=["observation_date"])
+            .rename(columns={"observation_date": "Fecha", "CPIAUCSL": "CPI"})
+            .set_index("Fecha")
+            .sort_index()
+        )
         df["CPI"] = pd.to_numeric(df["CPI"], errors="coerce")
         df = df.dropna()
         df["Inflacion_USA"] = df["CPI"].pct_change(12) * 100
@@ -218,11 +234,9 @@ def recolectar_inflacion_usa():
         registrar(f"❌ Error descargando inflación USA: {e}", "ERROR")
         # Fallback: usar valor conocido si falla todo
         if not os.path.exists(archivo):
-            df = pd.DataFrame(
-                {"Inflacion_USA": [3.5]}, index=[pd.Timestamp("2025-03-01")]
-            )
+            df = pd.DataFrame({"Inflacion_USA": [3.5]}, index=[pd.Timestamp.now()])
             df.to_parquet(archivo)
-            registrar("⚠️ Usando inflación USA de respaldo: 3.5% (marzo 2025)", "AVISO")
+            registrar("⚠️ Usando inflación USA de respaldo: 3.5%", "AVISO")
 
 
 # ============================================================
@@ -239,8 +253,7 @@ def recolectar_inflacion_col():
             "https://api.worldbank.org/v2/country/CO/indicator/FP.CPI.TOTL.ZG"
             "?format=json&per_page=10&mrv=5"
         )
-        headers = {"User-Agent": "Mozilla/5.0"}
-        r = requests.get(url, headers=headers, timeout=15)
+        r = requests.get(url, headers=UA, timeout=15)
         data = r.json()
         registros = data[1]
         filas = []
@@ -294,12 +307,10 @@ def recolectar_inflacion_col():
             registrar(f"❌ Ambas fuentes fallaron: {e2}", "ERROR")
             if not os.path.exists(archivo):
                 df_fb = pd.DataFrame(
-                    {"Inflacion_COL": [5.68]}, index=[pd.Timestamp("2024-12-01")]
+                    {"Inflacion_COL": [5.68]}, index=[pd.Timestamp.now()]
                 )
                 df_fb.to_parquet(archivo)
-                registrar(
-                    "⚠️ Usando inflación COL de respaldo: 5.68% (abril 2026)", "AVISO"
-                )
+                registrar("⚠️ Usando inflación COL de respaldo: 5.68%", "AVISO")
 
 
 # ============================================================
@@ -343,40 +354,31 @@ def recolectar_tasa_libre_riesgo():
 def recolectar_tasa_banrep():
     registrar("Iniciando descarga de tasa Banrep...")
     archivo = os.path.join(CARPETA_MACRO, "tasa_banrep.parquet")
-    tasa = None
 
-    if os.path.exists(archivo):
-        try:
-            df_prev = pd.read_parquet(archivo)
-            ultima = df_prev.index.max()
-            if ultima.date() == datetime.now().date():
-                tasa_hoy = float(df_prev["Tasa_Banrep"].iloc[-1])
-                registrar(f"✅ Tasa Banrep ya descargada hoy: {tasa_hoy:.2f}%")
-                return
-        except Exception:
-            pass
+    if _esta_fresco(archivo, dias=1):
+        registrar(f"✅ Tasa Banrep ya descargada hoy. ")
+        return
 
-        try:
-            url = "https://www.banrep.gov.co/es/estadisticas/tasas-de-interes-del-banco-de-la-republica"
-            headers = {"User-Agent": "Mozilla/5.0"}
-            response = requests.get(url, headers=headers, timeout=15)
+    try:
+        url = "https://www.banrep.gov.co/es/estadisticas/tasas-de-interes-del-banco-de-la-republica"
+        response = requests.get(url, headers=UA, timeout=15)
 
-            import re
+        matches = re.findall(r"(\d+[.,]\d+)\s*%", response.text)
 
-            matches = re.findall(r"(\d+[.,]\d+)\s*%", response.text)
-            registrar(
-                f"DEBUG todos los porcentajes encontrados: {matches[:20]}", "INFO"
-            )
+        if matches:
+            tasa = float(matches[0].replace(",", "."))
+            registrar(f"✅ Tasa Banrep extraída del sitio web: {tasa:.2f}%")
+        else:
+            raise ValueError("No se encontró la tasa en el HTML")
 
-            if matches:
-                tasa = float(matches[0].replace(",", "."))
-                registrar(f"✅ Tasa Banrep extraída del sitio web: {tasa:.2f}%")
-            else:
-                raise ValueError("No se encontró la tasa en el HTML")
-
-        except Exception:
-            tasa = 11.25
-            registrar(f"⚠️ Usando tasa Banrep de respaldo: {tasa}%", "AVISO")
+    except Exception:
+        tasa = 11.25
+        registrar(f"⚠️ Usando tasa Banrep de respaldo: {tasa}%", "AVISO")
+        if not os.path.exists(archivo):
+            # Solo creo archivo si no existe, para no romper consumidores en primera corrida
+            df_fb = pd.DataFrame({"Tasa_Banrep": [tasa]}, index=[pd.Timestamp.now()])
+            df_fb.to_parquet(archivo)
+        return  # nunca pisamos un parquet existente con datos del fallback
 
     df = pd.DataFrame({"Tasa_Banrep": [tasa]}, index=[pd.Timestamp.now()])
 
@@ -393,6 +395,15 @@ def recolectar_tasa_banrep():
 # ============================================================
 # EJECUCIÓN PRINCIPAL
 # ============================================================
+def correr_todo(forzar=False):
+    crear_carpetas()
+    recolectar_precios(forzar=forzar)
+    recolectar_trm()
+    recolectar_inflacion_usa()
+    recolectar_inflacion_col()
+    recolectar_tasa_libre_riesgo()
+    recolectar_tasa_banrep()
+
 
 if __name__ == "__main__":
     print("=" * 50)
@@ -400,13 +411,7 @@ if __name__ == "__main__":
     print(f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 50)
 
-    crear_carpetas()
-    recolectar_precios(forzar=True, dias=1)
-    recolectar_trm()
-    recolectar_inflacion_usa()
-    recolectar_inflacion_col()
-    recolectar_tasa_libre_riesgo()
-    recolectar_tasa_banrep()
+    correr_todo()
 
     print("=" * 50)
     print("✅ RECOLECCIÓN COMPLETA")

@@ -1,8 +1,10 @@
 import pandas as pd
 import numpy as np
 from scipy.optimize import minimize
+from sklearn.covariance import LedoitWolf
 from datetime import datetime
 import warnings
+import os
 
 warnings.filterwarnings("ignore")
 
@@ -13,8 +15,6 @@ warnings.filterwarnings("ignore")
 CARPETA_PRECIOS = "datos/precios"
 CARPETA_MACRO = "datos/macro"
 CARPETA_REPORTES = "datos/reportes"
-
-import os
 
 os.makedirs(CARPETA_REPORTES, exist_ok=True)
 
@@ -44,17 +44,20 @@ def cargar_datos():
 
     return precios, trm, inf_usa, inf_col, risk_free, tasa_cdt
 
+
 def completar_precios(precios, tickers):
     """Si algún ticker no está en precios, lo baja on-demand y lo agrega."""
     extras = [t for t in tickers if t not in precios.columns]
     if not extras:
         return precios
     import yfinance as yf
+
     nuevos = yf.download(extras, period="5y", auto_adjust=True, progress=False)["Close"]
     if isinstance(nuevos, pd.Series):
         nuevos = nuevos.to_frame(extras[0])
     precios = pd.concat([precios, nuevos], axis=1)
     return precios.loc[:, ~precios.columns.duplicated()]
+
 
 # ============================================================
 # PASO 2 — PANEL MAESTRO
@@ -89,6 +92,12 @@ def construir_panel(precios, trm, inf_usa, inf_col, risk_free):
     panel["Regimen_Tasas"] = panel["Risk_Free"].apply(clasificar_tasa)
     panel["TRM_Momentum"] = panel["TRM"].pct_change(3)
 
+    panel["Stress_Macro"] = (
+        (panel["Regimen_Tasas"] == 1).astype(float)
+        + (panel["Spread_Inflacion"].clip(lower=0, upper=3) / 3.0)
+        + (panel["TRM_Momentum"].abs() / 0.05).clip(upper=1.0)
+    ) / 3.0
+
     ultimo = panel.iloc[-1]
     print(f"\n🌍 CONTEXTO MACRO ACTUAL:")
     print(f"   TRM hoy              : ${ultimo['TRM']:,.0f} COP/USD")
@@ -105,6 +114,10 @@ def construir_panel(precios, trm, inf_usa, inf_col, risk_free):
     print(
         f"   TRM últimos 3 meses  : {ultimo['TRM_Momentum']*100:.1f}% "
         f"({'💵 Dólar subiendo' if ultimo['TRM_Momentum'] > 0 else '💵 Dólar bajando'})"
+    )
+    print(
+        f"   Estrés macro         : {ultimo['Stress_Macro']:.2f}/1.00 "
+        f"({'🔴 Alto' if ultimo['Stress_Macro'] > 0.6 else '🟡 Moderado' if ultimo['Stress_Macro'] > 0.3 else '🟢 Calmo'})"
     )
     print(
         f"\n✅ Panel: {panel.shape[0]} meses | "
@@ -145,34 +158,21 @@ def calcular_retornos_reales(panel, activos):
 # ============================================================
 
 
-def optimizar_portafolio(ret_real, panel, perfil, risk_free, inversion_inicial, tickers_fijos=None):
+def optimizar_portafolio(
+    ret_real, panel, perfil, risk_free, inversion_inicial, tickers_fijos=None
+):
     print(f"\n🧠 Optimizando portafolio {perfil.upper()}...")
 
     rf = risk_free["Risk_Free"].iloc[-1] / 100
-    
+
     from recolector import CRIPTO, TICKER_SECTOR, ACTIVOS_POR_SECTOR
+
     cripto = CRIPTO
-    tech_volatil = list(set(ACTIVOS_POR_SECTOR.get("Technology", []) + cripto + ["QQQ", "XLK"]))
-    defensivos = ["GLD", "TLT", "KO", "WMT", "JNJ"]
-    agresivos_macro = ["NVDA", "MSFT", "GOOGL", "AMZN", "AAPL"]
+    tech_volatil = list(
+        set(ACTIVOS_POR_SECTOR.get("Technology", []) + cripto + ["QQQ", "XLK"])
+    )
 
-    spread_inflacion = panel["Spread_Inflacion"].iloc[-1]
-    trm_momentum = panel["TRM_Momentum"].iloc[-1]
-    regimen = panel["Regimen_Tasas"].iloc[-1]
-
-    def ajustar_media(media, regimen, spread, trm_mom):
-        media_ajustada = media.copy()
-        for activo in media.index:
-            if regimen == 1:
-                if activo in defensivos:
-                    media_ajustada[activo] *= 1.10
-                elif activo in agresivos_macro:
-                    media_ajustada[activo] *= 0.92
-            if spread > 3:
-                media_ajustada[activo] *= 1.05
-            if trm_mom > 0.02:
-                media_ajustada[activo] *= 1.03
-        return media_ajustada
+    stress = panel["Stress_Macro"].iloc[-1]
 
     # Excluir criptos en conservador
     if perfil == "conservador":
@@ -199,10 +199,14 @@ def optimizar_portafolio(ret_real, panel, perfil, risk_free, inversion_inicial, 
                 if corr_matrix.loc[a1, a2] > 0.85:
                     if sharpe_simple[a1] >= sharpe_simple[a2]:
                         eliminados.append(a2)
-                        print(f"   ⚠️  {a2} eliminado — correlación {corr_matrix.loc[a1,a2]:.2f} con {a1}")
+                        print(
+                            f"   ⚠️  {a2} eliminado — correlación {corr_matrix.loc[a1,a2]:.2f} con {a1}"
+                        )
                     else:
                         eliminados.append(a1)
-                        print(f"   ⚠️  {a1} eliminado — correlación {corr_matrix.loc[a1,a2]:.2f} con {a2}")
+                        print(
+                            f"   ⚠️  {a1} eliminado — correlación {corr_matrix.loc[a1,a2]:.2f} con {a2}"
+                        )
 
         activos_limpios = [a for a in activos_unicos if a not in eliminados]
         ret_real = ret_real[activos_limpios]
@@ -221,7 +225,9 @@ def optimizar_portafolio(ret_real, panel, perfil, risk_free, inversion_inicial, 
             + (retorno_p3 > 0).astype(int)
         )
         activos_consistentes = consistencia[consistencia >= 2].index.tolist()
-        print(f"   Activos que pasaron filtro de consistencia: {len(activos_consistentes)}")
+        print(
+            f"   Activos que pasaron filtro de consistencia: {len(activos_consistentes)}"
+        )
 
         if len(activos_consistentes) < 3:
             activos_consistentes = ret_real.columns.tolist()
@@ -233,47 +239,51 @@ def optimizar_portafolio(ret_real, panel, perfil, risk_free, inversion_inicial, 
         vol_f = ret_filtrado.std() * np.sqrt(12)
         sharpe_f = (media_f - rf) / vol_f
 
-        sector_map = universo.set_index("ticker")["sector"]
+        sector_map = pd.Series(TICKER_SECTOR)
         sharpe_df = sharpe_f.to_frame("sharpe")
         sharpe_df["sector"] = sharpe_df.index.map(sector_map).fillna("Otro")
-        candidatos = sharpe_df.sort_values("sharpe", ascending=False).groupby("sector").head(2)
+        candidatos = (
+            sharpe_df.sort_values("sharpe", ascending=False).groupby("sector").head(2)
+        )
         top_8 = candidatos["sharpe"].nlargest(8).index.tolist()
 
         ret_top = ret_real[top_8]
         print(f"   Top 8 seleccionados: {top_8}")
 
     # Optimización
+    lw_cov = LedoitWolf().fit(ret_top).covariance_
+    cov = pd.DataFrame(lw_cov, index=ret_top.columns, columns=ret_top.columns) * 12
+    n = len(top_8)
+
+    LAMBDAS = {"conservador": 0.0, "moderado": 0.7, "agresivo": 1.5}
+    PESO_MAX = {"conservador": 0.25, "moderado": 0.30, "agresivo": 0.35}
+    LAMBDA = LAMBDAS.get(perfil, 1.0)
+
+    # Tactical asset allocation: estrés alto → portafolio más conservador
+    LAMBDA_efectivo = LAMBDA * (1 - stress * 0.5)
+    print(
+        f"   📊 Macro stress {stress:.2f} → LAMBDA {LAMBDA:.2f} → {LAMBDA_efectivo:.2f}"
+    )
+
+    peso_max = PESO_MAX.get(perfil, 0.30)
+    peso_min = 0.05
+
     media = ret_top.mean() * 12
-    cov = ret_top.cov() * 12
-    n = len(media)
-    media = ajustar_media(media, regimen, spread_inflacion, trm_momentum)
+    media_shrunk = 0.5 * media + 0.5 * media.mean()
+
+    def objetivo(w):
+        vol = np.sqrt(np.dot(w.T, np.dot(cov, w)))
+        ret = np.sum(media_shrunk * w)
+        return vol - LAMBDA_efectivo * ret
+
+    restricciones = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}]
 
     if perfil == "conservador":
-        peso_max = 0.25
-        peso_min = 0.05
-
-        def objetivo(w):
-            return np.sqrt(np.dot(w.T, np.dot(cov, w)))
-
         idx_tech = [i for i, a in enumerate(top_8) if a in tech_volatil]
         if idx_tech:
-            idx_fijo = list(idx_tech)
-            restricciones = [
-                {"type": "eq", "fun": lambda w: np.sum(w) - 1},
-                {"type": "ineq", "fun": lambda w, idx=idx_fijo: 0.20 - np.sum(w[idx])},
-            ]
-        else:
-            restricciones = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}]
-    else:
-        peso_max = 0.30
-        peso_min = 0.05
-
-        def objetivo(w):
-            ret_p = np.sum(media * w)
-            vol_p = np.sqrt(np.dot(w.T, np.dot(cov, w)))
-            return -(ret_p - rf) / vol_p + 0.3 * np.sum(w**2)
-
-        restricciones = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}]
+            restricciones.append(
+                {"type": "ineq", "fun": lambda w, idx=idx_tech: 0.20 - np.sum(w[idx])}
+            )
 
     limites = [(peso_min, peso_max)] * n
     np.random.seed(42)
@@ -395,6 +405,7 @@ def proyectar_con_dca(
 # PASO 6 — REPORTE FINAL
 # ============================================================
 
+
 def calcular_datos_reporte(
     pesos,
     inversion_inicial,
@@ -421,27 +432,54 @@ def calcular_datos_reporte(
     proyecciones = []
     for años in años_proyeccion:
         sin_dca, con_dca, cdt_real, cdt_real_dca = proyectar_con_dca(
-            ret_port, inversion_inicial, aporte_periodico,
-            frecuencia_meses, años, inflacion_col, tasa_cdt,
+            ret_port,
+            inversion_inicial,
+            aporte_periodico,
+            frecuencia_meses,
+            años,
+            inflacion_col,
+            tasa_cdt,
         )
         n_aportes = (años * 12 // frecuencia_meses) if aporte_periodico > 0 else 0
         total_aportado = inversion_inicial + (aporte_periodico * n_aportes)
 
-        proyecciones.append({
-            "anios": años,
-            "total_aportado": round(total_aportado, 0),
-            "sin_dca": {"pesimista": round(sin_dca[0], 0), "base": round(sin_dca[1], 0), "optimista": round(sin_dca[2], 0)},
-            "con_dca": {"pesimista": round(con_dca[0], 0), "base": round(con_dca[1], 0), "optimista": round(con_dca[2], 0)} if aporte_periodico > 0 else None,
-            "cdt_real": round(cdt_real, 0),
-            "cdt_real_dca": round(cdt_real_dca, 0) if aporte_periodico > 0 else None,
-            "ventaja_vs_cdt": round(sin_dca[1] - cdt_real, 0),
-            "ventaja_dca_vs_cdt": round(con_dca[1] - cdt_real_dca, 0) if aporte_periodico > 0 else None,
-        })
+        proyecciones.append(
+            {
+                "anios": años,
+                "total_aportado": round(total_aportado, 0),
+                "sin_dca": {
+                    "pesimista": round(sin_dca[0], 0),
+                    "base": round(sin_dca[1], 0),
+                    "optimista": round(sin_dca[2], 0),
+                },
+                "con_dca": (
+                    {
+                        "pesimista": round(con_dca[0], 0),
+                        "base": round(con_dca[1], 0),
+                        "optimista": round(con_dca[2], 0),
+                    }
+                    if aporte_periodico > 0
+                    else None
+                ),
+                "cdt_real": round(cdt_real, 0),
+                "cdt_real_dca": (
+                    round(cdt_real_dca, 0) if aporte_periodico > 0 else None
+                ),
+                "ventaja_vs_cdt": round(sin_dca[1] - cdt_real, 0),
+                "ventaja_dca_vs_cdt": (
+                    round(con_dca[1] - cdt_real_dca, 0)
+                    if aporte_periodico > 0
+                    else None
+                ),
+            }
+        )
 
     return {
         "perfil": perfil,
         "horizonte": horizonte,
-        "composicion": {a: round(float(p), 4) for a, p in pesos.sort_values(ascending=False).items()},
+        "composicion": {
+            a: round(float(p), 4) for a, p in pesos.sort_values(ascending=False).items()
+        },
         "metricas": {
             "retorno_anual": round(ret_anual * 100, 2),
             "volatilidad": round(vol_anual * 100, 2),
@@ -455,6 +493,7 @@ def calcular_datos_reporte(
         "frecuencia_meses": frecuencia_meses,
         "proyecciones": proyecciones,
     }
+
 
 def generar_reporte(
     pesos,
@@ -470,10 +509,16 @@ def generar_reporte(
 ):
     # Un solo lugar calcula: reusa calcular_datos_reporte
     d = calcular_datos_reporte(
-        pesos=pesos, inversion_inicial=inversion_inicial, ret_real=ret_real,
-        perfil=perfil, horizonte=horizonte, risk_free=risk_free,
-        inflacion_col=inflacion_col, tasa_cdt=tasa_cdt,
-        aporte_periodico=aporte_periodico, frecuencia_meses=frecuencia_meses,
+        pesos=pesos,
+        inversion_inicial=inversion_inicial,
+        ret_real=ret_real,
+        perfil=perfil,
+        horizonte=horizonte,
+        risk_free=risk_free,
+        inflacion_col=inflacion_col,
+        tasa_cdt=tasa_cdt,
+        aporte_periodico=aporte_periodico,
+        frecuencia_meses=frecuencia_meses,
     )
     m = d["metricas"]
     freq_texto = {1: "mensual", 3: "trimestral", 12: "anual"}
@@ -522,20 +567,27 @@ def generar_reporte(
             )
         print(f"   {'CDT (referencia)':<28} {'':>12} ${p['cdt_real']:>10,.0f} {'':>12}")
         if aporte_periodico > 0 and p["cdt_real_dca"] is not None:
-            print(f"   {'CDT + aportes':<28} {'':>12} ${p['cdt_real_dca']:>10,.0f} {'':>12}")
+            print(
+                f"   {'CDT + aportes':<28} {'':>12} ${p['cdt_real_dca']:>10,.0f} {'':>12}"
+            )
         print(f"   {'─'*60}")
         print(f"   💡 Ventaja portafolio vs CDT (base): ${p['ventaja_vs_cdt']:>10,.0f}")
         if aporte_periodico > 0 and p["ventaja_dca_vs_cdt"] is not None:
-            print(f"   💡 Ventaja DCA vs CDT+aportes (base): ${p['ventaja_dca_vs_cdt']:>10,.0f}")
+            print(
+                f"   💡 Ventaja DCA vs CDT+aportes (base): ${p['ventaja_dca_vs_cdt']:>10,.0f}"
+            )
 
     # Guardar reporte
     fecha = datetime.now().strftime("%Y%m%d")
     archivo = f"{CARPETA_REPORTES}/reporte_{perfil}_{fecha}.csv"
-    pd.DataFrame({
-        "Activo": list(d["composicion"].keys()),
-        "Peso_%": [round(v * 100, 2) for v in d["composicion"].values()],
-    }).to_csv(archivo, index=False)
+    pd.DataFrame(
+        {
+            "Activo": list(d["composicion"].keys()),
+            "Peso_%": [round(v * 100, 2) for v in d["composicion"].values()],
+        }
+    ).to_csv(archivo, index=False)
     print(f"\n💾 Reporte guardado: {archivo}")
+
 
 # ============================================================
 # EJECUCIÓN PRINCIPAL
@@ -549,9 +601,9 @@ if __name__ == "__main__":
 
     # ── ACTUALIZAR DATOS ANTES DE ANALIZAR ──
     print("\n🔄 Actualizando datos del mercado...")
-    import subprocess
+    from recolector import correr_todo
 
-    subprocess.run(["python", "recolector.py"], check=False)
+    correr_todo()
     print("✅ Datos actualizados.\n")
 
     # ── LEER PORTAFOLIO ACTIVO ──
@@ -566,17 +618,9 @@ if __name__ == "__main__":
     perfil_activo = portafolio_activo["perfil"]
     nombre = portafolio_activo["nombre"]
     propietario = portafolio_activo["propietario"]
-    archivo = (
-        portafolio_activo.get("archivo")
-        or nombre.lower()
-        .replace(" ", "_")
-        .replace("á", "a")
-        .replace("é", "e")
-        .replace("í", "i")
-        .replace("ó", "o")
-        .replace("ú", "u")
-        + ".json"
-    )
+    from gestor_portafolio import _slug
+
+    archivo = portafolio_activo.get("archivo") or f"{_slug(nombre)}.json"
 
     print(f"\n📋 Portafolio activo: {nombre} ({perfil_activo}) — {propietario}")
 
@@ -617,15 +661,11 @@ if __name__ == "__main__":
 
     # ── CARGAR DATOS ──
     precios, trm, inf_usa, inf_col, risk_free, tasa_cdt = cargar_datos()
-    activos = [c for c in precios.columns if c not in ["JPMV", "META"]]
+    activos = list(precios.columns)
     panel = construir_panel(precios, trm, inf_usa, inf_col, risk_free)
     ret_real = calcular_retornos_reales(panel, activos)
 
-    inflacion_col_actual = float(
-        pd.read_parquet(f"{CARPETA_MACRO}/inflacion_col.parquet")["Inflacion_COL"].iloc[
-            -1
-        ]
-    )
+    inflacion_col_actual = float(inf_col["Inflacion_COL"].iloc[-1])
 
     # ── OPTIMIZAR SOLO EL PERFIL ACTIVO ──
     horizonte = 5 if perfil_activo == "conservador" else 10
