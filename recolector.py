@@ -67,6 +67,10 @@ TICKER_SECTOR.update({t: "Crypto" for t in CRIPTO})
 
 ACTIVOS = sorted(set(TICKER_SECTOR.keys()))
 
+# Umbral de días de historia para considerar un ticker "ya establecido".
+# Debajo de esto se trata como nuevo y se le baja historia completa.
+UMBRAL_HISTORIA_SUFICIENTE = 200
+
 
 def _esta_fresco(archivo, dias=1):
     if not os.path.exists(archivo):
@@ -112,29 +116,9 @@ def registrar(mensaje, tipo="INFO"):
 # ============================================================
 
 
-def recolectar_precios(forzar=False, dias=1, chunk=80):
-    archivo = os.path.join(CARPETA_PRECIOS, "precios.parquet")
-
-    if not forzar and _esta_fresco(archivo, dias):
-        registrar("Precios frescos (ya descargados hoy) — omito descarga.", "INFO")
-        return
-
-    registrar("Iniciando descarga de precios...")
-    tickers = ACTIVOS
-
-    if os.path.exists(archivo):
-        df_existente = pd.read_parquet(archivo)
-        ultima_fecha = df_existente.index.max()
-        inicio = ultima_fecha - timedelta(days=1)
-        registrar(
-            f"Datos existentes hasta {ultima_fecha.date()}. Descargando desde {inicio.date()}..."
-        )
-    else:
-        df_existente = pd.DataFrame()
-        inicio = datetime.now() - timedelta(days=365 * 10)
-        registrar("Primera descarga — obteniendo 10 años de historia...")
-
-    fin = datetime.now()
+def _descargar_lote(tickers, inicio, fin, chunk):
+    """Descarga una lista de tickers en lotes de tamaño `chunk`.
+    Devuelve una lista de DataFrames (uno por lote), lista para concatenar."""
     partes = []
     for i in range(0, len(tickers), chunk):
         lote = tickers[i : i + chunk]
@@ -146,8 +130,74 @@ def recolectar_precios(forzar=False, dias=1, chunk=80):
                 df = df.to_frame(lote[0])
             partes.append(df)
         except Exception as e:
-            registrar(f"❌ Lote {i // chunk + 1} falló: {e}", "ERROR")
+            registrar(f"❌ Lote falló ({lote[:3]}...): {e}", "ERROR")
         time.sleep(2)
+    return partes
+
+
+def recolectar_precios(forzar=False, dias=1, chunk=80):
+    """
+    Descarga precios distinguiendo entre:
+    - Tickers NUEVOS (no existían en el parquet, o existían pero con menos de
+      UMBRAL_HISTORIA_SUFICIENTE días de dato real — ej. quedaron a medias por
+      una corrida anterior fallida): reciben 10 años completos de historia.
+    - Tickers EXISTENTES (ya tenían historia suficiente): solo se actualizan
+      desde la última fecha disponible, para no re-descargar todo cada vez.
+
+    La fusión final usa combine_first() en vez de concat + drop_duplicates,
+    para que la actualización sea celda por celda y nunca borre accidentalmente
+    historia de un ticker que no se estaba actualizando en ese lote.
+    """
+    archivo = os.path.join(CARPETA_PRECIOS, "precios.parquet")
+
+    if not forzar and _esta_fresco(archivo, dias):
+        registrar("Precios frescos (ya descargados hoy) — omito descarga.", "INFO")
+        return
+
+    registrar("Iniciando descarga de precios...")
+    tickers = ACTIVOS
+    fin = datetime.now()
+
+    if os.path.exists(archivo):
+        df_existente = pd.read_parquet(archivo)
+    else:
+        df_existente = pd.DataFrame()
+
+    # --- Separar tickers nuevos de existentes, por ticker, no por archivo global ---
+    if not df_existente.empty:
+        tickers_existentes = [
+            t
+            for t in tickers
+            if t in df_existente.columns
+            and df_existente[t].notna().sum() >= UMBRAL_HISTORIA_SUFICIENTE
+        ]
+    else:
+        tickers_existentes = []
+
+    tickers_nuevos = [t for t in tickers if t not in tickers_existentes]
+
+    partes = []
+
+    # --- Tickers nuevos: historia completa (10 años) ---
+    if tickers_nuevos:
+        registrar(
+            f"Tickers nuevos detectados ({len(tickers_nuevos)}): "
+            f"{tickers_nuevos} — descargando 10 años de historia..."
+        )
+        inicio_nuevos = fin - timedelta(days=365 * 10)
+        partes += _descargar_lote(tickers_nuevos, inicio_nuevos, fin, chunk)
+    else:
+        registrar("No hay tickers nuevos por descargar.")
+
+    # --- Tickers existentes: solo incremental desde la última fecha ---
+    if tickers_existentes:
+        ultima_fecha = df_existente[tickers_existentes].dropna(how="all").index.max()
+        inicio_existentes = ultima_fecha - timedelta(days=1)
+        registrar(
+            f"Actualizando {len(tickers_existentes)} tickers existentes "
+            f"desde {inicio_existentes.date()}..."
+        )
+        partes += _descargar_lote(tickers_existentes, inicio_existentes, fin, chunk)
 
     if not partes:
         registrar("❌ No se pudo descargar ningún lote.", "ERROR")
@@ -161,16 +211,18 @@ def recolectar_precios(forzar=False, dias=1, chunk=80):
         registrar("No hay datos nuevos hoy (mercado cerrado o fin de semana).", "AVISO")
         return
 
+    # --- Fusión celda por celda: df_nuevo manda, df_existente rellena huecos ---
     if not df_existente.empty:
-        df_final = pd.concat([df_existente, df_nuevo])
-        df_final = df_final[~df_final.index.duplicated(keep="last")]
+        df_final = df_nuevo.combine_first(df_existente)
     else:
         df_final = df_nuevo
 
     df_final.sort_index(inplace=True)
     df_final.to_parquet(archivo)
     registrar(
-        f"✅ Precios guardados. {len(df_nuevo)} días nuevos. Total: {len(df_final)} días."
+        f"✅ Precios guardados. {len(tickers_nuevos)} tickers nuevos con historia completa, "
+        f"{len(tickers_existentes)} actualizados. Total: {len(df_final)} días, "
+        f"{len(df_final.columns)} activos."
     )
 
 
