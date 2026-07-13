@@ -11,3 +11,5 @@ scipy
 anthropic
 python-dotenv
 pytz
+google-api-python-client
+google-auth
