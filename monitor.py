@@ -42,6 +42,11 @@ FINNHUB_KEY = os.environ.get("FINNHUB_API_KEY", "")
 UMBRAL_ENTRADA = 6.5
 UMBRAL_VIGILAR = 4.5
 DIAS_SIN_SENAL_MAX = 5
+K_BOLLINGER = (
+    2.0  # ancho de la banda inferior (σ). Subir = triggers más profundos/raros
+)
+PERSIST_POLLS = 3  # polls consecutivos bajo el rango antes de alertar (~30s)
+REBOTE_MIN = 0.005  # rebote mínimo desde el mínimo intradía antes de alertar (0.5%)
 
 COINGECKO_MAP = {
     "BTC-USD": "bitcoin",
@@ -281,6 +286,30 @@ def yfinance_historico(ticker, dias=90):
 
 
 # ─────────────────────────────────────────────────────────────
+# INDICADORES TÉCNICOS
+# ─────────────────────────────────────────────────────────────
+
+
+def _macd_bollinger(close, k=K_BOLLINGER):
+    """Banda inferior de Bollinger y dirección del histograma MACD.
+
+    Devuelve (banda_inferior, histograma_actual, histograma_subiendo).
+    - banda_inferior = MA20 - k·σ20  → trigger de entrada adaptado a la
+      volatilidad de cada activo (BTC no dispara con 2%, AAPL sí).
+    - histograma_subiendo = el momentum ya está girando al alza (MACD hist
+      del último día > el del día anterior). Confirmación anti-cuchillo.
+    """
+    ma20 = close.rolling(20).mean().iloc[-1]
+    std20 = close.rolling(20).std().iloc[-1]
+    banda_inf = float(ma20 - k * std20)
+    ema12 = close.ewm(span=12, adjust=False).mean()
+    ema26 = close.ewm(span=26, adjust=False).mean()
+    macd_line = ema12 - ema26
+    hist = macd_line - macd_line.ewm(span=9, adjust=False).mean()
+    return banda_inf, float(hist.iloc[-1]), bool(hist.iloc[-1] > hist.iloc[-2])
+
+
+# ─────────────────────────────────────────────────────────────
 # PRECÁLCULO DE RANGOS — corre UNA VEZ a las 8am
 # ─────────────────────────────────────────────────────────────
 
@@ -372,21 +401,30 @@ def precalcular_rangos(archivo, portafolio):
                 score_base += 0.5
             score_base = round(score_base, 1)
 
+            # ── Bollinger inferior + confirmación MACD ─────────
+            banda_inf, macd_hist, hist_subiendo = _macd_bollinger(close)
+
             # ── Rangos de precio ───────────────────────────────
-            # precio < MA20 suma +2.0 → ¿llega al umbral?
-            # precio < MA50 suma +1.0 → ¿llega al umbral?
-            puede_entrar = (score_base + 2.0) >= UMBRAL_ENTRADA
+            # ENTRAR exige score suficiente Y momentum girando (MACD).
+            # El trigger es la banda inferior de Bollinger — se adapta a la
+            # volatilidad de cada activo, no la MA20 fija.
+            # ponytail: MACD es un gate duro. Si te quedas sin señales,
+            # cambiar "and hist_subiendo" por sumar +0.5 al score_base.
+            puede_entrar = (score_base + 2.0) >= UMBRAL_ENTRADA and hist_subiendo
             puede_vigilar = (score_base + 1.0) >= UMBRAL_VIGILAR
 
-            rango_entrar = round(ma20, 2) if puede_entrar else None
+            rango_entrar = round(banda_inf, 2) if puede_entrar else None
             rango_vigilar = round(ma50, 2) if puede_vigilar else None
 
             rangos_hoy[ticker] = {
                 "ma20": round(ma20, 2),
                 "ma50": round(ma50, 2),
+                "banda_inf": round(banda_inf, 2),
                 "rsi": rsi,
                 "tendencia": tend,
                 "vol_ratio": vol_r,
+                "macd_hist": round(macd_hist, 4),
+                "hist_subiendo": hist_subiendo,
                 "score_base": score_base,
                 "rango_entrar": rango_entrar,
                 "rango_vigilar": rango_vigilar,
@@ -396,11 +434,12 @@ def precalcular_rangos(archivo, portafolio):
 
             # Log claro en Railway
             if puede_entrar:
-                estado_dia = f"🟢 puede ENTRAR si precio < ${rango_entrar}"
+                estado_dia = f"🟢 puede ENTRAR si precio < ${rango_entrar} (banda inf, momentum ↑)"
             elif puede_vigilar:
                 estado_dia = f"🟡 puede VIGILAR si precio < ${rango_vigilar}"
             else:
-                estado_dia = "⚪ NEUTRAL fijo hoy (score_base insuficiente)"
+                motivo = "momentum ↓" if not hist_subiendo else "score bajo"
+                estado_dia = f"⚪ NEUTRAL fijo hoy ({motivo})"
 
             print(f"    {ticker}: score_base={score_base} | RSI={rsi} | {estado_dia}")
 
@@ -452,6 +491,16 @@ def vigilar_precios(archivo, portafolio, rangos_del_dia, precios_cache=None):
     if "resultados_rt" not in estado:
         estado["resultados_rt"] = {}
 
+    # Reset de mínimos y persistencia al cambiar de día
+    if estado.get("dia_intradia") != hoy_str:
+        for k in [
+            k
+            for k in estado
+            if k.startswith(("min_intradia_", "persist_entrar_"))
+        ]:
+            del estado[k]
+        estado["dia_intradia"] = hoy_str
+
     for ticker, rango in rangos_del_dia["rangos"].items():
 
         # ── Solo precio — una petición a Finnhub ──────────────
@@ -463,6 +512,14 @@ def vigilar_precios(archivo, portafolio, rangos_del_dia, precios_cache=None):
         precio = float(quote["c"])
         cambio = float(quote.get("dp", 0))
 
+        # ── Mínimo intradía + rebote ──────────────────────────
+        # Mientras haga nuevos mínimos, NO alertamos (aún está cayendo).
+        min_key = f"min_intradia_{ticker}"
+        if estado.get(min_key) is None or precio < estado[min_key]:
+            estado[min_key] = precio
+        min_dia = estado[min_key]
+        rebote = (precio - min_dia) / min_dia if min_dia else 0.0
+
         # ── Determinar señal con rangos precalculados ──────────
         rango_entrar = rango.get("rango_entrar")
         rango_vigilar = rango.get("rango_vigilar")
@@ -473,6 +530,14 @@ def vigilar_precios(archivo, portafolio, rangos_del_dia, precios_cache=None):
             senal_actual = "VIGILAR"
         else:
             senal_actual = "NEUTRAL"
+
+        # ── Persistencia: N polls consecutivos en ENTRAR ──────
+        # Filtra ticks malos de Finnhub y flash-dips de un solo ciclo.
+        clave_persist = f"persist_entrar_{ticker}"
+        if senal_actual == "ENTRAR":
+            estado[clave_persist] = estado.get(clave_persist, 0) + 1
+        else:
+            estado[clave_persist] = 0
 
         # Score real con precio actual (para mostrar en display)
         score = rango["score_base"]
@@ -490,9 +555,12 @@ def vigilar_precios(archivo, portafolio, rangos_del_dia, precios_cache=None):
             "cambio_dia": round(cambio, 2),
             "ma20": rango["ma20"],
             "ma50": rango["ma50"],
+            "banda_inf": rango.get("banda_inf"),
             "rsi": rango["rsi"],
             "tendencia": rango["tendencia"],
             "vol_ratio": rango["vol_ratio"],
+            "macd_hist": rango.get("macd_hist"),
+            "hist_subiendo": rango.get("hist_subiendo"),
             "score_base": rango["score_base"],
             "score": score,
             "senal": senal_actual,
@@ -504,7 +572,12 @@ def vigilar_precios(archivo, portafolio, rangos_del_dia, precios_cache=None):
         }
 
         # ── Alertas — solo si la señal es ENTRAR ──────────────
-        if senal_actual == "ENTRAR" and chat_id:
+        if (
+            senal_actual == "ENTRAR"
+            and chat_id
+            and estado.get(clave_persist, 0) >= PERSIST_POLLS
+            and rebote >= REBOTE_MIN
+        ):
             dec = decision_usuario(estado, ticker)
 
             # Silenciar según decisión del usuario
@@ -519,22 +592,23 @@ def vigilar_precios(archivo, portafolio, rangos_del_dia, precios_cache=None):
                 ciclos = estado.get(clave, 0)
                 if ciclos >= 3:
                     continue
-                
+
                 ciclos += 1
                 estado[clave] = ciclos
-                
+
                 if ciclos >= 3:
                     print(
                         f"  🚫 Silenciando {ticker} por falta de respuesta tras 3 alertas"
                     )
                     continue
-                
 
             # Construir y enviar alerta
             msg = (
                 f"🟢 <b>SEÑAL DE ENTRADA — {ticker}</b>\n\n"
                 f"💵 Precio: <b>${precio:,.2f} USD</b> ({cambio:+.2f}% hoy)\n"
-                f"🎯 Cruzó el rango de entrada (&lt; ${rango_entrar:,.2f})\n\n"
+                f"🎯 Cruzó la banda inferior Bollinger (&lt; ${rango_entrar:,.2f})\n"
+                f"📉 Momentum MACD girando al alza ✓\n"
+                f"📈 Rebotó {rebote*100:.1f}% desde el mínimo de hoy (${min_dia:,.2f})\n\n"
                 f"📊 Score: <b>{score}/10</b> · RSI: {rango['rsi']} · "
                 f"Tendencia: {rango['tendencia']:+.1f}%\n"
                 f"📈 MA20: ${rango['ma20']:,.2f} · MA50: ${rango['ma50']:,.2f}"
@@ -890,9 +964,13 @@ def reporte_cierre(archivo, portafolio, estado):
     # Limpiar alertas del día
     estado["alertas_enviadas_hoy"] = {}
     estado["decisiones_usuario"] = {}
-    for k in [k for k in estado if k.startswith("ciclos_sin_respuesta_")]:
+    for k in [
+        k
+        for k in estado
+        if k.startswith(("ciclos_sin_respuesta_", "persist_entrar_", "min_intradia_"))
+    ]:
         del estado[k]
-        
+
     estado["reporte_cierre"] = msg_final
     estado["reporte_cierre_fecha"] = hora_colombia().strftime("%Y-%m-%d")
     estado["cierre_enviado_hoy"] = hora_colombia().strftime("%Y-%m-%d")
