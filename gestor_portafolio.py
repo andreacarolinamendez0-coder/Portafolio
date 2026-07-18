@@ -7,7 +7,8 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 logger = logging.getLogger(__name__)
 
-CARPETA_PORTAFOLIOS = "datos/portafolios"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CARPETA_PORTAFOLIOS = os.path.join(BASE_DIR, "datos", "portafolios")
 os.makedirs(CARPETA_PORTAFOLIOS, exist_ok=True)
 
 # ============================================================
@@ -35,6 +36,19 @@ def verify_password(stored_hash, password):
         return stored_hash == hash_password(password)
     return check_password_hash(stored_hash, password)
 
+def huella_password_hash(password_hash):
+    """Huella corta y estable del hash de una contraseña. Usada para invalidar
+    tokens de reset: al cambiar la clave cambia el hash, y con él la huella.
+    """
+    return hashlib.sha256(password_hash.encode()).hexdigest()[:16]
+
+
+def get_usuario_por_email(email):
+    """Busca un usuario por email. Devuelve (username, usuario) o (None, None)."""
+    for username, u in _leer_usuarios().items():
+        if u.get("email") == email:
+            return username, u
+    return None, None
 
 def _leer(ruta):
     with open(ruta, "r", encoding="utf-8") as f:
@@ -234,7 +248,7 @@ def guardar_registro_diario(nombre_archivo, registro):
 # GESTIÓN DE USUARIOS (NUEVO)
 # ============================================================
 
-ARCHIVO_USUARIOS = "datos/usuarios.json"
+ARCHIVO_USUARIOS = os.path.join(BASE_DIR, "datos", "usuarios.json")
 
 
 def _leer_usuarios():
@@ -274,6 +288,7 @@ def registrar_usuario(username, email, password, telegram_chat_id=""):
         "telegram_chat_id": telegram_chat_id,
         "fecha_registro": datetime.now().strftime("%Y-%m-%d"),
         "es_admin": False,
+        "email_verificado": False,
     }
     _escribir_usuarios(usuarios)
     return True
@@ -320,7 +335,7 @@ def login_usuario(email, password):
         if _is_legacy_hash(u["password_hash"]):
             usuarios[usuario_key]["password_hash"] = hash_password_secure(password)
         _escribir_usuarios(usuarios)
-        return u
+        return usuarios[usuario_key]
 
     # Contraseña incorrecta — sumar intento
     intentos = u.get("intentos_fallidos", 0) + 1
@@ -436,7 +451,7 @@ def crear_portafolio_para_usuario(
 # LOGS DE ACTIVIDAD (NUEVO)
 # ============================================================
 
-ARCHIVO_LOGS_ACTIVIDAD = "datos/logs_actividad.json"
+ARCHIVO_LOGS_ACTIVIDAD = os.path.join(BASE_DIR, "datos", "logs_actividad.json")
 
 
 def _leer_logs():

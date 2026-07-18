@@ -132,17 +132,16 @@ def _layout(titulo: str, cuerpo: str, cta_texto: str = "", cta_url: str = "") ->
 </html>"""
 
 
-def enviar_bienvenida(to: str, nombre: str) -> bool:
+def enviar_bienvenida(to: str, nombre: str, activar_url: str = "", horas: int = 8) -> bool:
     app_name = os.getenv("APP_NAME", "Portafolio")
-    app_url = os.getenv("APP_URL", "")
     cuerpo = f"""
     <p>Hola {nombre}, ¡bienvenido/a a {app_name}!</p>
-    <p>Tu cuenta ya está activa. Puedes empezar a construir tu portafolio,
-       configurar alertas de precio y recibir tu reporte mensual.</p>"""
+    <p>Solo falta un paso: confirma que este correo es tuyo con el botón de abajo.</p>
+    <p style="font-size:13px;color:#5f6368;">El enlace vence en {horas} horas.</p>"""
     return send_email(
         to,
-        f"Bienvenido/a a {app_name}",
-        _layout(f"Bienvenido/a a {app_name}", cuerpo, "Ir a la app", app_url),
+        f"Confirma tu cuenta en {app_name}",
+        _layout(f"Bienvenido/a a {app_name}", cuerpo, "Activar mi cuenta", activar_url),
     )
 
 

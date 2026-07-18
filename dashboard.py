@@ -11,6 +11,7 @@ import yfinance as yf
 from zoneinfo import ZoneInfo
 import anthropic
 import warnings
+from html import escape
 
 warnings.filterwarnings("ignore")
 from styles import CSS
@@ -36,7 +37,12 @@ from gestor_portafolio import (
     hash_password_secure,
     verify_password,
     _slug,
+    get_usuario_por_email,
+    huella_password_hash,
 )
+
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
+from emails import enviar_bienvenida, enviar_reset_password
 
 TZ_NY = ZoneInfo("America/New_York")
 TZ_COL = ZoneInfo("America/Bogota")
@@ -294,40 +300,6 @@ def calcular_tiempo_real(portafolio):
             (total_val - total_inv) / total_inv * 100 if total_inv > 0 else 0, 2
         ),
     }
-
-
-def enviar_notificacion(portafolio, asunto, mensaje):
-    if portafolio.get("telegram_chat_id"):
-        try:
-            requests.post(
-                f"https://api.telegram.org/bot{os.environ.get('TELEGRAM_BOT_TOKEN', '')}/sendMessage",
-                json={
-                    "chat_id": portafolio["telegram_chat_id"],
-                    "text": mensaje,
-                    "parse_mode": "HTML",
-                },
-                timeout=10,
-            )
-        except Exception as e:
-            print(f"Telegram notification failed: {e}")
-    if portafolio.get("email"):
-        try:
-            import smtplib
-            from email.mime.multipart import MIMEMultipart
-            from email.mime.text import MIMEText
-
-            gu, gp = os.environ.get("GMAIL_USER", ""), os.environ.get("GMAIL_PASS", "")
-            if gu and gp:
-                msg = MIMEMultipart()
-                msg["From"] = gu
-                msg["To"] = portafolio["email"]
-                msg["Subject"] = asunto
-                msg.attach(MIMEText(mensaje, "plain"))
-                with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
-                    s.login(gu, gp)
-                    s.send_message(msg)
-        except Exception as e:
-            print(f"Email notification failed: {e}")
 
 
 def _sistema_analista(portafolio, composicion, tiene_inv):
@@ -1151,8 +1123,6 @@ def register():
         else:
             resultado = registrar_usuario(username, email, password, telegram)
             if resultado is True:
-                session["username"] = username
-                session["es_admin"] = False
                 session.permanent = True
                 ip, dispositivo = _request_meta()
                 registrar_actividad(
@@ -1163,44 +1133,18 @@ def register():
                     ip=ip,
                     dispositivo=dispositivo,
                 )
-                # Email de bienvenida
-                try:
-                    import smtplib
-                    from email.mime.multipart import MIMEMultipart
-                    from email.mime.text import MIMEText
-
-                    gmail_user = os.environ.get("GMAIL_USER", "")
-                    gmail_pass = os.environ.get("GMAIL_PASS", "")
-                    if gmail_user and gmail_pass and email:
-                        msg = MIMEMultipart("alternative")
-                        msg["From"] = f"Sistema de Portafolio <{gmail_user}>"
-                        msg["To"] = email
-                        msg["Subject"] = "¡Bienvenido al Sistema de Portafolio!"
-                        html = f"""
-                        <div style="font-family:sans-serif;max-width:500px;margin:0 auto;padding:32px;background:#0a0c10;color:#e8eaf2;border-radius:16px">
-                            <h1 style="font-size:1.5rem;margin-bottom:8px">👋 Hola, {username}</h1>
-                            <p style="color:#8892b0;margin-bottom:24px">Tu cuenta ha sido creada exitosamente.</p>
-                            <div style="background:#1d2235;border-radius:12px;padding:20px;margin-bottom:24px">
-                                <p style="margin:0 0 8px"><strong>Usuario:</strong> {username}</p>
-                                <p style="margin:0"><strong>Email:</strong> {email}</p>
-                            </div>
-                            <p style="color:#8892b0;font-size:13px">
-                                Ya puedes crear tus portafolios, activar el monitor de mercado
-                                y usar el analista IA para optimizar tus inversiones.
-                            </p>
-                            <p style="color:#4a5578;font-size:11px;margin-top:24px">
-                                Sistema de Portafolio de Inversión
-                            </p>
-                        </div>
-                        """
-                        msg.attach(MIMEText(html, "html"))
-                        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
-                            server.login(gmail_user, gmail_pass)
-                            server.send_message(msg)
-                        print(f"✅ Email bienvenida enviado a {email}")
-                except Exception as e:
-                    print(f"❌ Error enviando email bienvenida: {e}")
-                return redirect(url_for("mis_portafolios"))
+                _enviar_activacion(username, email)
+                contenido = (
+                    '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px">'
+                    '<div style="width:100%;max-width:380px;text-align:center">'
+                    '<div style="font-size:1.8rem;margin-bottom:14px">' + LOGO_LG + "</div>"
+                    '<div class="alert alert-success">Cuenta creada. Te enviamos un correo para activarla — '
+                    "revisa tu bandeja (y el spam).</div>"
+                    '<a href="/login" class="btn btn-primary" style="border-radius:12px;font-size:0.9rem;'
+                    'padding:12px;display:block;text-decoration:none;margin-top:14px">Ir a iniciar sesión</a>'
+                    "</div></div>"
+                )
+                return pagina("Cuenta creada", contenido)
             else:
                 error = resultado
     err_html = f'<div class="alert alert-error">{error}</div>' if error else ""
@@ -1253,8 +1197,11 @@ def login():
         password = request.form.get("password", "")
         usuario = login_usuario(email, password)
         ip, dispositivo = _request_meta()
-        if usuario and not usuario.get("bloqueado"):
+        if usuario and not usuario.get("bloqueado") and not usuario.get("email_verificado", True):
+            error = "Activa tu cuenta con el enlace que te enviamos por correo."
+        elif usuario and not usuario.get("bloqueado"):
             session["username"] = usuario["username"]
+            session["fp"] = huella_password_hash(usuario["password_hash"])
             session["es_admin"] = usuario.get("es_admin", False)
             session.permanent = True
             registrar_actividad(
@@ -1315,12 +1262,92 @@ def login():
         "</div>"
         '<button type="submit" class="btn btn-primary" style="border-radius:12px;font-size:0.9rem;padding:12px">Entrar</button>'
         "</form></div>"
-        '<div style="text-align:center;margin-top:18px">'
+        '<div style="text-align:center;margin-top:18px;display:flex;flex-direction:column;gap:8px">'
+        '<a href="/forgot-password" style="color:#6e6e73;font-size:0.78rem;text-decoration:none">¿Olvidaste tu contraseña?</a>'
         '<a href="/register" style="color:#6e6e73;font-size:0.78rem;text-decoration:none">¿No tienes cuenta? Regístrate</a>'
         "</div></div></div>"
     )
     return pagina("Iniciar sesión", contenido)
 
+@app.route("/forgot-password", methods=["GET", "POST"])
+def forgot_password():
+    enviado = False
+    if request.method == "POST":
+        _solicitar_reset(request.form.get("email", "").strip())
+        enviado = True
+
+    msg_html = (
+        '<div class="alert alert-success">Si ese email tiene cuenta, te enviamos un enlace. '
+        "Revisa tu correo (y la carpeta de spam).</div>"
+        if enviado
+        else ""
+    )
+    contenido = (
+        '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px">'
+        '<div style="width:100%;max-width:340px">'
+        '<div style="text-align:center;margin-bottom:28px">'
+        '<div style="font-size:1.8rem;margin-bottom:10px">' + LOGO_LG + "</div>"
+        '<h1 style="font-size:1.3rem;margin-bottom:4px;letter-spacing:-0.02em;color:#f5f5f7">Recuperar contraseña</h1>'
+        '<p style="color:#6e6e73;font-size:0.82rem;margin:0">Te enviamos un enlace a tu correo</p></div>'
+        + msg_html
+        + '<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.07);'
+        'border-radius:18px;padding:22px;backdrop-filter:blur(20px)">'
+        '<form method="POST">'
+        '<div style="margin-bottom:14px">'
+        '<label style="display:block;font-size:0.75rem;color:#6e6e73;letter-spacing:0.04em;margin-bottom:8px">Email</label>'
+        '<input type="email" name="email" class="form-input" placeholder="tu@email.com" autofocus required>'
+        "</div>"
+        '<button type="submit" class="btn btn-primary" style="border-radius:12px;font-size:0.9rem;padding:12px">Enviar enlace</button>'
+        "</form></div>"
+        '<div style="text-align:center;margin-top:18px">'
+        '<a href="/login" style="color:#6e6e73;font-size:0.78rem;text-decoration:none">Volver a iniciar sesión</a>'
+        "</div></div></div>"
+    )
+    return pagina("Recuperar contraseña", contenido)
+
+@app.route("/reset-password", methods=["GET", "POST"])
+def reset_password():
+    session.clear()
+    token = request.values.get("token", "").strip()
+    error = ""
+
+    if request.method == "POST":
+        error = _aplicar_reset(token, request.form.get("password", "").strip())
+        if not error:
+            contenido = (
+                '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px">'
+                '<div style="width:100%;max-width:340px;text-align:center">'
+                '<div style="font-size:1.8rem;margin-bottom:14px">' + LOGO_LG + "</div>"
+                '<div class="alert alert-success">Tu contraseña fue actualizada.</div>'
+                '<a href="/login" class="btn btn-primary" style="border-radius:12px;font-size:0.9rem;'
+                'padding:12px;display:block;text-decoration:none;margin-top:14px">Iniciar sesión</a>'
+                "</div></div>"
+            )
+            return pagina("Contraseña restablecida", contenido)
+
+    err_html = f'<div class="alert alert-error">{error}</div>' if error else ""
+    contenido = (
+        '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px">'
+        '<div style="width:100%;max-width:340px">'
+        '<div style="text-align:center;margin-bottom:28px">'
+        '<div style="font-size:1.8rem;margin-bottom:10px">' + LOGO_LG + "</div>"
+        '<h1 style="font-size:1.3rem;margin-bottom:4px;letter-spacing:-0.02em;color:#f5f5f7">Nueva contraseña</h1>'
+        '<p style="color:#6e6e73;font-size:0.82rem;margin:0">Mínimo 6 caracteres</p></div>'
+        + err_html
+        + '<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.07);'
+        'border-radius:18px;padding:22px;backdrop-filter:blur(20px)">'
+        '<form method="POST">'
+        # escape: el token viene de la URL y se refleja en la página → XSS si no se escapa
+        f'<input type="hidden" name="token" value="{escape(token)}">'
+        '<div style="margin-bottom:14px">'
+        '<label style="display:block;font-size:0.75rem;color:#6e6e73;letter-spacing:0.04em;margin-bottom:8px">Nueva contraseña</label>'
+        '<input type="password" name="password" class="form-input" placeholder="••••••••" autofocus required>'
+        "</div>"
+        '<button type="submit" class="btn btn-primary" style="border-radius:12px;font-size:0.9rem;padding:12px">Guardar contraseña</button>'
+        "</form></div>"
+        "</div></div>"
+    )
+    return pagina("Nueva contraseña", contenido)
 
 @app.route("/logout")
 def logout():
@@ -4107,10 +4134,8 @@ def api_auth_register():
         # registrar_usuario devuelve un string de error cuando falla
         return jsonify({"ok": False, "error": resultado}), 400
 
-    # Éxito: iniciar sesión igual que la ruta vieja
-    session["username"] = username
-    session["es_admin"] = False
-    session.permanent = True
+    # Éxito: enviar correo de activación y registrar actividad
+    _enviar_activacion(username, email)
     ip, dispositivo = _request_meta()
     registrar_actividad(
         "registro_nuevo",
@@ -4121,8 +4146,117 @@ def api_auth_register():
         dispositivo=dispositivo,
     )
 
-    return jsonify({"ok": True, "username": username})
+    return jsonify({"ok": True, "username": username, "requiere_activacion": True})
 
+ACTIVAR_MAX_AGE = 8 * 3600  # 8 horas
+
+
+def _serializer_activar():
+    return URLSafeTimedSerializer(app.secret_key, salt="activar-cuenta")
+
+
+def _enviar_activacion(username, email):
+    token = _serializer_activar().dumps(username)
+    app_url = os.environ.get("APP_URL", "").rstrip("/")
+    enviar_bienvenida(
+        email, username, f"{app_url}/activar?token={token}", ACTIVAR_MAX_AGE // 3600
+    )
+
+RESET_MAX_AGE = 900  # 15 minutos
+
+
+def _serializer_reset():
+    return URLSafeTimedSerializer(app.secret_key, salt="reset-password")
+
+
+def _solicitar_reset(email):
+    """Genera token y manda el correo. Silencioso si el email no existe."""
+    username, u = get_usuario_por_email(email)
+    if not username:
+        return
+    token = _serializer_reset().dumps(
+        {"u": username, "fp": huella_password_hash(u["password_hash"])}
+    )
+    app_url = os.environ.get("APP_URL", "").rstrip("/")
+    enviar_reset_password(
+        email, f"{app_url}/reset-password?token={token}", RESET_MAX_AGE // 60
+    )
+    ip, dispositivo = _request_meta()
+    registrar_actividad(
+        "reset_solicitado", username, email=email,
+        detalle="Solicitud de reset de contraseña", ip=ip, dispositivo=dispositivo,
+    )
+
+
+def _aplicar_reset(token, password):
+    """Aplica el reset. Devuelve None si ok, o el string de error."""
+    if len(password) < 6:
+        return "La contraseña debe tener al menos 6 caracteres."
+    try:
+        payload = _serializer_reset().loads(token, max_age=RESET_MAX_AGE)
+    except SignatureExpired:
+        return "El enlace venció. Solicita uno nuevo."
+    except BadSignature:
+        return "Enlace inválido."
+
+    username = payload.get("u", "")
+    u = get_usuario(username)
+    if not u or huella_password_hash(u["password_hash"]) != payload.get("fp"):
+        return "Este enlace ya fue usado. Solicita uno nuevo."
+
+    # Resetear también desbloquea: quien olvidó la clave suele haberse bloqueado intentando
+    actualizar_usuario(username, {
+        "password_hash": hash_password_secure(password),
+        "intentos_fallidos": 0,
+        "bloqueado_hasta": None,
+    })
+    ip, dispositivo = _request_meta()
+    registrar_actividad(
+        "reset_completado", username, email=u.get("email", ""),
+        detalle="Contraseña restablecida", ip=ip, dispositivo=dispositivo,
+    )
+    return None
+
+@app.before_request
+def _validar_sesion():
+    """La huella del hash viaja en la sesión: si la contraseña cambió, la sesión muere.
+    Es lo que hace que un reset expulse al atacante que ya tenía cookie."""
+    username = session.get("username")
+    if not username:
+        return
+    u = get_usuario(username)
+    if not u or session.get("fp") != huella_password_hash(u["password_hash"]):
+        session.clear()
+
+@app.route("/activar")
+def activar_cuenta():
+    session.clear()
+    try:
+        username = _serializer_activar().loads(
+            request.args.get("token", "").strip(), max_age=ACTIVAR_MAX_AGE
+        )
+    except SignatureExpired:
+        msg, clase = "El enlace de activación venció. Regístrate de nuevo o pide otro.", "alert-error"
+    except BadSignature:
+        msg, clase = "Enlace de activación inválido.", "alert-error"
+    else:
+        if get_usuario(username):
+            # Idempotente: activar dos veces no hace daño
+            actualizar_usuario(username, {"email_verificado": True})
+            msg, clase = "¡Cuenta activada! Ya puedes iniciar sesión.", "alert-success"
+        else:
+            msg, clase = "Esa cuenta ya no existe.", "alert-error"
+
+    contenido = (
+        '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px">'
+        '<div style="width:100%;max-width:340px;text-align:center">'
+        '<div style="font-size:1.8rem;margin-bottom:14px">' + LOGO_LG + "</div>"
+        f'<div class="alert {clase}">{msg}</div>'
+        '<a href="/login" class="btn btn-primary" style="border-radius:12px;font-size:0.9rem;'
+        'padding:12px;display:block;text-decoration:none;margin-top:14px">Ir a iniciar sesión</a>'
+        "</div></div>"
+    )
+    return pagina("Activar cuenta", contenido)
 
 @app.route("/api/auth/login", methods=["POST"])
 def api_auth_login():
@@ -4132,8 +4266,12 @@ def api_auth_login():
     usuario = login_usuario(email, password)
     ip, dispositivo = _request_meta()
 
-    if usuario and not usuario.get("bloqueado"):
+    if usuario and not usuario.get("bloqueado") and not usuario.get("email_verificado", True):
+        error = "Activa tu cuenta con el enlace que te enviamos por correo."
+        return jsonify({"ok": False, "error": error}), 403
+    elif usuario and not usuario.get("bloqueado"):
         session["username"] = usuario["username"]
+        session["fp"] = huella_password_hash(usuario["password_hash"])
         session["es_admin"] = usuario.get("es_admin", False)
         session.permanent = True
         registrar_actividad(
@@ -4267,6 +4405,23 @@ def api_auth_logout():
     session.clear()
     return jsonify({"ok": True})
 
+@app.route("/api/auth/forgot-password", methods=["POST"])
+def api_auth_forgot_password():
+    email = ((request.get_json(silent=True) or {}).get("email") or "").strip()
+    _solicitar_reset(email)
+    # Misma respuesta exista o no el email — no revelar qué correos están registrados
+    return jsonify({"ok": True})
+
+
+@app.route("/api/auth/reset-password", methods=["POST"])
+def api_auth_reset_password():
+    data = request.get_json(silent=True) or {}
+    error = _aplicar_reset(
+        (data.get("token") or "").strip(), (data.get("password") or "").strip()
+    )
+    if error:
+        return jsonify({"ok": False, "error": error}), 400
+    return jsonify({"ok": True})
 
 @app.route("/api/config/<archivo>", methods=["GET", "PUT"])
 def api_config(archivo):
