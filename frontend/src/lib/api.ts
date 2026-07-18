@@ -40,6 +40,12 @@ export const authRegister = (data: {
 export const authLogout = () =>
   apiFetch<{ ok: boolean }>("/api/auth/logout", { method: "POST" });
 
+export const authResetPassword = (token: string, password: string) =>
+  apiFetch<{ ok: boolean }>("/api/auth/reset-password", {
+    method: "POST",
+    body: JSON.stringify({ token, password }),
+  });
+
 // ── Portfolios ──────────────────────────────────────────────
 
 export interface PortafolioSummary {

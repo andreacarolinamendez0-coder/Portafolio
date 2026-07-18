@@ -48,7 +48,7 @@ export default function LoginPage() {
       const { portafolios } = await getPortafolios();
       if (portafolios.length === 0) {
         // Sin portafolios → crear el primero
-        router.push("/portafolios");
+        router.push("/bienvenida");
       } else {
         // Ir al último usado si existe y sigue válido, si no al primero
         const ultimo = typeof window !== "undefined" ? localStorage.getItem("ultimoPortafolio") : null;

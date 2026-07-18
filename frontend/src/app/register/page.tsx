@@ -2,17 +2,16 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { LogoMark } from "@/components/ui/logo";
 import { Button } from "@/components/ui/button";
 import { GlowCard } from "@/components/ui/spotlight-card";
 import { authRegister } from "@/lib/api";
 
 export default function RegisterPage() {
-  const router = useRouter();
   const [form, setForm]       = useState({ username: "", email: "", password: "", telegram: "" });
   const [error, setError]     = useState("");
   const [loading, setLoading] = useState(false);
+  const [sent, setSent]       = useState(false);
 
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm(f => ({ ...f, [k]: e.target.value }));
@@ -24,7 +23,7 @@ export default function RegisterPage() {
     setLoading(true);
     try {
       await authRegister(form);
-      router.push("/bienvenida");
+      setSent(true);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Error de conexión");
     } finally {
@@ -97,41 +96,58 @@ export default function RegisterPage() {
               <p style={{ color: "var(--text-3)", fontSize: "0.85rem", margin: "4px 0 0" }}>Es rápido y gratis</p>
             </div>
 
-            {error && (
-              <div style={{ background: "rgba(255,69,58,0.08)", border: "1px solid rgba(255,69,58,0.2)", borderRadius: 12, padding: "12px 16px", marginBottom: 16, color: "#ff6961", fontSize: "0.875rem" }}>
-                {error}
+            {sent ? (
+              <div style={{ textAlign: "center" }}>
+                <div style={{ fontSize: 40, marginBottom: 12 }}>📬</div>
+                <h2 style={{ fontSize: "1.4rem", fontWeight: 600, letterSpacing: "-0.02em", margin: 0 }}>Revisa tu correo</h2>
+                <p style={{ color: "var(--text-2)", fontSize: "0.9rem", lineHeight: 1.6, margin: "10px 0 0" }}>
+                  Enviamos un enlace de activación a <strong style={{ color: "var(--text)" }}>{form.email}</strong>.
+                  Ábrelo para activar tu cuenta — revisa también el spam.
+                </p>
+                <p style={{ color: "var(--text-3)", fontSize: "0.82rem", margin: "20px 0 0" }}>
+                  ¿Ya activaste?{" "}
+                  <Link href="/login" style={{ color: "#4da3ff", textDecoration: "none", fontWeight: 500 }}>Inicia sesión</Link>
+                </p>
               </div>
-            )}
-
-            <GlowCard glowColor="blue">
-              <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                {campos.map(({ key, label, type, placeholder, required }) => (
-                  <div key={key} style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-                    <label style={{ color: "var(--text-3)", fontSize: "0.75rem", letterSpacing: "0.04em" }}>{label}</label>
-                    <input type={type} value={form[key]} onChange={set(key)} placeholder={placeholder} required={required} style={inputStyle} />
+            ) : (
+              <>
+                {error && (
+                  <div style={{ background: "rgba(255,69,58,0.08)", border: "1px solid rgba(255,69,58,0.2)", borderRadius: 12, padding: "12px 16px", marginBottom: 16, color: "#ff6961", fontSize: "0.875rem" }}>
+                    {error}
                   </div>
-                ))}
+                )}
 
-                <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-                  <label style={{ color: "var(--text-3)", fontSize: "0.75rem", letterSpacing: "0.04em" }}>
-                    Telegram Chat ID <span style={{ opacity: 0.6, fontWeight: 400 }}>(opcional — para alertas)</span>
-                  </label>
-                  <input type="text" value={form.telegram} onChange={set("telegram")} placeholder="ej: 6999614895" style={inputStyle} />
-                  <p style={{ color: "var(--text-3)", fontSize: 11, margin: "2px 0 0", opacity: 0.7 }}>
-                    Envía /start a @userinfobot para obtener tu ID
-                  </p>
-                </div>
+                <GlowCard glowColor="blue">
+                  <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                    {campos.map(({ key, label, type, placeholder, required }) => (
+                      <div key={key} style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                        <label style={{ color: "var(--text-3)", fontSize: "0.75rem", letterSpacing: "0.04em" }}>{label}</label>
+                        <input type={type} value={form[key]} onChange={set(key)} placeholder={placeholder} required={required} style={inputStyle} />
+                      </div>
+                    ))}
 
-                <Button type="submit" disabled={loading} style={{ marginTop: 4, background: "#0071e3", color: "#fff", borderRadius: 12, fontSize: "0.95rem", padding: "12px", height: "auto", opacity: loading ? 0.7 : 1 }}>
-                  {loading ? "Creando cuenta..." : "Crear cuenta"}
-                </Button>
-              </form>
-            </GlowCard>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                      <label style={{ color: "var(--text-3)", fontSize: "0.75rem", letterSpacing: "0.04em" }}>
+                        Telegram Chat ID <span style={{ opacity: 0.6, fontWeight: 400 }}>(opcional — para alertas)</span>
+                      </label>
+                      <input type="text" value={form.telegram} onChange={set("telegram")} placeholder="ej: 6999614895" style={inputStyle} />
+                      <p style={{ color: "var(--text-3)", fontSize: 11, margin: "2px 0 0", opacity: 0.7 }}>
+                        Envía /start a @userinfobot para obtener tu ID
+                      </p>
+                    </div>
 
-            <p style={{ textAlign: "center", marginTop: 18, color: "var(--text-3)", fontSize: "0.82rem" }}>
-              ¿Ya tienes cuenta?{" "}
-              <Link href="/login" style={{ color: "#4da3ff", textDecoration: "none", fontWeight: 500 }}>Inicia sesión</Link>
-            </p>
+                    <Button type="submit" disabled={loading} style={{ marginTop: 4, background: "#0071e3", color: "#fff", borderRadius: 12, fontSize: "0.95rem", padding: "12px", height: "auto", opacity: loading ? 0.7 : 1 }}>
+                      {loading ? "Creando cuenta..." : "Crear cuenta"}
+                    </Button>
+                  </form>
+                </GlowCard>
+
+                <p style={{ textAlign: "center", marginTop: 18, color: "var(--text-3)", fontSize: "0.82rem" }}>
+                  ¿Ya tienes cuenta?{" "}
+                  <Link href="/login" style={{ color: "#4da3ff", textDecoration: "none", fontWeight: 500 }}>Inicia sesión</Link>
+                </p>
+              </>
+            )}
           </div>
         </div>
       </div>
