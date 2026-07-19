@@ -114,10 +114,10 @@ LOGO_SM = (
 def verificar_acceso(archivo):
     username = session.get("username")
     if not username:
-        return redirect(url_for("login"))
+        return jsonify({"error": "No autorizado"}), 401
     p = leer_portafolio(archivo)
     if not p or p.get("owner") != username:
-        return redirect(url_for("mis_portafolios"))
+        return jsonify({"error": "No autorizado"}), 403
     return None
 
 
@@ -1106,87 +1106,6 @@ def mis_portafolios():
 # ============================================================
 
 
-@app.route("/register", methods=["GET", "POST"])
-def register():
-    if session.get("username"):
-        return redirect(url_for("mis_portafolios"))
-    error = ""
-    if request.method == "POST":
-        username = request.form.get("username", "").strip()
-        email = request.form.get("email", "").strip()
-        password = request.form.get("password", "").strip()
-        telegram = request.form.get("telegram", "").strip()
-        if not username or not email or not password:
-            error = "Nombre, email y contraseña son obligatorios."
-        elif len(password) < 6:
-            error = "La contraseña debe tener al menos 6 caracteres."
-        else:
-            resultado = registrar_usuario(username, email, password, telegram)
-            if resultado is True:
-                session.permanent = True
-                ip, dispositivo = _request_meta()
-                registrar_actividad(
-                    "registro_nuevo",
-                    username,
-                    email=email,
-                    detalle="Nuevo usuario registrado",
-                    ip=ip,
-                    dispositivo=dispositivo,
-                )
-                _enviar_activacion(username, email)
-                contenido = (
-                    '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px">'
-                    '<div style="width:100%;max-width:380px;text-align:center">'
-                    '<div style="font-size:1.8rem;margin-bottom:14px">' + LOGO_LG + "</div>"
-                    '<div class="alert alert-success">Cuenta creada. Te enviamos un correo para activarla — '
-                    "revisa tu bandeja (y el spam).</div>"
-                    '<a href="/login" class="btn btn-primary" style="border-radius:12px;font-size:0.9rem;'
-                    'padding:12px;display:block;text-decoration:none;margin-top:14px">Ir a iniciar sesión</a>'
-                    "</div></div>"
-                )
-                return pagina("Cuenta creada", contenido)
-            else:
-                error = resultado
-    err_html = f'<div class="alert alert-error">{error}</div>' if error else ""
-    contenido = (
-        '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px">'
-        '<div style="width:100%;max-width:380px">'
-        '<div style="text-align:center;margin-bottom:28px">'
-        f'<div style="font-size:1.8rem;margin-bottom:10px">' + LOGO_LG + "</div>"
-        '<h1 style="font-size:1.3rem;margin-bottom:4px;letter-spacing:-0.02em;color:#f5f5f7">Crear cuenta</h1>'
-        '<p style="color:#6e6e73;font-size:0.82rem;margin:0">Accede a tu sistema de portafolio</p></div>'
-        + err_html
-        + '<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.07);'
-        'border-radius:18px;padding:22px;backdrop-filter:blur(20px)">'
-        '<form method="POST">'
-        '<div style="margin-bottom:14px">'
-        '<label style="display:block;font-size:0.75rem;color:#6e6e73;letter-spacing:0.04em;margin-bottom:8px">Nombre de usuario</label>'
-        '<input type="text" name="username" class="form-input" placeholder="ej: andrea" autofocus required>'
-        "</div>"
-        '<div style="margin-bottom:14px">'
-        '<label style="display:block;font-size:0.75rem;color:#6e6e73;letter-spacing:0.04em;margin-bottom:8px">Email</label>'
-        '<input type="email" name="email" class="form-input" placeholder="tu@email.com" required>'
-        "</div>"
-        '<div style="margin-bottom:14px">'
-        '<label style="display:block;font-size:0.75rem;color:#6e6e73;letter-spacing:0.04em;margin-bottom:8px">Contraseña</label>'
-        '<input type="password" name="password" class="form-input" placeholder="Mínimo 6 caracteres" required>'
-        "</div>"
-        '<div style="margin-bottom:18px">'
-        '<label style="display:block;font-size:0.75rem;color:#6e6e73;letter-spacing:0.04em;margin-bottom:8px">'
-        'Telegram Chat ID <span style="font-weight:400;opacity:0.6">(opcional — para alertas)</span></label>'
-        '<input type="text" name="telegram" class="form-input" placeholder="ej: 6999614895">'
-        '<p style="color:#3d3d3f;font-size:11px;margin-top:6px">Envía /start a @userinfobot para obtener tu ID</p>'
-        "</div>"
-        '<button type="submit" id="btn-registro" class="btn btn-primary" style="border-radius:12px;font-size:0.9rem;padding:12px" '
-        "onclick=\"this.disabled=true;this.textContent='Creando cuenta...';this.form.submit()\">Crear cuenta</button>"
-        "</form></div>"
-        '<div style="text-align:center;margin-top:18px">'
-        '<a href="/login" style="color:#6e6e73;font-size:0.78rem;text-decoration:none">¿Ya tienes cuenta? Inicia sesión</a>'
-        "</div></div></div>"
-    )
-    return pagina("Registro", contenido)
-
-
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if session.get("username"):
@@ -1270,41 +1189,6 @@ def login():
     )
     return pagina("Iniciar sesión", contenido)
 
-@app.route("/forgot-password", methods=["GET", "POST"])
-def forgot_password():
-    enviado = False
-    if request.method == "POST":
-        _solicitar_reset(request.form.get("email", "").strip())
-        enviado = True
-
-    msg_html = (
-        '<div class="alert alert-success">Si ese email tiene cuenta, te enviamos un enlace. '
-        "Revisa tu correo (y la carpeta de spam).</div>"
-        if enviado
-        else ""
-    )
-    contenido = (
-        '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px">'
-        '<div style="width:100%;max-width:340px">'
-        '<div style="text-align:center;margin-bottom:28px">'
-        '<div style="font-size:1.8rem;margin-bottom:10px">' + LOGO_LG + "</div>"
-        '<h1 style="font-size:1.3rem;margin-bottom:4px;letter-spacing:-0.02em;color:#f5f5f7">Recuperar contraseña</h1>'
-        '<p style="color:#6e6e73;font-size:0.82rem;margin:0">Te enviamos un enlace a tu correo</p></div>'
-        + msg_html
-        + '<div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.07);'
-        'border-radius:18px;padding:22px;backdrop-filter:blur(20px)">'
-        '<form method="POST">'
-        '<div style="margin-bottom:14px">'
-        '<label style="display:block;font-size:0.75rem;color:#6e6e73;letter-spacing:0.04em;margin-bottom:8px">Email</label>'
-        '<input type="email" name="email" class="form-input" placeholder="tu@email.com" autofocus required>'
-        "</div>"
-        '<button type="submit" class="btn btn-primary" style="border-radius:12px;font-size:0.9rem;padding:12px">Enviar enlace</button>'
-        "</form></div>"
-        '<div style="text-align:center;margin-top:18px">'
-        '<a href="/login" style="color:#6e6e73;font-size:0.78rem;text-decoration:none">Volver a iniciar sesión</a>'
-        "</div></div></div>"
-    )
-    return pagina("Recuperar contraseña", contenido)
 
 @app.route("/reset-password", methods=["GET", "POST"])
 def reset_password():
@@ -4245,35 +4129,6 @@ def _validar_sesion():
     if not u or session.get("fp") != huella_password_hash(u["password_hash"]):
         session.clear()
 
-@app.route("/activar")
-def activar_cuenta():
-    session.clear()
-    try:
-        username = _serializer_activar().loads(
-            request.args.get("token", "").strip(), max_age=ACTIVAR_MAX_AGE
-        )
-    except SignatureExpired:
-        msg, clase = "El enlace de activación venció. Regístrate de nuevo o pide otro.", "alert-error"
-    except BadSignature:
-        msg, clase = "Enlace de activación inválido.", "alert-error"
-    else:
-        if get_usuario(username):
-            # Idempotente: activar dos veces no hace daño
-            actualizar_usuario(username, {"email_verificado": True})
-            msg, clase = "¡Cuenta activada! Ya puedes iniciar sesión.", "alert-success"
-        else:
-            msg, clase = "Esa cuenta ya no existe.", "alert-error"
-
-    contenido = (
-        '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px">'
-        '<div style="width:100%;max-width:340px;text-align:center">'
-        '<div style="font-size:1.8rem;margin-bottom:14px">' + LOGO_LG + "</div>"
-        f'<div class="alert {clase}">{msg}</div>'
-        '<a href="/login" class="btn btn-primary" style="border-radius:12px;font-size:0.9rem;'
-        'padding:12px;display:block;text-decoration:none;margin-top:14px">Ir a iniciar sesión</a>'
-        "</div></div>"
-    )
-    return pagina("Activar cuenta", contenido)
 
 @app.route("/api/auth/activate", methods=["POST"])
 def api_auth_activate():
