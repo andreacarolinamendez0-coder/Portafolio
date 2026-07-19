@@ -53,6 +53,7 @@ def _get_credentials() -> Credentials:
 
 def _html_to_text(html: str) -> str:
     """Fallback en texto plano para clientes que no renderizan HTML."""
+    html = re.sub(r'<a\s[^>]*href="([^"]+)"[^>]*>(.*?)</a>', r"\2 (\1)", html, flags=re.I | re.S)
     text = re.sub(r"<br\s*/?>", "\n", html, flags=re.I)
     text = re.sub(r"</(p|div|h\d|tr)>", "\n", text, flags=re.I)
     text = re.sub(r"<[^>]+>", "", text)
@@ -106,11 +107,18 @@ def _layout(titulo: str, cuerpo: str, cta_texto: str = "", cta_url: str = "") ->
     cta = ""
     if cta_texto and cta_url:
         cta = f"""
-        <p style="margin:28px 0;">
-          <a href="{cta_url}"
-             style="background:#1a73e8;color:#fff;text-decoration:none;
-                    padding:12px 22px;border-radius:6px;display:inline-block;
-                    font-weight:600;">{cta_texto}</a>
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:28px 0;">
+          <tr>
+            <td align="center" bgcolor="#1a73e8" style="border-radius:6px; padding:12px 24px;">
+              <a href="{cta_url}"
+                 style="color:#ffffff; text-decoration:none; font-weight:600;
+                        font-family:Arial,sans-serif; font-size:15px;">{cta_texto}</a>
+            </td>
+          </tr>
+        </table>
+        <p style="font-size:13px; color:#5f6368; margin:0;">
+          Si el botón no funciona, copia y pega este enlace:<br>
+          <a href="{cta_url}" style="color:#1a73e8; word-break:break-all;">{cta_url}</a>
         </p>"""
 
     return f"""\
