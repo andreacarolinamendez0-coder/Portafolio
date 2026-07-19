@@ -29,7 +29,6 @@ export default function LoginPage() {
   const [error, setError]       = useState("");
   const [loading, setLoading]   = useState(false);
   const [triviaIdx, setTriviaIdx] = useState(0);
-  const [avisoPw, setAvisoPw]   = useState(false);
 
   useEffect(() => {
     setTriviaIdx(Math.floor(Math.random() * TRIVIA_BIENVENIDA.length));
@@ -158,16 +157,11 @@ export default function LoginPage() {
                 {/* Olvidé mi contraseña — gracioso */}
                 <button
                   type="button"
-                  onClick={() => setAvisoPw(true)}
+                  onClick={() => (window.location.href = "/forgot-password")}
                   style={{ background: "none", border: "none", color: "var(--text-3)", fontSize: "0.78rem", cursor: "pointer", textAlign: "center", fontFamily: "inherit", marginTop: 2 }}
                 >
                   ¡Perdón! Se me olvidó la contraseña, ayúdame
                 </button>
-                {avisoPw && (
-                  <p style={{ fontSize: "0.74rem", color: "var(--text-3)", textAlign: "center", margin: 0, lineHeight: 1.5 }}>
-                    Tranqui, le pasa a todos. Esta función llega pronto — por ahora escríbele a soporte y te ayudamos.
-                  </p>
-                )}
               </form>
             </GlowCard>
 

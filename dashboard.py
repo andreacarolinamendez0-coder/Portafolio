@@ -1198,7 +1198,8 @@ def login():
         usuario = login_usuario(email, password)
         ip, dispositivo = _request_meta()
         if usuario and not usuario.get("bloqueado") and not usuario.get("email_verificado", True):
-            error = "Activa tu cuenta con el enlace que te enviamos por correo."
+            _enviar_activacion(usuario["username"], usuario["email"])
+            error = "Tu cuenta aún no está activada. Revisa tu correo para activarla (mira también el spam)."
         elif usuario and not usuario.get("bloqueado"):
             session["username"] = usuario["username"]
             session["fp"] = huella_password_hash(usuario["password_hash"])
@@ -4155,12 +4156,28 @@ def _serializer_activar():
     return URLSafeTimedSerializer(app.secret_key, salt="activar-cuenta")
 
 
+REENVIO_ACTIVACION_MIN = 5  # minutos mínimos entre envíos de activación (anti-spam)
+
+
 def _enviar_activacion(username, email):
+    # Anti-spam: no reenviar si mandamos uno hace < REENVIO_ACTIVACION_MIN minutos.
+    u = get_usuario(username)
+    if u:
+        ultimo = u.get("ultimo_envio_activacion")
+        if ultimo:
+            try:
+                if datetime.now() - datetime.strptime(ultimo, "%Y-%m-%d %H:%M:%S") < timedelta(minutes=REENVIO_ACTIVACION_MIN):
+                    return False   # en cooldown, no reenviar
+            except ValueError:
+                pass
     token = _serializer_activar().dumps(username)
     app_url = os.environ.get("APP_URL", "").rstrip("/")
-    enviar_bienvenida(
+    enviado = enviar_bienvenida(
         email, username, f"{app_url}/activar?token={token}", ACTIVAR_MAX_AGE // 3600
     )
+    if enviado:
+        actualizar_usuario(username, {"ultimo_envio_activacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
+    return enviado
 
 RESET_MAX_AGE = 900  # 15 minutos
 
@@ -4258,6 +4275,23 @@ def activar_cuenta():
     )
     return pagina("Activar cuenta", contenido)
 
+@app.route("/api/auth/activate", methods=["POST"])
+def api_auth_activate():
+    token = ((request.get_json(silent=True) or {}).get("token") or "").strip()
+    try:
+        username = _serializer_activar().loads(token, max_age=ACTIVAR_MAX_AGE)
+    except SignatureExpired:
+        return jsonify({"ok": False, "error": "El enlace de activación venció. Regístrate de nuevo."}), 400
+    except BadSignature:
+        return jsonify({"ok": False, "error": "Enlace de activación inválido."}), 400
+
+    if not get_usuario(username):
+        return jsonify({"ok": False, "error": "Esa cuenta ya no existe."}), 400
+
+    # Idempotente: activar dos veces no hace daño
+    actualizar_usuario(username, {"email_verificado": True})
+    return jsonify({"ok": True})
+
 @app.route("/api/auth/login", methods=["POST"])
 def api_auth_login():
     data = request.get_json(silent=True) or {}
@@ -4267,8 +4301,8 @@ def api_auth_login():
     ip, dispositivo = _request_meta()
 
     if usuario and not usuario.get("bloqueado") and not usuario.get("email_verificado", True):
-        error = "Activa tu cuenta con el enlace que te enviamos por correo."
-        return jsonify({"ok": False, "error": error}), 403
+        _enviar_activacion(usuario["username"], usuario["email"])
+        return jsonify({"ok": False, "error": "Tu cuenta aún no está activada. Revisa tu correo para activarla (mira también el spam)."}), 403
     elif usuario and not usuario.get("bloqueado"):
         session["username"] = usuario["username"]
         session["fp"] = huella_password_hash(usuario["password_hash"])

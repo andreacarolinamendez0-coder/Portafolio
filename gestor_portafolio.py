@@ -272,10 +272,35 @@ def _leer_usuarios():
 def _escribir_usuarios(usuarios):
     _escribir(ARCHIVO_USUARIOS, usuarios)
 
+DIAS_PURGA_NO_VERIFICADO = 7  # borrar registros no verificados más viejos que esto
+
+
+def _purgar_no_verificados_vencidos(usuarios):
+    """Borra del dict los no verificados más viejos que la ventana. Muta `usuarios`,
+    devuelve cuántos borró. No toca verificados ni legacy (email_verificado
+    ausente = True = intocable)."""
+    limite = datetime.now() - timedelta(days=DIAS_PURGA_NO_VERIFICADO)
+    vencidos = []
+    for username, u in usuarios.items():
+        if u.get("email_verificado", True):
+            continue
+        try:
+            registrado = datetime.strptime(u.get("fecha_registro", ""), "%Y-%m-%d")
+        except ValueError:
+            continue   # sin fecha parseable → no arriesgar, dejar
+        if registrado < limite:
+            vencidos.append(username)
+    for username in vencidos:
+        del usuarios[username]
+    return len(vencidos)
+
 
 def registrar_usuario(username, email, password, telegram_chat_id=""):
     """Registra un nuevo usuario. Retorna True si ok, string de error si falla."""
     usuarios = _leer_usuarios()
+    _purgar_no_verificados_vencidos(usuarios)   # libera emails/usernames abandonados
+    if username in usuarios:
+        return "Ese nombre de usuario ya existe."
     if username in usuarios:
         return "Ese nombre de usuario ya existe."
     for u in usuarios.values():

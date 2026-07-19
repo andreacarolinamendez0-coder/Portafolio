@@ -46,6 +46,19 @@ export const authResetPassword = (token: string, password: string) =>
     body: JSON.stringify({ token, password }),
   });
 
+  export const authForgotPassword = (email: string) =>
+  apiFetch<{ ok: boolean }>("/api/auth/forgot-password", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+
+export const authActivate = (token: string) =>
+  apiFetch<{ ok: boolean }>("/api/auth/activate", {
+    method: "POST",
+    body: JSON.stringify({ token }),
+  });
+
+  
 // ── Portfolios ──────────────────────────────────────────────
 
 export interface PortafolioSummary {
