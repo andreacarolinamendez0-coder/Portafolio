@@ -2,7 +2,6 @@ flask
 werkzeug
 gunicorn
 pandas
-plotly
 yfinance
 requests
 pyarrow
