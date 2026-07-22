@@ -5,6 +5,7 @@ from sklearn.covariance import LedoitWolf
 from datetime import datetime
 import warnings
 import os
+from adaptador_analista import optimizar_portafolio as _optimizar_nuevo
 
 warnings.filterwarnings("ignore")
 
@@ -158,170 +159,170 @@ def calcular_retornos_reales(panel, activos):
 # ============================================================
 
 
-def optimizar_portafolio(
-    ret_real, panel, perfil, risk_free, inversion_inicial, tickers_fijos=None
-):
-    print(f"\n🧠 Optimizando portafolio {perfil.upper()}...")
+# def optimizar_portafolio(
+#     ret_real, panel, perfil, risk_free, inversion_inicial, tickers_fijos=None
+# ):
+#     print(f"\n🧠 Optimizando portafolio {perfil.upper()}...")
 
-    rf = risk_free["Risk_Free"].iloc[-1] / 100
+#     rf = risk_free["Risk_Free"].iloc[-1] / 100
 
-    from recolector import CRIPTO, TICKER_SECTOR, ACTIVOS_POR_SECTOR
+#     from recolector import CRIPTO, TICKER_SECTOR, ACTIVOS_POR_SECTOR
 
-    cripto = CRIPTO
-    tech_volatil = list(
-        set(ACTIVOS_POR_SECTOR.get("Technology", []) + cripto + ["QQQ", "XLK"])
-    )
+#     cripto = CRIPTO
+#     tech_volatil = list(
+#         set(ACTIVOS_POR_SECTOR.get("Technology", []) + cripto + ["QQQ", "XLK"])
+#     )
 
-    stress = panel["Stress_Macro"].iloc[-1]
+#     stress = panel["Stress_Macro"].iloc[-1]
 
-    # Excluir criptos en conservador
-    if perfil == "conservador":
-        ret_real = ret_real[[a for a in ret_real.columns if a not in cripto]]
-        print(f"   🚫 Criptos excluidas del perfil conservador")
+#     # Excluir criptos en conservador
+#     if perfil == "conservador":
+#         ret_real = ret_real[[a for a in ret_real.columns if a not in cripto]]
+#         print(f"   🚫 Criptos excluidas del perfil conservador")
 
-    if tickers_fijos:
-        top_8 = [t for t in tickers_fijos if t in ret_real.columns]
-        ret_top = ret_real[top_8]
-        print(f"   Universo fijo (elegido por el usuario): {top_8}")
-    else:
-        print(f"   Eliminando activos redundantes por alta correlación...")
-        corr_matrix = ret_real.corr()
-        activos_unicos = list(ret_real.columns)
-        sharpe_simple = (ret_real.mean() * 12) / (ret_real.std() * np.sqrt(12))
-        eliminados = []
+#     if tickers_fijos:
+#         top_8 = [t for t in tickers_fijos if t in ret_real.columns]
+#         ret_top = ret_real[top_8]
+#         print(f"   Universo fijo (elegido por el usuario): {top_8}")
+#     else:
+#         print(f"   Eliminando activos redundantes por alta correlación...")
+#         corr_matrix = ret_real.corr()
+#         activos_unicos = list(ret_real.columns)
+#         sharpe_simple = (ret_real.mean() * 12) / (ret_real.std() * np.sqrt(12))
+#         eliminados = []
 
-        for i in range(len(activos_unicos)):
-            for j in range(i + 1, len(activos_unicos)):
-                a1 = activos_unicos[i]
-                a2 = activos_unicos[j]
-                if a1 in eliminados or a2 in eliminados:
-                    continue
-                if corr_matrix.loc[a1, a2] > 0.85:
-                    if sharpe_simple[a1] >= sharpe_simple[a2]:
-                        eliminados.append(a2)
-                        print(
-                            f"   ⚠️  {a2} eliminado — correlación {corr_matrix.loc[a1,a2]:.2f} con {a1}"
-                        )
-                    else:
-                        eliminados.append(a1)
-                        print(
-                            f"   ⚠️  {a1} eliminado — correlación {corr_matrix.loc[a1,a2]:.2f} con {a2}"
-                        )
+#         for i in range(len(activos_unicos)):
+#             for j in range(i + 1, len(activos_unicos)):
+#                 a1 = activos_unicos[i]
+#                 a2 = activos_unicos[j]
+#                 if a1 in eliminados or a2 in eliminados:
+#                     continue
+#                 if corr_matrix.loc[a1, a2] > 0.85:
+#                     if sharpe_simple[a1] >= sharpe_simple[a2]:
+#                         eliminados.append(a2)
+#                         print(
+#                             f"   ⚠️  {a2} eliminado — correlación {corr_matrix.loc[a1,a2]:.2f} con {a1}"
+#                         )
+#                     else:
+#                         eliminados.append(a1)
+#                         print(
+#                             f"   ⚠️  {a1} eliminado — correlación {corr_matrix.loc[a1,a2]:.2f} con {a2}"
+#                         )
 
-        activos_limpios = [a for a in activos_unicos if a not in eliminados]
-        ret_real = ret_real[activos_limpios]
-        print(f"   Activos tras filtro de correlación: {len(activos_limpios)}")
+#         activos_limpios = [a for a in activos_unicos if a not in eliminados]
+#         ret_real = ret_real[activos_limpios]
+#         print(f"   Activos tras filtro de correlación: {len(activos_limpios)}")
 
-        # Filtro de consistencia
-        n_filas = len(ret_real)
-        tercio = n_filas // 3
-        retorno_p1 = ret_real.iloc[:tercio].mean() * 12
-        retorno_p2 = ret_real.iloc[tercio : tercio * 2].mean() * 12
-        retorno_p3 = ret_real.iloc[tercio * 2 :].mean() * 12
+#         # Filtro de consistencia
+#         n_filas = len(ret_real)
+#         tercio = n_filas // 3
+#         retorno_p1 = ret_real.iloc[:tercio].mean() * 12
+#         retorno_p2 = ret_real.iloc[tercio : tercio * 2].mean() * 12
+#         retorno_p3 = ret_real.iloc[tercio * 2 :].mean() * 12
 
-        consistencia = (
-            (retorno_p1 > 0).astype(int)
-            + (retorno_p2 > 0).astype(int)
-            + (retorno_p3 > 0).astype(int)
-        )
-        activos_consistentes = consistencia[consistencia >= 2].index.tolist()
-        print(
-            f"   Activos que pasaron filtro de consistencia: {len(activos_consistentes)}"
-        )
+#         consistencia = (
+#             (retorno_p1 > 0).astype(int)
+#             + (retorno_p2 > 0).astype(int)
+#             + (retorno_p3 > 0).astype(int)
+#         )
+#         activos_consistentes = consistencia[consistencia >= 2].index.tolist()
+#         print(
+#             f"   Activos que pasaron filtro de consistencia: {len(activos_consistentes)}"
+#         )
 
-        if len(activos_consistentes) < 3:
-            activos_consistentes = ret_real.columns.tolist()
+#         if len(activos_consistentes) < 3:
+#             activos_consistentes = ret_real.columns.tolist()
 
-        ret_filtrado = ret_real[activos_consistentes]
+#         ret_filtrado = ret_real[activos_consistentes]
 
-        # Top 8 por Sharpe, máximo 2 por sector
-        media_f = ret_filtrado.mean() * 12
-        vol_f = ret_filtrado.std() * np.sqrt(12)
-        sharpe_f = (media_f - rf) / vol_f
+#         # Top 8 por Sharpe, máximo 2 por sector
+#         media_f = ret_filtrado.mean() * 12
+#         vol_f = ret_filtrado.std() * np.sqrt(12)
+#         sharpe_f = (media_f - rf) / vol_f
 
-        sector_map = pd.Series(TICKER_SECTOR)
-        sharpe_df = sharpe_f.to_frame("sharpe")
-        sharpe_df["sector"] = sharpe_df.index.map(sector_map).fillna("Otro")
-        candidatos = (
-            sharpe_df.sort_values("sharpe", ascending=False).groupby("sector").head(2)
-        )
-        top_8 = candidatos["sharpe"].nlargest(8).index.tolist()
+#         sector_map = pd.Series(TICKER_SECTOR)
+#         sharpe_df = sharpe_f.to_frame("sharpe")
+#         sharpe_df["sector"] = sharpe_df.index.map(sector_map).fillna("Otro")
+#         candidatos = (
+#             sharpe_df.sort_values("sharpe", ascending=False).groupby("sector").head(2)
+#         )
+#         top_8 = candidatos["sharpe"].nlargest(8).index.tolist()
 
-        ret_top = ret_real[top_8]
-        print(f"   Top 8 seleccionados: {top_8}")
+#         ret_top = ret_real[top_8]
+#         print(f"   Top 8 seleccionados: {top_8}")
 
-    # Optimización
-    lw_cov = LedoitWolf().fit(ret_top).covariance_
-    cov = pd.DataFrame(lw_cov, index=ret_top.columns, columns=ret_top.columns) * 12
-    n = len(top_8)
+#     # Optimización
+#     lw_cov = LedoitWolf().fit(ret_top).covariance_
+#     cov = pd.DataFrame(lw_cov, index=ret_top.columns, columns=ret_top.columns) * 12
+#     n = len(top_8)
 
-    LAMBDAS = {"conservador": 0.0, "moderado": 0.7, "agresivo": 1.5}
-    PESO_MAX = {"conservador": 0.25, "moderado": 0.30, "agresivo": 0.35}
-    LAMBDA = LAMBDAS.get(perfil, 1.0)
+#     LAMBDAS = {"conservador": 0.0, "moderado": 0.7, "agresivo": 1.5}
+#     PESO_MAX = {"conservador": 0.25, "moderado": 0.30, "agresivo": 0.35}
+#     LAMBDA = LAMBDAS.get(perfil, 1.0)
 
-    # Tactical asset allocation: estrés alto → portafolio más conservador
-    LAMBDA_efectivo = LAMBDA * (1 - stress * 0.5)
-    print(
-        f"   📊 Macro stress {stress:.2f} → LAMBDA {LAMBDA:.2f} → {LAMBDA_efectivo:.2f}"
-    )
+#     # Tactical asset allocation: estrés alto → portafolio más conservador
+#     LAMBDA_efectivo = LAMBDA * (1 - stress * 0.5)
+#     print(
+#         f"   📊 Macro stress {stress:.2f} → LAMBDA {LAMBDA:.2f} → {LAMBDA_efectivo:.2f}"
+#     )
 
-    peso_max = PESO_MAX.get(perfil, 0.30)
-    peso_min = 0.05
+#     peso_max = PESO_MAX.get(perfil, 0.30)
+#     peso_min = 0.05
 
-    media = ret_top.mean() * 12
-    media_shrunk = 0.5 * media + 0.5 * media.mean()
+#     media = ret_top.mean() * 12
+#     media_shrunk = 0.5 * media + 0.5 * media.mean()
 
-    def objetivo(w):
-        vol = np.sqrt(np.dot(w.T, np.dot(cov, w)))
-        ret = np.sum(media_shrunk * w)
-        return vol - LAMBDA_efectivo * ret
+#     def objetivo(w):
+#         vol = np.sqrt(np.dot(w.T, np.dot(cov, w)))
+#         ret = np.sum(media_shrunk * w)
+#         return vol - LAMBDA_efectivo * ret
 
-    restricciones = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}]
+#     restricciones = [{"type": "eq", "fun": lambda w: np.sum(w) - 1}]
 
-    if perfil == "conservador":
-        idx_tech = [i for i, a in enumerate(top_8) if a in tech_volatil]
-        if idx_tech:
-            restricciones.append(
-                {"type": "ineq", "fun": lambda w, idx=idx_tech: 0.20 - np.sum(w[idx])}
-            )
+#     if perfil == "conservador":
+#         idx_tech = [i for i, a in enumerate(top_8) if a in tech_volatil]
+#         if idx_tech:
+#             restricciones.append(
+#                 {"type": "ineq", "fun": lambda w, idx=idx_tech: 0.20 - np.sum(w[idx])}
+#             )
 
-    limites = [(peso_min, peso_max)] * n
-    np.random.seed(42)
-    w0 = np.array([1 / n] * n)
+#     limites = [(peso_min, peso_max)] * n
+#     np.random.seed(42)
+#     w0 = np.array([1 / n] * n)
 
-    resultado = minimize(
-        objetivo,
-        w0,
-        method="SLSQP",
-        bounds=limites,
-        constraints=restricciones,
-        options={"maxiter": 1000, "ftol": 1e-9},
-    )
+#     resultado = minimize(
+#         objetivo,
+#         w0,
+#         method="SLSQP",
+#         bounds=limites,
+#         constraints=restricciones,
+#         options={"maxiter": 1000, "ftol": 1e-9},
+#     )
 
-    pesos = pd.Series(resultado.x, index=top_8)
+#     pesos = pd.Series(resultado.x, index=top_8)
 
-    if tickers_fijos:
-        top_n = pesos[pesos > 0.01]
-        top_n = top_n / top_n.sum()
-    else:
-        top_n = pesos.nlargest(5)
-        top_n = top_n / top_n.sum()
+#     if tickers_fijos:
+#         top_n = pesos[pesos > 0.01]
+#         top_n = top_n / top_n.sum()
+#     else:
+#         top_n = pesos.nlargest(5)
+#         top_n = top_n / top_n.sum()
 
-    # Límite tech post-normalización en conservador
-    if perfil == "conservador":
-        tech_en_top = [a for a in top_n.index if a in tech_volatil]
-        peso_tech_actual = top_n[tech_en_top].sum()
-        if peso_tech_actual > 0.20:
-            exceso = peso_tech_actual - 0.20
-            for activo in tech_en_top:
-                top_n[activo] -= exceso * (top_n[activo] / peso_tech_actual)
-            no_tech = [a for a in top_n.index if a not in tech_volatil]
-            for activo in no_tech:
-                top_n[activo] += exceso / len(no_tech)
-            print(f"   ✅ Límite tech: {peso_tech_actual*100:.1f}% → 20%")
-        top_n = top_n / top_n.sum()
+#     # Límite tech post-normalización en conservador
+#     if perfil == "conservador":
+#         tech_en_top = [a for a in top_n.index if a in tech_volatil]
+#         peso_tech_actual = top_n[tech_en_top].sum()
+#         if peso_tech_actual > 0.20:
+#             exceso = peso_tech_actual - 0.20
+#             for activo in tech_en_top:
+#                 top_n[activo] -= exceso * (top_n[activo] / peso_tech_actual)
+#             no_tech = [a for a in top_n.index if a not in tech_volatil]
+#             for activo in no_tech:
+#                 top_n[activo] += exceso / len(no_tech)
+#             print(f"   ✅ Límite tech: {peso_tech_actual*100:.1f}% → 20%")
+#         top_n = top_n / top_n.sum()
 
-    return top_n, inversion_inicial
+#     return top_n, inversion_inicial
 
 
 # ============================================================
@@ -588,12 +589,12 @@ def generar_reporte(
     ).to_csv(archivo, index=False)
     print(f"\n💾 Reporte guardado: {archivo}")
 
-
 # ============================================================
 # EJECUCIÓN PRINCIPAL
 # ============================================================
 
 if __name__ == "__main__":
+    import numpy as np
     print("=" * 55)
     print("🤖 ANALISTA — INICIANDO")
     print(f"📅 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -601,14 +602,12 @@ if __name__ == "__main__":
 
     # ── ACTUALIZAR DATOS ANTES DE ANALIZAR ──
     print("\n🔄 Actualizando datos del mercado...")
-    from recolector import correr_todo
-
+    from recolector import correr_todo, TICKER_SECTOR
     correr_todo()
     print("✅ Datos actualizados.\n")
 
     # ── LEER PORTAFOLIO ACTIVO ──
     from gestor_portafolio import leer_portafolio_activo, guardar_composicion
-
     portafolio_activo = leer_portafolio_activo()
     if not portafolio_activo:
         print("❌ No hay portafolio activo.")
@@ -619,9 +618,7 @@ if __name__ == "__main__":
     nombre = portafolio_activo["nombre"]
     propietario = portafolio_activo["propietario"]
     from gestor_portafolio import _slug
-
     archivo = portafolio_activo.get("archivo") or f"{_slug(nombre)}.json"
-
     print(f"\n📋 Portafolio activo: {nombre} ({perfil_activo}) — {propietario}")
 
     # ── INVERSIÓN INTERACTIVA ──
@@ -631,16 +628,11 @@ if __name__ == "__main__":
 
     print(f"\n💰 CONFIGURACIÓN DE INVERSIÓN")
     print(f"─" * 40)
-    print(f"   (del portafolio activo)")
     print(f"   Inversión inicial : ${inv_inicial:,.0f} COP")
     if aporte_dca > 0:
         freq_texto = {1: "mensual", 3: "trimestral", 12: "anual"}
-        print(
-            f"   Aporte DCA        : ${aporte_dca:,.0f} COP "
-            f"({freq_texto.get(freq_dca, 'periódico')})"
-        )
+        print(f"   Aporte DCA        : ${aporte_dca:,.0f} COP ({freq_texto.get(freq_dca, 'periódico')})")
 
-    # Permitir cambiar montos si se quiere simular diferente
     cambiar = input("\n   ¿Quieres simular con montos diferentes? (SI/NO): ").upper()
     if cambiar == "SI":
         inv_str = input("   Inversión inicial en COP: ")
@@ -659,26 +651,70 @@ if __name__ == "__main__":
     aporte_periodico = aporte_dca
     frecuencia_meses = freq_dca if freq_dca > 0 else 1
 
-    # ── CARGAR DATOS ──
+    # ── CARGAR DATOS BASE ──
     precios, trm, inf_usa, inf_col, risk_free, tasa_cdt = cargar_datos()
-    activos = list(precios.columns)
-    panel = construir_panel(precios, trm, inf_usa, inf_col, risk_free)
-    ret_real = calcular_retornos_reales(panel, activos)
-
     inflacion_col_actual = float(inf_col["Inflacion_COL"].iloc[-1])
 
-    # ── OPTIMIZAR SOLO EL PERFIL ACTIVO ──
+    # ── PREPARAR INPUTS PARA EL MOTOR NUEVO ──
+    # Retornos diarios log en USD (calendario de bolsa)
+    import preparador_datos as prep
+    universo = prep.preparar_universo()
+    retornos_diarios = universo["retornos"]
+    sector = {t: TICKER_SECTOR.get(t, "Sin clasificar") for t in retornos_diarios.columns}
+
+    # TRM diaria en log-retornos
+    ret_trm = np.log(trm["TRM"] / trm["TRM"].shift(1)).dropna()
+
+    # Inflación COL mensual como fraccion (0.06 = 6%)
+    inf_col_m = (inf_col["Inflacion_COL"] / 100).resample("ME").last().ffill()
+
+    # horizonte
     horizonte = 5 if perfil_activo == "conservador" else 10
 
-    pesos, inv = optimizar_portafolio(
-        ret_real, panel, perfil_activo, risk_free, inversion_inicial
+    # ── OPTIMIZAR CON EL MOTOR NUEVO ──
+    resultado = _optimizar_nuevo(
+        perfil=perfil_activo,
+        horizonte=horizonte,
+        retornos=retornos_diarios,
+        sector=sector,
+        retorno_trm=ret_trm,
+        inflacion_col_mensual=inf_col_m,
+        cdt_nominal=tasa_cdt / 100,
+        inflacion_col_anual=inflacion_col_actual / 100,
+        capital=inversion_inicial,
+        fraccion_purga=0.30,
+        umbral_parcial=0.20,
     )
 
+    pesos = resultado["pesos"]
+    ret_mens = resultado["ret_mens_cop_real"]
+
+    # ── IMPRIMIR EMBUDO DE SELECCION ──
+    e = resultado["embudo"]
+    print(f"\n🔍 EMBUDO DE SELECCIÓN:")
+    print(f"   Universo inicial   : {e['universo']} activos")
+    print(f"   Tras purga Sortino : {e['tras_purga_sortino']}")
+    print(f"   Tras purga parcial : {e['tras_purga_parcial']}")
+    print(f"   Selección final    : {e['final']}")
+    print(f"   Correlación parcial máx: {resultado['parcial_maxima']:.3f}")
+    if resultado.get("advertencia_cdt"):
+        print(f"\n⚠️  {resultado['advertencia_cdt']}")
+
+    # ── GENERAR REPORTE ──
+    # calcular_datos_reporte espera ret_real como DataFrame con columnas.
+    # Creamos un DataFrame de 1 columna para que el .dot(pesos) funcione
+    # sin modificar esa funcion.
+    # PERO hay un problema: pesos tiene 18 activos y ret_mens es una serie
+    # del portafolio ya agregado. Los pasamos directo a generar_reporte
+    # usando una Serie dummy de peso 1.0 para el portafolio.
+    pesos_dummy = pd.Series({"__port__": 1.0})
+    ret_mens_df = ret_mens.rename("__port__").to_frame()
+
     generar_reporte(
-        pesos,
-        inversion_inicial,
-        ret_real,
-        perfil_activo,
+        pesos=pesos_dummy,
+        inversion_inicial=inversion_inicial,
+        ret_real=ret_mens_df,
+        perfil=perfil_activo,
         horizonte=horizonte,
         risk_free=risk_free,
         inflacion_col=inflacion_col_actual,
@@ -687,7 +723,7 @@ if __name__ == "__main__":
         frecuencia_meses=frecuencia_meses,
     )
 
-    # ── GUARDAR COMPOSICIÓN AUTOMÁTICAMENTE ──
+    # ── GUARDAR COMPOSICION REAL (los 18 activos con sus pesos) ──
     guardar_composicion(archivo, pesos.to_dict())
     print(f"\n✅ Composición guardada automáticamente en '{nombre}'.")
     print("\n✅ ANÁLISIS COMPLETO")

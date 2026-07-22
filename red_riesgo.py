@@ -1,223 +1,133 @@
 """
 red_riesgo.py
 =============
-Capa de RIESGO del portafolio basada en CORRELACIÓN PARCIAL.
+Correlacion parcial: separa el riesgo PROPIO del riesgo DE MERCADO.
 
-Por qué correlación parcial y no correlación simple:
-  La correlación simple entre dos activos mezcla dos cosas:
-    - riesgo SISTÉMICO (de mercado): ambos caen porque cae todo el mercado.
-      Esto NO se diversifica, se sobrevive con horizonte y con clases de
-      activo distintas.
-    - riesgo NO SISTÉMICO (específico): vínculo propio entre los dos activos,
-      más allá del mercado. ESTO sí se diversifica, y es lo único que está
-      en nuestras manos.
-  La correlación parcial descuenta el efecto del mercado (y de todos los demás
-  activos) y deja solo el vínculo directo. Es, en la práctica, un medidor de
-  riesgo NO sistémico compartido — justo lo que queremos no duplicar.
+EL PROBLEMA QUE RESUELVE
+------------------------
+La correlacion simple no distingue dos cosas muy distintas. Medido en datos
+reales de este proyecto:
 
-  Ejemplo real (datos de Andrea):
-    MSFT-JPM  -> correlación simple 0.26, parcial -0.08  (sin vínculo propio)
-    JPM-BAC   -> correlación simple 0.84, parcial  0.26  (mismo negocio bancario)
-    XOM-CVX   -> correlación simple 0.86, parcial  0.06  (solo mercado, no propio)
-  De 815 pares con correlación simple > 0.5, solo 14 mantienen parcial > 0.5:
-  el resto era puro riesgo de mercado.
+    XOM y CVX  -> corr simple 0.86  ->  corr PARCIAL 0.06
+    JPM y BAC  -> corr simple 0.84  ->  corr PARCIAL 0.26
+    MSFT y JPM -> corr simple 0.26  ->  corr PARCIAL -0.08
 
-Método de cálculo:
-  Se estima la matriz de precisión (inversa de la covarianza) con shrinkage
-  Ledoit-Wolf, que regulariza la inversión y la vuelve numéricamente estable
-  incluso con muchos activos correlacionados. La correlación parcial se deriva
-  de esa matriz de precisión.
+XOM y CVX parecian gemelas (0.86) pero casi todo eso era "el mercado subio":
+sin el mercado no les queda nada en comun (0.06). JPM y BAC si comparten algo
+propio (0.26): son el mismo negocio.
 
-Uso típico:
-    from preparador_datos import preparar_universo
-    from red_riesgo import (
-        matriz_correlacion_parcial, identificar_redundancias,
-        identificar_hedges, activos_diversificadores
-    )
+De 815 pares con correlacion simple > 0.5, solo 14 mantienen parcial > 0.5.
 
-    datos = preparar_universo()
-    pc = matriz_correlacion_parcial(datos["retornos"])
+POR QUE IMPORTA
+---------------
+El mercado NO paga por el riesgo propio: es diversificable, y lo que se elimina
+gratis no tiene prima. Tener NVDA y AMD es cargar el riesgo propio de los
+semiconductores DOS VECES sin cobrar por la segunda. Riesgo regalado.
 
-    redundantes = identificar_redundancias(pc, umbral=0.2)
-    hedges = identificar_hedges(pc, umbral=0.2)
-    diversificadores = activos_diversificadores(pc, umbral=0.2)
+El riesgo sistemico SI lo pagan -- es la prima de riesgo -- y no se puede
+esquivar. Por eso el objetivo del motor no es "minimizar riesgo" (eso degenera:
+medido sobre este universo da 97.5% en SHY, o sea una cuenta de ahorros) sino
+ELIMINAR EL RIESGO QUE NO PAGAN y repartir el que si.
+
+MATEMATICA
+----------
+Sale de la matriz de PRECISION, la inversa de la covarianza:
+
+    P = Sigma^-1
+    corr_parcial(i,j) = -P_ij / sqrt(P_ii * P_jj)
+
+El detalle critico: hay que INVERTIR la covarianza. Con 96 activos esa inversa
+amplifica el ruido brutalmente si la matriz esta flaca. Por eso este modulo NO
+calcula su propia covarianza: recibe la de covarianza.py, ya ponderada al
+reciente y con shrinkage. Sin ese shrinkage la inversa es ficcion numerica.
+
+NOTA HISTORICA: una version anterior usaba Louvain para armar "comunidades" de
+activos. Se descarto: la modularidad daba 0.09 (comunidades practicamente
+inexistentes) y todo dependia de un umbral arbitrario e inestable. La
+correlacion parcial hace el trabajo sin inventar grupos.
 """
 
 import numpy as np
 import pandas as pd
-import networkx as nx
-from sklearn.covariance import LedoitWolf
+
+UMBRAL_REDUNDANCIA = 0.20   # parcial arriba de esto = comparten riesgo propio
+UMBRAL_HEDGE = -0.20        # parcial abajo de esto = se cubren entre si
 
 
-UMBRAL_DEFAULT = 0.2
+def matriz_correlacion_parcial(covarianza: pd.DataFrame) -> pd.DataFrame:
+    """Covarianza -> correlacion parcial, via la matriz de precision.
 
-
-# ============================================================
-# CÁLCULO DE LA CORRELACIÓN PARCIAL
-# ============================================================
-
-def matriz_correlacion_parcial(retornos: pd.DataFrame) -> pd.DataFrame:
-    """Correlación parcial regularizada (Ledoit-Wolf) entre todos los activos.
-
-    retornos: DataFrame de retornos log diarios, ya limpio y alineado
-              (el que produce preparador_datos.py).
-
-    Devuelve una matriz simétrica con la correlación parcial de cada par.
-    Diagonal = 1.0.
-
-    Interpretación del signo:
-      parcial > 0  -> comparten riesgo NO sistémico (vínculo propio; redundancia)
-      parcial < 0  -> cobertura natural (se protegen entre sí)
-      parcial ~ 0  -> sin vínculo propio (su co-movimiento era solo de mercado)
+    covarianza: DEBE venir regularizada (covarianza.covarianza_robusta()).
+                Si le pasas una covarianza muestral cruda, la inversa amplifica
+                el ruido y el resultado no significa nada.
     """
-    X = retornos.values
+    S = covarianza.values
 
-    # Matriz de precisión = inversa regularizada de la covarianza.
-    # El shrinkage de Ledoit-Wolf estabiliza la inversión (evita el problema
-    # de matriz casi-singular con activos muy correlacionados).
-    lw = LedoitWolf().fit(X)
-    precision = lw.precision_
+    ev = np.linalg.eigvalsh(S)
+    if ev.min() <= 0:
+        raise ValueError(
+            f"La covarianza no es definida positiva (autovalor min {ev.min():.2e}). "
+            "No se puede invertir de forma confiable. Usa covarianza_robusta()."
+        )
 
-    # Correlación parcial a partir de la precisión:
-    #   pc_ij = -P_ij / sqrt(P_ii * P_jj)
-    d = np.sqrt(np.diag(precision))
-    pc = -precision / np.outer(d, d)
-    np.fill_diagonal(pc, 1.0)
+    P = np.linalg.inv(S)
+    d = np.sqrt(np.diag(P))
+    C = np.array(-P / np.outer(d, d), copy=True)
+    np.fill_diagonal(C, 1.0)
 
-    return pd.DataFrame(pc, index=retornos.columns, columns=retornos.columns)
-
-
-def shrinkage_aplicado(retornos: pd.DataFrame) -> float:
-    """Devuelve el coeficiente de shrinkage que Ledoit-Wolf necesitó.
-    Cercano a 0 = datos sanos, la parcial es confiable.
-    Cercano a 1 = datos ruidosos/pocos, la parcial se apoyó mucho en la
-    regularización (interpretar con cautela)."""
-    lw = LedoitWolf().fit(retornos.values)
-    return float(lw.shrinkage_)
+    return pd.DataFrame(C, index=covarianza.index, columns=covarianza.columns)
 
 
-# ============================================================
-# IDENTIFICACIÓN DE PARES
-# ============================================================
+def _pares(matriz: pd.DataFrame, condicion) -> pd.DataFrame:
+    """Pares (i<j) que cumplen la condicion, ordenados por |valor|."""
+    n = len(matriz)
+    iu = np.triu_indices(n, 1)
+    nombres = matriz.index
 
-def identificar_redundancias(corr_parcial: pd.DataFrame, umbral: float = UMBRAL_DEFAULT) -> list:
-    """Pares con correlación parcial POSITIVA >= umbral: comparten riesgo
-    NO sistémico, son redundantes en el sentido que importa para diversificar.
-
-    Devuelve lista de (activo1, activo2, parcial), ordenada de mayor a menor
-    (el más redundante primero)."""
-    pares = []
-    tickers = corr_parcial.columns.tolist()
-    for i, a in enumerate(tickers):
-        for b in tickers[i + 1:]:
-            pc = corr_parcial.loc[a, b]
-            if pd.notna(pc) and pc >= umbral:
-                pares.append((a, b, float(pc)))
-    pares.sort(key=lambda x: x[2], reverse=True)
-    return pares
+    filas = [
+        {"activo_a": nombres[i], "activo_b": nombres[j], "parcial": round(float(v), 4)}
+        for i, j, v in zip(iu[0], iu[1], matriz.values[iu])
+        if condicion(v)
+    ]
+    df = pd.DataFrame(filas)
+    if df.empty:
+        return pd.DataFrame(columns=["activo_a", "activo_b", "parcial"])
+    orden = df["parcial"].abs().sort_values(ascending=False).index
+    return df.reindex(orden).reset_index(drop=True)
 
 
-def identificar_hedges(corr_parcial: pd.DataFrame, umbral: float = UMBRAL_DEFAULT) -> list:
-    """Pares con correlación parcial NEGATIVA <= -umbral: cobertura natural.
-    El Analista los usa al revés — si tienes uno, el otro te protege.
-
-    Devuelve lista de (activo1, activo2, parcial), ordenada de más negativo
-    a menos (la mejor cobertura primero)."""
-    pares = []
-    tickers = corr_parcial.columns.tolist()
-    for i, a in enumerate(tickers):
-        for b in tickers[i + 1:]:
-            pc = corr_parcial.loc[a, b]
-            if pd.notna(pc) and pc <= -umbral:
-                pares.append((a, b, float(pc)))
-    pares.sort(key=lambda x: x[2])  # más negativo primero
-    return pares
+def identificar_redundancias(corr_parcial, umbral=UMBRAL_REDUNDANCIA) -> pd.DataFrame:
+    """Pares que comparten riesgo PROPIO: tener los dos es pagar dos veces."""
+    return _pares(corr_parcial, lambda v: v > umbral)
 
 
-def activos_diversificadores(corr_parcial: pd.DataFrame, umbral: float = UMBRAL_DEFAULT) -> list:
-    """Activos SIN ningún vínculo propio (positivo o negativo) por encima del
-    umbral con nadie. Su riesgo es puramente idiosincrático o de mercado, pero
-    no comparten riesgo NO sistémico con ningún otro activo del universo.
-
-    Son diversificadores puros: agregarlos no duplica el riesgo específico de
-    nada más. (En los datos de Andrea: DBC y SHY a umbral 0.15.)"""
-    tickers = corr_parcial.columns.tolist()
-    diversificadores = []
-    for a in tickers:
-        tiene_vinculo = False
-        for b in tickers:
-            if a == b:
-                continue
-            pc = corr_parcial.loc[a, b]
-            if pd.notna(pc) and abs(pc) >= umbral:
-                tiene_vinculo = True
-                break
-        if not tiene_vinculo:
-            diversificadores.append(a)
-    return diversificadores
+def identificar_hedges(corr_parcial, umbral=UMBRAL_HEDGE) -> pd.DataFrame:
+    """Pares con parcial NEGATIVA: se cubren mas alla del mercado.
+    Diversificacion genuina, no accidental."""
+    return _pares(corr_parcial, lambda v: v < umbral)
 
 
-# ============================================================
-# GRAFO (para visualización / análisis estructural)
-# ============================================================
-
-def construir_grafo_parcial(corr_parcial: pd.DataFrame, umbral: float = UMBRAL_DEFAULT) -> nx.Graph:
-    """Grafo de riesgo no sistémico: un nodo por activo, una arista si la
-    correlación parcial (en valor absoluto) supera el umbral. El peso guarda
-    el valor con signo (positivo = riesgo compartido, negativo = cobertura).
-
-    Los activos sin vínculo (diversificadores) quedan como nodos aislados."""
-    G = nx.Graph()
-    G.add_nodes_from(corr_parcial.columns)
-
-    tickers = corr_parcial.columns.tolist()
-    for i, a in enumerate(tickers):
-        for b in tickers[i + 1:]:
-            pc = corr_parcial.loc[a, b]
-            if pd.notna(pc) and abs(pc) >= umbral:
-                G.add_edge(a, b, weight=float(pc))
-
-    return G
+def activos_diversificadores(corr_parcial, umbral=UMBRAL_REDUNDANCIA) -> list:
+    """Activos sin ningun vinculo propio fuerte con nadie: su riesgo es todo
+    suyo. Aportan diversificacion pura."""
+    V = corr_parcial.to_numpy(copy=True)
+    np.fill_diagonal(V, 0.0)
+    maxima = pd.Series(np.abs(V).max(axis=0), index=corr_parcial.index)
+    return maxima[maxima < umbral].index.tolist()
 
 
-# ============================================================
-# RESUMEN RÁPIDO
-# ============================================================
-
-def resumen_red(corr_parcial: pd.DataFrame, umbral: float = UMBRAL_DEFAULT) -> dict:
-    """Panorama rápido de la red a un umbral dado."""
-    redundantes = identificar_redundancias(corr_parcial, umbral)
-    hedges = identificar_hedges(corr_parcial, umbral)
-    diversificadores = activos_diversificadores(corr_parcial, umbral)
+def resumen_red(corr_parcial, umbral=UMBRAL_REDUNDANCIA) -> dict:
+    """Retrato de la estructura de riesgo propio del universo."""
+    V = corr_parcial.to_numpy(copy=True)
+    vals = V[np.triu_indices(len(V), 1)]
 
     return {
-        "umbral": umbral,
-        "n_redundancias": len(redundantes),
-        "n_hedges": len(hedges),
-        "n_diversificadores": len(diversificadores),
-        "diversificadores": diversificadores,
-        "top_redundancias": redundantes[:10],
-        "top_hedges": hedges[:10],
+        "n_activos": len(corr_parcial),
+        "n_pares": len(vals),
+        "redundancias": identificar_redundancias(corr_parcial, umbral),
+        "hedges": identificar_hedges(corr_parcial, -umbral),
+        "diversificadores": activos_diversificadores(corr_parcial, umbral),
+        "parcial_media_abs": float(np.nanmean(np.abs(vals))),
+        "parcial_maxima": float(np.nanmax(vals)),
+        "parcial_minima": float(np.nanmin(vals)),
     }
-
-
-if __name__ == "__main__":
-    # Prueba con datos sintéticos: dos activos con vínculo propio fuerte y
-    # el resto solo ligado por un factor de mercado común.
-    np.random.seed(0)
-    n = 800
-    mercado = np.random.randn(n)
-    tickers = [f"A{i}" for i in range(8)]
-    data = {}
-    for t in tickers:
-        data[t] = 0.6 * mercado + np.random.randn(n)
-    # Vínculo propio fuerte entre A0 y A1 (más allá del mercado)
-    data["A1"] = data["A1"] + 0.8 * data["A0"]
-    df = pd.DataFrame(data)
-
-    pc = matriz_correlacion_parcial(df)
-    print("Shrinkage:", round(shrinkage_aplicado(df), 4))
-    print("\nRedundancias (parcial > 0.2):")
-    for a, b, v in identificar_redundancias(pc, 0.2):
-        print(f"  {a}-{b}: {v:.2f}")
-    print("\nDiversificadores:", activos_diversificadores(pc, 0.2))

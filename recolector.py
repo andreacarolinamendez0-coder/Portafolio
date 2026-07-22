@@ -79,6 +79,169 @@ def _esta_fresco(archivo, dias=1):
     return edad.days < dias
 
 
+
+# ============================================================
+# API DE ESTADISTICAS DEL BANCO DE LA REPUBLICA
+# ============================================================
+# Portal nuevo de Banrep. Devuelve la serie COMPLETA como pares
+# [timestamp_ms, valor] en SERIES[0]["data"], mas metadata.
+# Reemplaza el scraping de HTML con regex, que era indefendible.
+#
+# Para encontrar el idMenu de otra serie:
+#   1. https://suameca.banrep.gov.co/estadisticas-economicas/catalogo
+#   2. Click en la serie que quieras
+#   3. La URL queda .../informacionSerie/{ID}/nombre_de_la_serie
+#   4. Ese {ID} es el idMenu
+
+BANREP_API = (
+    "https://suameca.banrep.gov.co/estadisticas-economicas-back/rest"
+    "/estadisticaEconomicaRestService/consultaMenuXId"
+)
+
+# El API exige Referer/Origin: es el backend interno del portal y solo responde
+# a peticiones que parezcan venir de su propio frontend.
+# OJO: si faltan, NO devuelve 403 - devuelve 200 con el cuerpo VACIO. Por eso
+# raise_for_status() no sirve para detectar el fallo; hay que revisar el cuerpo.
+BANREP_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/json, text/plain, */*",
+    "Referer": "https://suameca.banrep.gov.co/estadisticas-economicas/",
+    "Origin": "https://suameca.banrep.gov.co",
+}
+
+# Solo estas fuentes se consideran dato real y quedan protegidas.
+# 'desconocida' (esquema viejo) y 'fallback' NO estan aqui a proposito.
+FUENTES_CONFIABLES = {
+    "banrep_api",
+    "banco_mundial_anual",
+    "fred",
+    "treasury",
+    "datos_gov_co",
+}
+
+ID_TASA_POLITICA = 59      # Tasa de politica monetaria, diaria, desde 1998-02-13
+ID_INFLACION_TOTAL = None  # <-- PENDIENTE: buscar en el catalogo y poner el numero
+
+# Rangos de sanidad. Si el dato cae fuera, es basura -> se rechaza.
+# (La tasa de Banrep llego a 27% en 1998, por eso el techo es alto.)
+RANGO_TASA_BANREP = (0.0, 40.0)
+RANGO_INFLACION_COL = (-5.0, 60.0)
+
+
+def _banrep_serie(id_menu: int, timeout: int = 20):
+    """Descarga una serie completa del API de Banrep.
+
+    Devuelve (DataFrame con indice Fecha y columna 'valor', metadata dict).
+    Los timestamps vienen en milisegundos, a medianoche hora Bogota (UTC-5).
+    """
+    r = requests.get(
+        BANREP_API, params={"idMenu": id_menu}, headers=BANREP_HEADERS, timeout=timeout
+    )
+    r.raise_for_status()
+
+    # El API responde 200 con cuerpo vacio cuando rechaza la peticion (p.ej. si
+    # faltan Referer/Origin). Hay que detectarlo a mano: el status no delata nada.
+    if not r.text.strip():
+        raise ValueError(
+            f"El API devolvio 200 con cuerpo VACIO para idMenu={id_menu}. "
+            "Suele significar que rechazo las cabeceras (Referer/Origin)."
+        )
+
+    js = r.json()
+    series = js.get("SERIES") or []
+    if not series:
+        raise ValueError(f"El API no devolvio SERIES para idMenu={id_menu}")
+
+    s = series[0]
+    datos = s.get("data") or []
+    if not datos:
+        raise ValueError(f"La serie {id_menu} vino sin datos")
+
+    df = pd.DataFrame(datos, columns=["ts", "valor"])
+    df["Fecha"] = (
+        pd.to_datetime(df["ts"], unit="ms", utc=True)
+        .dt.tz_convert("America/Bogota")
+        .dt.normalize()
+        .dt.tz_localize(None)
+    )
+    df = df.set_index("Fecha")[["valor"]].sort_index()
+    df = df[~df.index.duplicated(keep="last")].dropna()
+
+    meta = {
+        "nombre": s.get("nombre"),
+        "unidad": s.get("unidad"),
+        "periodicidad": s.get("descripcionPeriodicidad"),
+        "fuente": s.get("fuente"),
+        "ultimo_cargue": s.get("fechaUltimoCargue"),
+        "ultimo_valor": s.get("valor"),
+        "ultima_fecha": s.get("fecha"),
+    }
+    return df, meta
+
+
+def _guardar_macro(df_nuevo, archivo, columna, fuente, rango):
+    """Guarda una serie macro con trazabilidad y validacion.
+
+    Reglas:
+      - Cada fila lleva columna 'fuente' -> nunca se confunde dato real con fallback.
+      - Se valida el rango. Fuera de rango = basura, se rechaza.
+      - El indice es la FECHA DEL DATO, no la fecha de descarga.
+      - Un fallback NUNCA pisa un dato real ya guardado.
+    """
+    lo, hi = rango
+    fuera = df_nuevo[(df_nuevo[columna] < lo) | (df_nuevo[columna] > hi)]
+    if len(fuera) > 0:
+        registrar(
+            f"AVISO: {len(fuera)} valores de {columna} fuera del rango {rango} - se descartan",
+            "AVISO",
+        )
+        df_nuevo = df_nuevo[(df_nuevo[columna] >= lo) & (df_nuevo[columna] <= hi)]
+
+    if df_nuevo.empty:
+        registrar(f"Nada valido que guardar en {os.path.basename(archivo)}", "ERROR")
+        return False
+
+    df_nuevo = df_nuevo.copy()
+    df_nuevo["fuente"] = fuente
+
+    if os.path.exists(archivo):
+        try:
+            df_viejo = pd.read_parquet(archivo)
+
+            # Esquema viejo (sin columna 'fuente'): indice = hora de descarga con
+            # microsegundos, filas NaN, sin trazabilidad. Es basura -> se descarta.
+            # No se protege: proteger datos malos es peor que no proteger nada.
+            if "fuente" not in df_viejo.columns:
+                registrar(
+                    f"{os.path.basename(archivo)} viene del esquema viejo "
+                    f"(sin columna 'fuente') - lo descarto y reescribo.",
+                    "AVISO",
+                )
+            else:
+                if fuente == "fallback":
+                    # Un fallback jamas pisa datos de una fuente confiable.
+                    reales = df_viejo[df_viejo["fuente"].isin(FUENTES_CONFIABLES)]
+                    if not reales.empty:
+                        registrar(
+                            "Ya hay datos de fuente confiable - el fallback NO los pisa.",
+                            "AVISO",
+                        )
+                        return False
+
+                df_nuevo = df_nuevo.combine_first(df_viejo)
+                # combine_first deja NaN en 'fuente' de las filas nuevas
+                df_nuevo.loc[df_nuevo["fuente"].isna(), "fuente"] = fuente
+        except Exception as e:
+            registrar(f"No pude leer {archivo} ({e}) - lo reescribo", "AVISO")
+
+    df_nuevo.sort_index(inplace=True)
+    df_nuevo.to_parquet(archivo)
+    return True
+
+
 # ============================================================
 # UTILIDADES
 # ============================================================
@@ -116,10 +279,20 @@ def registrar(mensaje, tipo="INFO"):
 # ============================================================
 
 
-def _descargar_lote(tickers, inicio, fin, chunk):
-    """Descarga una lista de tickers en lotes de tamaño `chunk`.
-    Devuelve una lista de DataFrames (uno por lote), lista para concatenar."""
+def _descargar_lote(tickers, inicio, fin, chunk=20, pausa=8, reintentos=2):
+    """Descarga una lista de tickers en lotes pequenos con pausa entre ellos.
+
+    Yahoo Finance aplica rate limiting cuando se piden muchos tickers a la vez.
+    Sintoma: tickers validos aparecen como "possibly delisted". Solucion: lotes
+    mas chicos (20) y pausa mas larga (8s). Reintenta los fallidos una vez.
+
+    chunk=20  : Yahoo aguanta bien lotes de 20; con 80 corta al azar.
+    pausa=8   : 2s no es suficiente entre lotes grandes.
+    reintentos: si un ticker falla en el lote, se reintenta solo.
+    """
     partes = []
+    fallidos = []
+
     for i in range(0, len(tickers), chunk):
         lote = tickers[i : i + chunk]
         try:
@@ -128,14 +301,39 @@ def _descargar_lote(tickers, inicio, fin, chunk):
             )["Close"]
             if isinstance(df, pd.Series):
                 df = df.to_frame(lote[0])
+            # detectar cuales fallaron dentro del lote
+            vacios = [t for t in lote if t not in df.columns or df[t].notna().sum() == 0]
+            if vacios:
+                fallidos.extend(vacios)
             partes.append(df)
         except Exception as e:
-            registrar(f"❌ Lote falló ({lote[:3]}...): {e}", "ERROR")
-        time.sleep(2)
+            registrar(f"Lote fallo ({lote[:3]}...): {e}", "ERROR")
+            fallidos.extend(lote)
+        time.sleep(pausa)
+
+    # Reintentar fallidos uno por uno
+    if fallidos and reintentos > 0:
+        registrar(f"Reintentando {len(fallidos)} tickers fallidos uno por uno...")
+        for t in fallidos:
+            time.sleep(4)
+            try:
+                df = yf.download(
+                    [t], start=inicio, end=fin, auto_adjust=True, progress=False
+                )["Close"]
+                if isinstance(df, pd.Series):
+                    df = df.to_frame(t)
+                if df[t].notna().sum() > 0:
+                    partes.append(df)
+                    registrar(f"Reintento exitoso: {t}")
+                else:
+                    registrar(f"Sin datos tras reintento: {t}", "AVISO")
+            except Exception as e:
+                registrar(f"Reintento fallo para {t}: {e}", "ERROR")
+
     return partes
 
 
-def recolectar_precios(forzar=False, dias=1, chunk=80):
+def recolectar_precios(forzar=False, dias=1, chunk=20):
     """
     Descarga precios distinguiendo entre:
     - Tickers NUEVOS (no existían en el parquet, o existían pero con menos de
@@ -297,72 +495,84 @@ def recolectar_inflacion_usa():
 
 
 def recolectar_inflacion_col():
-    registrar("Iniciando descarga de inflación Colombia...")
+    """Inflacion total de Colombia (variacion 12 meses).
+
+    PRIMARIA: API de Banrep (mensual, al dia). Requiere poner el idMenu en
+    ID_INFLACION_TOTAL - buscalo en el catalogo del portal.
+
+    RESPALDO: Banco Mundial. OJO - es ANUAL y con ~18 meses de rezago. Queda
+    marcado como fuente='banco_mundial_anual' para que el analista sepa que
+    esta consumiendo un dato grueso y viejo, no inflacion mensual al dia.
+    """
+    registrar("Iniciando descarga de inflacion Colombia...")
     archivo = os.path.join(CARPETA_MACRO, "inflacion_col.parquet")
+
+    # --- Fuente primaria: API de Banrep ---
+    if ID_INFLACION_TOTAL is not None:
+        try:
+            df, meta = _banrep_serie(ID_INFLACION_TOTAL)
+            df = df.rename(columns={"valor": "Inflacion_COL"})
+            ok = _guardar_macro(
+                df, archivo, "Inflacion_COL", "banrep_api", RANGO_INFLACION_COL
+            )
+            if ok:
+                registrar(
+                    f"OK Inflacion COL desde el API. Ultimo: {meta['ultimo_valor']}% "
+                    f"({meta['ultima_fecha']}) | {len(df)} datos "
+                    f"({meta['periodicidad']}) desde {df.index.min().date()}"
+                )
+                return
+        except Exception as e:
+            registrar(f"Fallo el API de Banrep para inflacion: {e}", "ERROR")
+    else:
+        registrar(
+            "ID_INFLACION_TOTAL sin configurar - uso Banco Mundial (anual, con rezago).",
+            "AVISO",
+        )
+
+    # --- Respaldo: Banco Mundial (anual, rezagado) ---
     try:
-        # DANE vía API pública del Banco Mundial
         url = (
             "https://api.worldbank.org/v2/country/CO/indicator/FP.CPI.TOTL.ZG"
-            "?format=json&per_page=10&mrv=5"
+            "?format=json&per_page=100"
         )
         r = requests.get(url, headers=UA, timeout=15)
         data = r.json()
-        registros = data[1]
-        filas = []
-        for rec in registros:
-            if rec.get("value") is not None:
-                filas.append(
-                    {
-                        "Fecha": pd.Timestamp(f"{rec['date']}-12-01"),
-                        "Inflacion_COL": float(rec["value"]),
-                    }
-                )
+        filas = [
+            {
+                "Fecha": pd.Timestamp(f"{rec['date']}-12-31"),
+                "Inflacion_COL": float(rec["value"]),
+            }
+            for rec in data[1]
+            if rec.get("value") is not None
+        ]
         if not filas:
             raise ValueError("Sin datos del Banco Mundial")
+
         df = pd.DataFrame(filas).set_index("Fecha").sort_index()
-        df.to_parquet(archivo)
-        ultimo = df["Inflacion_COL"].iloc[-1]
-        fecha_ultimo = df.index[-1].strftime("%Y")
-        registrar(
-            f"✅ Inflación COL guardada. Último dato: {ultimo:.2f}% ({fecha_ultimo})"
+        ok = _guardar_macro(
+            df, archivo, "Inflacion_COL", "banco_mundial_anual", RANGO_INFLACION_COL
         )
+        if ok:
+            registrar(
+                f"Inflacion COL desde Banco Mundial: {df['Inflacion_COL'].iloc[-1]:.2f}% "
+                f"({df.index[-1].year}). ANUAL Y CON REZAGO - marcada como tal.",
+                "AVISO",
+            )
+        return
     except Exception as e:
+        registrar(f"Tambien fallo el Banco Mundial: {e}", "ERROR")
+
+    # --- Ultimo recurso, marcado ---
+    df_fb = pd.DataFrame(
+        {"Inflacion_COL": [6.14]}, index=[pd.Timestamp("2026-06-30")]
+    )
+    if _guardar_macro(df_fb, archivo, "Inflacion_COL", "fallback", RANGO_INFLACION_COL):
         registrar(
-            f"⚠️ Banco Mundial falló: {e} — intentando fuente alternativa", "AVISO"
+            "OJO: inflacion COL de RESPALDO (6.14%, junio 2026). "
+            "Marcada fuente='fallback'. NO usar para calculos serios.",
+            "AVISO",
         )
-        try:
-            # Alternativa: db.nomics con serie del FMI
-            url2 = "https://api.db.nomics.world/v22/series/WB/WDI/A.FP.CPI.TOTL.ZG.COL?observations=1"
-            r2 = requests.get(url2, timeout=15)
-            data2 = r2.json()
-            periods = data2["series"]["docs"][0]["period"]
-            values = data2["series"]["docs"][0]["value"]
-            filas2 = []
-            for p, v in zip(periods, values):
-                if v is not None:
-                    try:
-                        filas2.append(
-                            {
-                                "Fecha": pd.Timestamp(f"{p}-12-01"),
-                                "Inflacion_COL": float(v),
-                            }
-                        )
-                    except:
-                        continue
-            if not filas2:
-                raise ValueError("Sin datos en alternativa")
-            df2 = pd.DataFrame(filas2).set_index("Fecha").sort_index()
-            df2.to_parquet(archivo)
-            ultimo2 = df2["Inflacion_COL"].iloc[-1]
-            registrar(f"✅ Inflación COL (alternativa) guardada: {ultimo2:.2f}%")
-        except Exception as e2:
-            registrar(f"❌ Ambas fuentes fallaron: {e2}", "ERROR")
-            if not os.path.exists(archivo):
-                df_fb = pd.DataFrame(
-                    {"Inflacion_COL": [5.68]}, index=[pd.Timestamp.now()]
-                )
-                df_fb.to_parquet(archivo)
-                registrar("⚠️ Usando inflación COL de respaldo: 5.68%", "AVISO")
 
 
 # ============================================================
@@ -404,44 +614,63 @@ def recolectar_tasa_libre_riesgo():
 
 
 def recolectar_tasa_banrep():
+    """Tasa de politica monetaria del Banco de la Republica.
+
+    Fuente: API oficial de estadisticas de Banrep (serie 59), diaria desde 1998.
+    Antes esto scrapeaba HTML con un regex que agarraba el PRIMER porcentaje de
+    la pagina - podia ser cualquier numero y no habia forma de saber si acerto.
+    """
     registrar("Iniciando descarga de tasa Banrep...")
     archivo = os.path.join(CARPETA_MACRO, "tasa_banrep.parquet")
 
     if _esta_fresco(archivo, dias=1):
-        registrar(f"✅ Tasa Banrep ya descargada hoy. ")
+        registrar("Tasa Banrep ya descargada hoy - omito.")
         return
 
     try:
-        url = "https://www.banrep.gov.co/es/estadisticas/tasas-de-interes-del-banco-de-la-republica"
-        response = requests.get(url, headers=UA, timeout=15)
+        df, meta = _banrep_serie(ID_TASA_POLITICA)
+        df = df.rename(columns={"valor": "Tasa_Banrep"})
+        ok = _guardar_macro(df, archivo, "Tasa_Banrep", "banrep_api", RANGO_TASA_BANREP)
+        if ok:
+            registrar(
+                f"OK Tasa Banrep desde el API. Ultimo: {meta['ultimo_valor']}% "
+                f"({meta['ultima_fecha']}) | {len(df)} datos desde {df.index.min().date()}"
+            )
+        return
+    except Exception as e:
+        registrar(f"Fallo el API de Banrep: {e}", "ERROR")
 
-        matches = re.findall(r"(\d+[.,]\d+)\s*%", response.text)
+    # Fallback: SOLO si no hay ningun dato real guardado. Y queda MARCADO.
+    df_fb = pd.DataFrame({"Tasa_Banrep": [12.0]}, index=[pd.Timestamp("2026-06-30")])
+    if _guardar_macro(df_fb, archivo, "Tasa_Banrep", "fallback", RANGO_TASA_BANREP):
+        registrar(
+            "OJO: tasa Banrep de RESPALDO (12.0%, vigente desde 2026-06-30). "
+            "Marcada fuente='fallback'. NO usar para calculos serios.",
+            "AVISO",
+        )
 
-        if matches:
-            tasa = float(matches[0].replace(",", "."))
-            registrar(f"✅ Tasa Banrep extraída del sitio web: {tasa:.2f}%")
-        else:
-            raise ValueError("No se encontró la tasa en el HTML")
 
+def leer_macro(nombre, columna, permitir_fallback=False):
+    """Lector con conciencia de la fuente. Uselo en vez de leer el parquet
+    directo, para no consumir un fallback creyendo que es dato real.
+
+    Devuelve (valor, fecha, fuente) o (None, None, None) si no hay dato usable.
+    """
+    archivo = os.path.join(CARPETA_MACRO, nombre)
+    if not os.path.exists(archivo):
+        return None, None, None
+    try:
+        df = pd.read_parquet(archivo)
+        if "fuente" not in df.columns:
+            df["fuente"] = "desconocida"
+        if not permitir_fallback:
+            df = df[df["fuente"] != "fallback"]
+        if df.empty:
+            return None, None, None
+        df = df.sort_index()
+        return float(df.iloc[-1][columna]), df.index[-1], str(df.iloc[-1]["fuente"])
     except Exception:
-        tasa = 11.25
-        registrar(f"⚠️ Usando tasa Banrep de respaldo: {tasa}%", "AVISO")
-        if not os.path.exists(archivo):
-            # Solo creo archivo si no existe, para no romper consumidores en primera corrida
-            df_fb = pd.DataFrame({"Tasa_Banrep": [tasa]}, index=[pd.Timestamp.now()])
-            df_fb.to_parquet(archivo)
-        return  # nunca pisamos un parquet existente con datos del fallback
-
-    df = pd.DataFrame({"Tasa_Banrep": [tasa]}, index=[pd.Timestamp.now()])
-
-    if os.path.exists(archivo):
-        df_existente = pd.read_parquet(archivo)
-        df = pd.concat([df_existente, df])
-        df = df[~df.index.duplicated(keep="last")]
-
-    df.sort_index(inplace=True)
-    df.to_parquet(archivo)
-    registrar(f"✅ Tasa Banrep guardada: {tasa:.2f}%")
+        return None, None, None
 
 
 # ============================================================

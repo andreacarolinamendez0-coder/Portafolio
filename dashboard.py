@@ -1,4 +1,4 @@
-﻿import dotenv
+import dotenv
 
 dotenv.load_dotenv()
 from flask import Flask, request, session, jsonify
@@ -461,18 +461,22 @@ def api_analista_chat(archivo):
         return jsonify({"respuesta": f"Error: {str(e)}"})
 
 
+# ═══════════════════════════════════════════════════════════════════
+# REEMPLAZO DE api_generar_propuesta  (lineas 1957-2164)
+# ═══════════════════════════════════════════════════════════════════
+# Cambios vs la version vieja:
+#   - Ya NO usa cargar_datos/construir_panel/calcular_retornos_reales (bugs)
+#   - Llama al motor nuevo via adaptador, que devuelve TODO calculado
+#   - Las proyecciones usan la serie de retornos COP real del motor, sin el
+#     bug de los 12 meses duplicados
+#   - El reporte muestra los activos reales del motor, no un dummy
+
 @app.route("/api/generar-propuesta/<archivo>", methods=["POST"])
 def api_generar_propuesta(archivo):
     if verificar_acceso(archivo):
         return jsonify({"ok": False, "error": "No autorizado"})
     try:
-        from analista import (
-            cargar_datos,
-            construir_panel,
-            calcular_retornos_reales,
-            optimizar_portafolio,
-            completar_precios,
-        )
+        from adaptador_analista import generar_propuesta_completa
 
         data = request.get_json()
         perfil = data.get("perfil", "agresivo")
@@ -480,16 +484,15 @@ def api_generar_propuesta(archivo):
         aporte_dca = float(data.get("aporte_dca", 0))
         freq = int(data.get("frecuencia_meses", 1))
         horizonte = int(data.get("horizonte", 10))
-        # Sanity check — el analista a veces manda valores absurdos
         if horizonte <= 0 or horizonte > 50:
             horizonte = 10
+
         portafolio = leer_portafolio(archivo)
         tiene_inv = len(portafolio.get("aportes", [])) > 0
 
+        # --- Tickers fijos (si el analista IA propuso activos concretos) ---
         import re
-
         raw_activos = data.get("activos", {})
-        # El LLM a veces manda lista de objetos {"ticker":..,"porcentaje":..} en vez de {ticker: peso}
         if isinstance(raw_activos, list):
             raw_activos = {
                 a.get("ticker"): a.get("porcentaje", a.get("peso", 0))
@@ -498,79 +501,33 @@ def api_generar_propuesta(archivo):
             }
         activos_propuestos = (
             {
-                k: v
-                for k, v in raw_activos.items()
-                if isinstance(k, str)
-                and isinstance(v, (int, float))
+                k: v for k, v in raw_activos.items()
+                if isinstance(k, str) and isinstance(v, (int, float))
                 and re.fullmatch(r"[A-Z]{1,6}(-USD)?", k)
             }
-            if isinstance(raw_activos, dict)
-            else {}
+            if isinstance(raw_activos, dict) else {}
         )
         if raw_activos and not activos_propuestos:
-            return jsonify(
-                {
-                    "ok": False,
-                    "error": 'El analista propuso categorías en vez de tickers reales (ej. "Biotecnología y genómica" en vez de "ARKG" o "IBB"). Pídele que traduzca la idea a tickers concretos.',
-                }
-            )
+            return jsonify({
+                "ok": False,
+                "error": 'El analista propuso categorías en vez de tickers reales '
+                         '(ej. "Biotecnología" en vez de "IBB"). Pídele tickers concretos.',
+            })
 
-        precios, trm, inf_usa, inf_col, risk_free, tasa_cdt = cargar_datos()
-        if activos_propuestos:
-            precios = completar_precios(precios, activos_propuestos) 
-        panel = construir_panel(precios, trm, inf_usa, inf_col, risk_free)
-        activos_todos = list(precios.columns)
-        ret_real = calcular_retornos_reales(panel, activos_todos)
+        # --- MOTOR NUEVO: hace todo (seleccion, pesos, perfil, proyecciones) ---
+        resultado = generar_propuesta_completa(
+            perfil=perfil,
+            horizonte=horizonte,
+            inversion=inversion,
+            aporte_dca=aporte_dca,
+            frecuencia_meses=freq,
+            tickers_fijos=list(activos_propuestos.keys()) if activos_propuestos else None,
+        )
 
-        if activos_propuestos:
-            pesos, _ = optimizar_portafolio(
-                ret_real,
-                panel,
-                perfil,
-                risk_free,
-                inversion,
-                tickers_fijos=list(activos_propuestos.keys()),
-            )
-        else:
-            pesos, _ = optimizar_portafolio(
-                ret_real, panel, perfil, risk_free, inversion
-            )
-            reporte_txt = ""
-        try:
-            from analista import generar_reporte
-            import io
+        pesos_dict = resultado["pesos"]
+        reporte_txt = resultado["reporte_txt"]
 
-            inf_col_actual = float(
-                pd.read_parquet(os.path.join(DATOS_DIR, "macro/inflacion_col.parquet"))[
-                    "Inflacion_COL"
-                ].iloc[-1]
-            )
-            import sys
-
-            old = sys.stdout
-            sys.stdout = buf = io.StringIO()
-            try:
-                generar_reporte(
-                    pesos=pesos,
-                    inversion_inicial=inversion,
-                    ret_real=ret_real,
-                    perfil=perfil,
-                    horizonte=horizonte,
-                    risk_free=risk_free,
-                    inflacion_col=inf_col_actual,
-                    tasa_cdt=float(tasa_cdt),
-                    aporte_periodico=aporte_dca,
-                    frecuencia_meses=freq,
-                )
-            finally:
-                sys.stdout = old
-            reporte_txt = buf.getvalue()
-        except Exception as e:
-            reporte_txt = f"Proyecciones no disponibles: {str(e)}"
-
-        pesos_dict = pesos.to_dict()
-
-        # Construir filas editables
+        # --- Filas editables ---
         filas_editables = ""
         for a, v in sorted(pesos_dict.items(), key=lambda x: x[1], reverse=True):
             pct = round(v * 100, 1)
@@ -604,14 +561,12 @@ def api_generar_propuesta(archivo):
                 f'overflow-x:auto;white-space:pre">{reporte_txt}</div>'
                 f"</div>"
             )
-            if reporte_txt
-            else ""
+            if reporte_txt else ""
         )
 
         dca_html = (
             f'<span>DCA: <strong style="color:#f5f5f7">${aporte_dca:,.0f} COP</strong></span>'
-            if aporte_dca > 0
-            else ""
+            if aporte_dca > 0 else ""
         )
 
         if tiene_inv:
@@ -620,6 +575,18 @@ def api_generar_propuesta(archivo):
             btns_html = (
                 '<button id="btn-reemplazar" style="padding:10px 20px;border-radius:10px;font-size:13px;font-family:DM Sans,sans-serif;cursor:pointer;background:rgba(0,113,227,0.15);color:#4da3ff;border:1px solid rgba(0,113,227,0.3)">Aplicar a este portafolio</button>'
                 '<button id="btn-nuevo" style="padding:10px 20px;border-radius:10px;font-size:13px;font-family:DM Sans,sans-serif;cursor:pointer;background:rgba(255,255,255,0.05);color:#6e6e73;border:1px solid rgba(255,255,255,0.08)">Crear portafolio adicional</button>'
+            )
+
+        # --- Aviso del perfil (alfa y advertencia CDT) ---
+        alfa = resultado.get("alfa")
+        aviso_perfil = ""
+        if alfa is not None:
+            aviso_perfil = (
+                f'<div style="margin-top:12px;padding:10px 12px;background:rgba(79,138,255,0.06);'
+                f'border:1px solid rgba(79,138,255,0.2);border-radius:10px;font-size:11px;color:#a1a1a6">'
+                f'Según tu tolerancia, <strong style="color:#4da3ff">{alfa*100:.0f}%</strong> va al '
+                f'portafolio y <strong style="color:#4da3ff">{(1-alfa)*100:.0f}%</strong> a CDT. '
+                f'{resultado.get("advertencia_cdt","")}</div>'
             )
 
         html = (
@@ -640,6 +607,7 @@ def api_generar_propuesta(archivo):
             '<span id="alerta-total" style="font-size:11px;color:#ff453a;display:none">⚠️ Debe sumar 100%</span>'
             "</div>"
             f"{reporte_html}"
+            f"{aviso_perfil}"
             '<div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,0.06);display:flex;gap:16px;font-size:12px;color:#6e6e73">'
             f'<span>Inversión: <strong style="color:#f5f5f7">${inversion:,.0f} COP</strong></span>'
             f"{dca_html}"
@@ -649,27 +617,31 @@ def api_generar_propuesta(archivo):
             "</div>"
         )
 
-        return jsonify(
-            {
-                "ok": True,
-                "html": html,
-                "propuesta": {
-                    "pesos": pesos_dict,
-                    "perfil": perfil,
-                    "inversion": inversion,
-                    "aporte_dca": aporte_dca,
-                    "frecuencia_meses": freq,
-                    "horizonte": horizonte,
-                    "archivo": archivo,
-                },
-            }
-        )
+        return jsonify({
+            "ok": True,
+            "html": html,
+            "propuesta": {
+                "pesos": pesos_dict,
+                "perfil": perfil,
+                "inversion": inversion,
+                "aporte_dca": aporte_dca,
+                "frecuencia_meses": freq,
+                "horizonte": horizonte,
+                "archivo": archivo,
+                "alfa": alfa,
+            },
+        })
     except Exception as e:
         import traceback
-
         traceback.print_exc()
         return jsonify({"ok": False, "error": str(e)})
 
+
+# ═══════════════════════════════════════════════════════════════════
+# REEMPLAZO DE api_recalcular_proyecciones  (lineas 2167-2266)
+# ═══════════════════════════════════════════════════════════════════
+# El usuario edito pesos a mano. Recalcula proyecciones con esos pesos,
+# usando la serie de retornos COP real del motor (sin bugs).
 
 @app.route("/api/recalcular-proyecciones/<archivo>", methods=["POST"])
 def api_recalcular_proyecciones(archivo):
