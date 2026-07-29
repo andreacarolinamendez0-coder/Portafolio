@@ -60,7 +60,12 @@ export default function SettingsPage() {
       <div style={{ maxWidth: 600, margin: "0 auto", padding: "24px", color: "var(--text)" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 32 }}>
           <LogoMark size={32} />
-          <Link href="/portafolios" style={{ color: "#6e6e73", fontSize: 12, textDecoration: "none" }}>← Portafolios</Link>
+         <button
+          onClick={() => router.back()}
+          style={{ background: "none", border: "none", color: "var(--text-3)", fontSize: 12, cursor: "pointer", padding: 0, fontFamily: "inherit" }}
+        >
+          ← Volver
+        </button>
           <span style={{ color: "#6e6e73", fontSize: 12 }}>/ Mi Perfil</span>
           <button onClick={async () => { await authLogout(); router.push("/login"); }} style={{ marginLeft: "auto", background: "none", border: "none", color: "#6e6e73", fontSize: 12, cursor: "pointer" }}>Salir</button>
         </div>

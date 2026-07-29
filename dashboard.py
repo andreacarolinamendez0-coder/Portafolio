@@ -15,6 +15,8 @@ warnings.filterwarnings("ignore")
 
 from gestor_portafolio import (
     leer_portafolio,
+    _leer_logs,
+    _leer_usuarios,
     listar_portafolios_de_usuario,
     crear_portafolio_para_usuario,
     guardar_composicion,
@@ -808,6 +810,14 @@ def api_aplicar_propuesta(archivo):
                 )
             nm = os.path.basename(na)
             guardar_composicion(nm, pesos)
+            ip, dispositivo = _request_meta()
+            registrar_actividad(
+                 "portafolio_nuevo",
+                 username,
+                 detalle=f'Portafolio "{nombre_n}" creado',
+                 ip=ip,
+                 dispositivo=dispositivo,
+             )
             # El portafolio nuevo empieza sin historial de monitor
             ruta_monitor = os.path.join(DATOS_DIR, "portafolios", f"monitor_{nm}")
             if os.path.exists(ruta_monitor):
@@ -1033,20 +1043,40 @@ def api_admin_eliminar_usuario():
     return jsonify({"ok": ok})
 
 
+
 @app.route("/api/eliminar-portafolio/<archivo>", methods=["POST"])
 def api_eliminar_portafolio(archivo):
     if verificar_acceso(archivo):
         return jsonify({"ok": False, "error": "No autorizado"})
     try:
+        # Leer el nombre antes de borrar, para el log
+        try:
+            p = leer_portafolio(archivo)
+            nombre_port = p.get("nombre", archivo) if p else archivo
+        except Exception:
+            nombre_port = archivo
+ 
         ruta = f"datos/portafolios/{archivo}"
         ruta_monitor = f"datos/portafolios/monitor_{archivo}"
         if os.path.exists(ruta):
             os.remove(ruta)
         if os.path.exists(ruta_monitor):
             os.remove(ruta_monitor)
+ 
+        # Registrar la eliminacion
+        ip, dispositivo = _request_meta()
+        registrar_actividad(
+            "portafolio_eliminado",
+            session.get("username", ""),
+            detalle=f'Portafolio "{nombre_port}" eliminado',
+            ip=ip,
+            dispositivo=dispositivo,
+        )
+ 
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
+
 
 
 @app.route("/api/fix-banrep")
@@ -1980,6 +2010,97 @@ def api_desactivar_portafolio_json(archivo):
         return jsonify({'ok': True, 'activo': False})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
+
+@app.route("/api/admin/usuarios", methods=["GET"])
+def api_admin_listar_usuarios():
+    """Todos los usuarios con su info, SIN el hash de contraseña.
+ 
+    Agrega dos datos calculados que el admin necesita para vigilar:
+      - bloqueado: si la cuenta esta bloqueada AHORA (compara la fecha)
+      - n_portafolios: cuantos portafolios tiene ese usuario
+    """
+    if not session.get("es_admin"):
+        return jsonify({"ok": False, "error": "No autorizado"}), 403
+ 
+    from datetime import datetime
+ 
+    usuarios = _leer_usuarios()
+    ahora = datetime.now()
+    lista = []
+ 
+    for uname, u in usuarios.items():
+        username = u.get("username", uname)
+ 
+        # ¿bloqueado ahora mismo? (no solo si tiene fecha, sino si aun no pasa)
+        bloqueado = False
+        bh = u.get("bloqueado_hasta")
+        if bh:
+            try:
+                bloqueado = datetime.fromisoformat(bh) > ahora
+            except Exception:
+                bloqueado = False
+ 
+        # portafolios del usuario (reusa la funcion del gestor)
+        try:
+            n_port = len(listar_portafolios_de_usuario(username))
+        except Exception:
+            n_port = 0
+ 
+        lista.append({
+            "username": username,
+            "email": u.get("email", ""),
+            "es_admin": bool(u.get("es_admin", False)),
+            "fecha_registro": u.get("fecha_registro", ""),
+            "ultimo_login": u.get("ultimo_login", ""),
+            "intentos_fallidos": u.get("intentos_fallidos", 0),
+            "bloqueado": bloqueado,
+            "email_notifications": bool(u.get("email_notifications", True)),
+            "n_portafolios": n_port,
+        })
+ 
+    # admins primero, luego por ultimo login mas reciente
+    lista.sort(key=lambda x: (not x["es_admin"], x["ultimo_login"] or ""), reverse=False)
+ 
+    return jsonify({"ok": True, "usuarios": lista, "total": len(lista)})
+ 
+@app.route("/api/admin/actividad", methods=["GET"])
+def api_admin_actividad():
+    """Actividad reciente del log, mas nueva primero.
+ 
+    ?limite=N   (default 50)
+    ?tipo=X     filtra por tipo de evento (login_ok, registro, eliminacion...)
+    """
+    if not session.get("es_admin"):
+        return jsonify({"ok": False, "error": "No autorizado"}), 403
+ 
+    try:
+        logs = _leer_logs()
+    except Exception:
+        logs = []
+ 
+    if not isinstance(logs, list):
+        logs = []
+ 
+    filtro_tipo = request.args.get("tipo")
+    if filtro_tipo:
+        logs = [l for l in logs if l.get("tipo") == filtro_tipo]
+ 
+    try:
+        limite = int(request.args.get("limite", 50))
+    except ValueError:
+        limite = 50
+ 
+    recientes = list(reversed(logs))[:limite]
+ 
+    from collections import Counter
+    tipos = Counter(l.get("tipo", "desconocido") for l in logs)
+ 
+    return jsonify({
+        "ok": True,
+        "actividad": recientes,
+        "total": len(logs),
+        "resumen_tipos": dict(tipos),
+    })
 
 if __name__=="__main__":
     print("="*55)

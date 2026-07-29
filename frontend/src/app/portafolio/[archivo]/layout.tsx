@@ -93,7 +93,6 @@ export default function PortafolioLayout({ children }: { children: React.ReactNo
               </p>
             )}
           </div>
-          <Link href="/portafolios" style={{ fontSize: 12, color: "var(--text-3)", textDecoration: "none", padding: "7px 12px" }}>← Portafolios</Link>
           <Link href="/settings" style={{ fontSize: 12, color: "var(--text-3)", textDecoration: "none", padding: "7px 12px" }}>Mi Perfil</Link>
           <button onClick={async () => { await authLogout(); router.push("/login"); }} style={{ background: "none", border: "none", color: "var(--text-3)", fontSize: 12, cursor: "pointer" }}>Salir</button>
         </div>

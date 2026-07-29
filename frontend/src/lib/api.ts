@@ -215,3 +215,77 @@ export const registrarCompra = (archivo: string, data: {
     method: "POST",
     body: JSON.stringify(data),
   });
+ 
+export interface AdminUsuario {
+  username:            string;
+  email:               string;
+  es_admin:            boolean;
+  fecha_registro:      string;
+  ultimo_login:        string;
+  intentos_fallidos:   number;
+  bloqueado:           boolean;
+  email_notifications: boolean;
+  n_portafolios:       number;
+}
+ 
+export interface ActividadEntry {
+  tipo:        string;
+  username:    string;
+  email:       string;
+  detalle:     string;
+  ip:          string;
+  dispositivo: string;
+  fecha:       string;
+}
+ 
+// ── Lecturas ──
+ 
+export const adminListarUsuarios = () =>
+  apiFetch<{ ok: boolean; usuarios: AdminUsuario[]; total: number }>(
+    "/api/admin/usuarios"
+  );
+ 
+export const adminActividad = (limite = 50, tipo?: string) => {
+  const params = new URLSearchParams({ limite: String(limite) });
+  if (tipo) params.set("tipo", tipo);
+  return apiFetch<{
+    ok: boolean;
+    actividad: ActividadEntry[];
+    total: number;
+    resumen_tipos: Record<string, number>;
+  }>(`/api/admin/actividad?${params.toString()}`);
+};
+ 
+// ── Acciones (rutas que ya existian en el backend) ──
+ 
+export const adminEliminarUsuario = (username: string) =>
+  apiFetch<{ ok: boolean; error?: string }>("/api/admin/eliminar-usuario", {
+    method: "POST",
+    body: JSON.stringify({ username }),
+  });
+ 
+// El backend genera una clave temporal fija (cambiar123) y la devuelve en 'mensaje'.
+// No se le manda contraseña nueva.
+export const adminResetPassword = (username: string) =>
+  apiFetch<{ ok: boolean; mensaje?: string; error?: string }>(
+    "/api/admin/reset-password",
+    { method: "POST", body: JSON.stringify({ username }) }
+  );
+ 
+export const adminDesbloquear = (username: string) =>
+  apiFetch<{ ok: boolean; error?: string }>("/api/admin/desbloquear", {
+    method: "POST",
+    body: JSON.stringify({ username }),
+  });
+ 
+export const adminToggleAdmin = (username: string, es_admin: boolean) =>
+  apiFetch<{ ok: boolean; error?: string }>("/api/admin/toggle-admin", {
+    method: "POST",
+    body: JSON.stringify({ username, es_admin }),
+  });
+
+  export const eliminarPortafolio = (archivo: string) =>
+  apiFetch<{ ok: boolean; error?: string }>(`/api/eliminar-portafolio/${archivo}`, {
+    method: "POST",
+  });
+ 

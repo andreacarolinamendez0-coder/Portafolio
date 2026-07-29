@@ -9,6 +9,7 @@ import { LiquidButton } from "@/components/ui/liquid-glass-button";
 import { GlowPanel } from "@/components/ui/glow-panel";
 import { PageIntro } from "@/components/ui/page-intro";
 import { desactivarPortafolio } from "@/lib/api";
+import { eliminarPortafolio } from "@/lib/api";
 
 
 
@@ -28,6 +29,7 @@ export default function ConfigPage() {
   const [divisa, setDivisa]   = useState("USD");
   const [msg, setMsg]         = useState({ text: "", ok: false });
   const [loading, setLoading] = useState(true);
+  const [borrando, setBorrando] = useState(false);
 
   useEffect(() => {
     getConfig(archivo)
@@ -53,6 +55,25 @@ export default function ConfigPage() {
       setMsg({ text: "Portafolio activado para monitoreo", ok: true });
     } catch (e: unknown) {
       setMsg({ text: e instanceof Error ? e.message : "Error", ok: false });
+    }
+  }
+
+  async function eliminar() {
+    if (!confirm(`¿Eliminar el portafolio "${nombre}"?\n\nSe borra junto con todo su historial. Esto no se puede deshacer.`)) return;
+    setBorrando(true);
+    try {
+      const r = await eliminarPortafolio(archivo);
+      if (r.ok) {
+        // Ya no existe: sacar al usuario de aqui. El desplegable de portafolios
+        // es su forma de elegir otro; lo mandamos a la raiz que redirige.
+        router.push("/");
+      } else {
+        setMsg({ text: r.error ?? "No se pudo eliminar", ok: false });
+        setBorrando(false);
+      }
+    } catch (e: unknown) {
+      setMsg({ text: e instanceof Error ? e.message : "Error", ok: false });
+      setBorrando(false);
     }
   }
 
@@ -139,6 +160,27 @@ export default function ConfigPage() {
 )}
         </GlowPanel>
 
+ {/* Zona peligrosa */}
+        <GlowPanel>
+          <h3 style={{ fontSize: "1rem", marginBottom: 12, color: "#ff453a" }}>Eliminar portafolio</h3>
+          <p style={{ color: "var(--text-3)", fontSize: 13, marginBottom: 16 }}>
+            Borra este portafolio y todo su historial de forma permanente. Esta acción no se puede deshacer.
+          </p>
+          <button
+            onClick={eliminar}
+            disabled={borrando}
+            style={{
+              padding: "11px 24px", borderRadius: 12, cursor: borrando ? "default" : "pointer",
+              fontFamily: "inherit", fontSize: 14, fontWeight: 500,
+              background: "rgba(255,69,58,0.1)", color: "#ff453a",
+              border: "1px solid rgba(255,69,58,0.3)",
+              opacity: borrando ? 0.5 : 1,
+            }}
+          >
+            {borrando ? "Eliminando..." : "Eliminar este portafolio"}
+          </button>
+        </GlowPanel>
+ 
     </>
   );
 }
