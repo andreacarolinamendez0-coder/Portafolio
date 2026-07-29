@@ -4,7 +4,7 @@ import { useParams, usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion, useMotionValue, useSpring } from "framer-motion";
 import { LogoMark } from "@/components/ui/logo";
-import { getConfig, authLogout } from "@/lib/api";
+import { getConfig, authLogout, authMe } from "@/lib/api";
 import { SelectorPortafolios } from "@/components/ui/selector-portafolios";
 import { NuevoPortafolioDialog } from "@/components/portfolio/nuevo-portafolio-dialog";
 
@@ -26,12 +26,14 @@ export default function PortafolioLayout({ children }: { children: React.ReactNo
   const [info, setInfo] = useState<{ nombre: string; perfil: string; propietario: string; fecha_inicio: string } | null>(null);
   const [selectorAbierto, setSelectorAbierto] = useState(false);
   const [crearAbierto, setCrearAbierto] = useState(false);
+  const [esAdmin, setEsAdmin] = useState(false);
 
   useEffect(() => {
     if (typeof window !== "undefined" && archivo) {
       localStorage.setItem("ultimoPortafolio", archivo);
     }
     getConfig(archivo).then(d => setInfo({ nombre: d.nombre, perfil: d.perfil, propietario: d.propietario, fecha_inicio: d.fecha_inicio })).catch(() => {});
+    authMe().then(me => setEsAdmin(me.es_admin)).catch(() => {});
   }, [archivo]);
 
   // Detectar pestaña activa por la URL
@@ -93,6 +95,11 @@ export default function PortafolioLayout({ children }: { children: React.ReactNo
               </p>
             )}
           </div>
+          {esAdmin && (
+          <Link href="/admin" style={{ fontSize: 12, color: "#4da3ff", textDecoration: "none", padding: "7px 12px", display: "inline-flex", alignItems: "center", gap: 4 }}>
+          🛡 Admin
+          </Link>
+          )}
           <Link href="/settings" style={{ fontSize: 12, color: "var(--text-3)", textDecoration: "none", padding: "7px 12px" }}>Mi Perfil</Link>
           <button onClick={async () => { await authLogout(); router.push("/login"); }} style={{ background: "none", border: "none", color: "var(--text-3)", fontSize: 12, cursor: "pointer" }}>Salir</button>
         </div>
