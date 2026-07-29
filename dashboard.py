@@ -10,6 +10,10 @@ import yfinance as yf
 from zoneinfo import ZoneInfo
 import anthropic
 import warnings
+import math
+from flask.json.provider import DefaultJSONProvider
+ 
+
 
 warnings.filterwarnings("ignore")
 
@@ -74,6 +78,29 @@ app.secret_key = os.environ.get("SECRET_KEY")
 if not app.secret_key:
     raise RuntimeError("SECRET_KEY environment variable is not set")
 
+
+class ProveedorJSONSeguro(DefaultJSONProvider):
+    """JSON provider que convierte NaN/Infinity en None antes de serializar.
+ 
+    JSON estandar no admite NaN ni Infinity. Sin esto, cualquier calculo que
+    de NaN (division por cero, dato faltante) rompe el frontend entero.
+    """
+    def dumps(self, obj, **kwargs):
+        return super().dumps(_limpiar_nan(obj), **kwargs)
+ 
+def _limpiar_nan(o):
+    if isinstance(o, float):
+        if math.isnan(o) or math.isinf(o):
+            return None          # NaN/Infinity -> null (el frontend ya maneja null)
+        return o
+    if isinstance(o, dict):
+        return {k: _limpiar_nan(v) for k, v in o.items()}
+    if isinstance(o, (list, tuple)):
+        return [_limpiar_nan(v) for v in o]
+    return o
+ 
+# Activarlo (va inmediatamente despues de crear app):
+app.json = ProveedorJSONSeguro(app)
 
 # ============================================================
 # UTILIDADES
