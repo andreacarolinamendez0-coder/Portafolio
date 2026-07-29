@@ -15,3 +15,8 @@ datos/portafolios/
 datos/usuarios.json
 datos/logs_actividad.json
 client_secret_google.json
+reset_admin.py
+probar_motor.py
+probar_red.py
+red_riesgo_real.png
+
