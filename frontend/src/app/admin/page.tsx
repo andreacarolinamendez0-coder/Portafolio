@@ -50,7 +50,7 @@ export default function AdminPage() {
       try {
         const me = await authMe();
         if (!me.authenticated) { router.push("/login"); return; }
-        if (!me.es_admin) { router.push("/portafolios"); return; }
+        if (!me.es_admin) { router.push("/"); return; }
         setMiUsuario(me.username);
         await cargarTodo();
       } catch {
@@ -137,8 +137,8 @@ export default function AdminPage() {
             <LogoMark size={32} />
             <div>
               <div style={{ fontSize: 18, fontWeight: 600 }}>Panel de administración</div>
-              <Link href="/portafolios" style={{ color: "var(--text-3)", fontSize: 12, textDecoration: "none" }}>
-                ← Volver a portafolios
+              <Link href="/" style={{ color: "var(--text-3)", fontSize: 12, textDecoration: "none" }}>
+                ← Volver
               </Link>
             </div>
           </div>

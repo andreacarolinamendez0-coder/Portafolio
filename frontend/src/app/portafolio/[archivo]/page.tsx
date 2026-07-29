@@ -47,7 +47,7 @@ export default function DashboardPage() {
       const { timestamp } = await getUltimaActualizacion();
       setLastUpdate(timestamp);
     } catch {
-      router.push("/portafolios");
+      router.push("/");
     } finally {
       setLoading(false);
     }
@@ -194,9 +194,6 @@ function NavBar({ archivo, active }: { archivo: string; active: string }) {
           {t.label}
         </Link>
       ))}
-      <Link href="/portafolios" style={{ marginLeft: "auto", padding: "7px 12px", fontSize: 12, textDecoration: "none", color: "#6e6e73" }}>
-        ← Portafolios
-      </Link>
     </div>
   );
 }

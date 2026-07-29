@@ -432,10 +432,10 @@ export default function BienvenidaPage() {
       if (nuevo) {
         router.push(`/portafolio/${nuevo.archivo}/analista`);
       } else {
-        router.push("/portafolios");  // respaldo si no se encuentra
+        router.push("/");  // respaldo si no se encuentra
       }
     } catch {
-      router.push("/portafolios");  // respaldo si algo falla
+      router.push("/");  // respaldo si algo falla
     }
   }
   function atras() { setDir(-1); setPaso(p => Math.max(0, p - 1)); }
@@ -449,7 +449,7 @@ export default function BienvenidaPage() {
 
       <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", justifyContent: "flex-end", padding: "20px 24px", maxWidth: 560, margin: "0 auto", width: "100%" }}>
         {!esUltimo && (
-          <button onClick={() => router.push("/portafolios")} style={{ background: "none", border: "none", color: "var(--text-3)", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Saltar</button>
+          <button onClick={() => router.push("/")} style={{ background: "none", border: "none", color: "var(--text-3)", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Saltar</button>
         )}
       </div>
 
