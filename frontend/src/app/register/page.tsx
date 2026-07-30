@@ -6,12 +6,14 @@ import { LogoMark } from "@/components/ui/logo";
 import { Button } from "@/components/ui/button";
 import { GlowCard } from "@/components/ui/spotlight-card";
 import { authRegister } from "@/lib/api";
+import { useRouter } from "next/navigation";
 
 export default function RegisterPage() {
   const [form, setForm]       = useState({ username: "", email: "", password: "", telegram: "" });
   const [error, setError]     = useState("");
   const [loading, setLoading] = useState(false);
   const [sent, setSent]       = useState(false);
+  const router = useRouter();
 
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm(f => ({ ...f, [k]: e.target.value }));
@@ -23,7 +25,7 @@ export default function RegisterPage() {
     setLoading(true);
     try {
       await authRegister(form);
-      setSent(true);
+      router.push(`/activar?email=${encodeURIComponent(form.email)}`);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Error de conexión");
     } finally {

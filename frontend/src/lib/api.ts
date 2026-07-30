@@ -1,5 +1,5 @@
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(public status: number, message: string, public data?: Record<string, unknown>) {
     super(message);
   }
 }
@@ -11,11 +11,20 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
   });
   const data = await res.json();
-  if (!res.ok) throw new ApiError(res.status, data.error ?? "Error desconocido");
+  if (!res.ok) throw new ApiError(res.status, (data.error as string) ?? "Error desconocido", data);
   return data as T;
 }
 
 // ── Auth ────────────────────────────────────────────────────
+export const authVerifyPin = (email: string, pin: string) =>
+  apiFetch<{ ok: boolean; username: string }>("/api/auth/verify-pin", {
+    method: "POST", body: JSON.stringify({ email, pin }),
+  });
+
+export const authResendPin = (email: string) =>
+  apiFetch<{ ok: boolean }>("/api/auth/resend-pin", {
+    method: "POST", body: JSON.stringify({ email }),
+  });
 
 export const authMe = () =>
   apiFetch<{ authenticated: boolean; username: string; es_admin: boolean }>("/api/auth/me");
@@ -50,12 +59,6 @@ export const authResetPassword = (token: string, password: string) =>
   apiFetch<{ ok: boolean }>("/api/auth/forgot-password", {
     method: "POST",
     body: JSON.stringify({ email }),
-  });
-
-export const authActivate = (token: string) =>
-  apiFetch<{ ok: boolean }>("/api/auth/activate", {
-    method: "POST",
-    body: JSON.stringify({ token }),
   });
 
   

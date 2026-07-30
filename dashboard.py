@@ -12,8 +12,6 @@ import anthropic
 import warnings
 import math
 from flask.json.provider import DefaultJSONProvider
- 
-
 
 warnings.filterwarnings("ignore")
 
@@ -41,7 +39,8 @@ from gestor_portafolio import (
 )
 
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
-from emails import enviar_bienvenida, enviar_reset_password
+import secrets, hashlib
+from emails import enviar_pin_activacion, enviar_reset_password
 
 TZ_NY = ZoneInfo("America/New_York")
 TZ_COL = ZoneInfo("America/Bogota")
@@ -1511,35 +1510,53 @@ def api_auth_register():
 
     return jsonify({"ok": True, "username": username, "requiere_activacion": True})
 
-ACTIVAR_MAX_AGE = 8 * 3600  # 8 horas
-
-
-def _serializer_activar():
-    return URLSafeTimedSerializer(app.secret_key, salt="activar-cuenta")
-
-
-REENVIO_ACTIVACION_MIN = 5  # minutos mínimos entre envíos de activación (anti-spam)
-
+PIN_EXPIRA_MIN = 10          # vida del PIN de activación
+PIN_INTENTOS_MAX = 5         # intentos fallidos antes de invalidar
+REENVIO_ACTIVACION_SEG = 60 
+CAP_ENVIOS = 5              # máximo de códigos enviados por ventana
+VENTANA_ENVIOS_MIN = 60     # ventana en minutos (se reinicia el conteo)
 
 def _enviar_activacion(username, email):
-    # Anti-spam: no reenviar si mandamos uno hace < REENVIO_ACTIVACION_MIN minutos.
+    """Genera/manda un PIN. Devuelve True si envió, o un string con el motivo si no."""
     u = get_usuario(username)
-    if u:
-        ultimo = u.get("ultimo_envio_activacion")
-        if ultimo:
-            try:
-                if datetime.now() - datetime.strptime(ultimo, "%Y-%m-%d %H:%M:%S") < timedelta(minutes=REENVIO_ACTIVACION_MIN):
-                    return False   # en cooldown, no reenviar
-            except ValueError:
-                pass
-    token = _serializer_activar().dumps(username)
-    app_url = os.environ.get("APP_URL", "").rstrip("/")
-    enviado = enviar_bienvenida(
-        email, username, f"{app_url}/activar?token={token}", ACTIVAR_MAX_AGE // 3600
-    )
-    if enviado:
-        actualizar_usuario(username, {"ultimo_envio_activacion": datetime.now().strftime("%Y-%m-%d %H:%M:%S")})
-    return enviado
+    if not u:
+        return "Cuenta no encontrada."
+    ahora = datetime.now()
+
+    # Cooldown entre reenvíos
+    ultimo = u.get("ultimo_envio_activacion")
+    if ultimo:
+        try:
+            if ahora - datetime.strptime(ultimo, "%Y-%m-%d %H:%M:%S") < timedelta(seconds=REENVIO_ACTIVACION_SEG):
+                return "Espera un momento antes de pedir otro código."
+        except ValueError:
+            pass
+
+    # Tope total por ventana (anti email-bombing) — se reinicia pasada la ventana
+    count = u.get("envios_activacion", 0)
+    ventana = u.get("envios_ventana")
+    if ventana:
+        try:
+            if ahora - datetime.strptime(ventana, "%Y-%m-%d %H:%M:%S") > timedelta(minutes=VENTANA_ENVIOS_MIN):
+                count, ventana = 0, None   # ventana expiró → reinicia
+        except ValueError:
+            count, ventana = 0, None
+    if count >= CAP_ENVIOS:
+        return "Alcanzaste el límite de códigos. Intenta de nuevo en un rato."
+
+    pin = f"{secrets.randbelow(1000000):06d}"
+    if not enviar_pin_activacion(email, username, pin, PIN_EXPIRA_MIN):
+        return "No se pudo enviar el correo. Intenta de nuevo."
+
+    actualizar_usuario(username, {
+        "pin_activacion": hashlib.sha256(pin.encode()).hexdigest(),
+        "pin_expira": (ahora + timedelta(minutes=PIN_EXPIRA_MIN)).strftime("%Y-%m-%d %H:%M:%S"),
+        "pin_intentos": 0,
+        "ultimo_envio_activacion": ahora.strftime("%Y-%m-%d %H:%M:%S"),
+        "envios_activacion": count + 1,
+        "envios_ventana": ventana or ahora.strftime("%Y-%m-%d %H:%M:%S"),
+    })
+    return True
 
 RESET_MAX_AGE = 900  # 15 minutos
 
@@ -1608,21 +1625,57 @@ def _validar_sesion():
         session.clear()
 
 
-@app.route("/api/auth/activate", methods=["POST"])
-def api_auth_activate():
-    token = ((request.get_json(silent=True) or {}).get("token") or "").strip()
-    try:
-        username = _serializer_activar().loads(token, max_age=ACTIVAR_MAX_AGE)
-    except SignatureExpired:
-        return jsonify({"ok": False, "error": "El enlace de activación venció. Regístrate de nuevo."}), 400
-    except BadSignature:
-        return jsonify({"ok": False, "error": "Enlace de activación inválido."}), 400
+@app.route("/api/auth/verify-pin", methods=["POST"])
+def api_auth_verify_pin():
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip()
+    pin = (data.get("pin") or "").strip()
 
-    if not get_usuario(username):
-        return jsonify({"ok": False, "error": "Esa cuenta ya no existe."}), 400
+    username, u = get_usuario_por_email(email)
+    if not u:
+        return jsonify({"ok": False, "error": "Cuenta no encontrada."}), 400
 
-    # Idempotente: activar dos veces no hace daño
-    actualizar_usuario(username, {"email_verificado": True})
+    if not u.get("email_verificado"):
+        pin_hash = u.get("pin_activacion")
+        expira = u.get("pin_expira")
+        intentos = u.get("pin_intentos", 0)
+        if not pin_hash or not expira:
+            return jsonify({"ok": False, "error": "No hay un código activo. Pide uno nuevo."}), 400
+        try:
+            vencido = datetime.now() > datetime.strptime(expira, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            vencido = True
+        if vencido:
+            return jsonify({"ok": False, "error": "El código venció. Pide uno nuevo."}), 400
+        if intentos >= PIN_INTENTOS_MAX:
+            return jsonify({"ok": False, "error": "Demasiados intentos. Pide un código nuevo.", "bloqueado": True}), 400
+        if hashlib.sha256(pin.encode()).hexdigest() != pin_hash:
+            actualizar_usuario(username, {"pin_intentos": intentos + 1})
+            return jsonify({"ok": False, "error": "Código incorrecto."}), 400
+        actualizar_usuario(username, {
+            "email_verificado": True,
+            "pin_activacion": None, "pin_expira": None, "pin_intentos": 0,
+        })
+
+    # AUTO-LOGIN (recién verificado o ya verificado): abre sesión igual que el login
+    session["username"] = username
+    session["fp"] = huella_password_hash(u["password_hash"])
+    session["es_admin"] = u.get("es_admin", False)
+    session.permanent = True
+    ip, dispositivo = _request_meta()
+    registrar_actividad("activacion_ok", username, email=email,
+                        detalle="Cuenta activada por PIN (auto-login)", ip=ip, dispositivo=dispositivo)
+    return jsonify({"ok": True, "username": username})
+
+
+@app.route("/api/auth/resend-pin", methods=["POST"])
+def api_auth_resend_pin():
+    email = ((request.get_json(silent=True) or {}).get("email") or "").strip()
+    username, u = get_usuario_por_email(email)
+    if username and not u.get("email_verificado"):
+        res = _enviar_activacion(username, email)
+        if res is not True:
+            return jsonify({"ok": False, "error": res}), 429
     return jsonify({"ok": True})
 
 @app.route("/api/auth/login", methods=["POST"])
@@ -1635,7 +1688,8 @@ def api_auth_login():
 
     if usuario and not usuario.get("bloqueado") and not usuario.get("email_verificado", True):
         _enviar_activacion(usuario["username"], usuario["email"])
-        return jsonify({"ok": False, "error": "Tu cuenta aún no está activada. Revisa tu correo para activarla (mira también el spam)."}), 403
+        return jsonify({"ok": False, "error": "Tu cuenta no está activada. Te enviamos un código.",
+                        "requiere_activacion": True, "email": usuario["email"]}), 403
     elif usuario and not usuario.get("bloqueado"):
         session["username"] = usuario["username"]
         session["fp"] = huella_password_hash(usuario["password_hash"])

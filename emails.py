@@ -13,8 +13,10 @@ Dependencias:
     google-api-python-client
     google-auth
 """
+
 from dotenv import load_dotenv
-load_dotenv()  
+
+load_dotenv()
 import base64
 import html as html_lib
 import logging
@@ -53,7 +55,9 @@ def _get_credentials() -> Credentials:
 
 def _html_to_text(html: str) -> str:
     """Fallback en texto plano para clientes que no renderizan HTML."""
-    html = re.sub(r'<a\s[^>]*href="([^"]+)"[^>]*>(.*?)</a>', r"\2 (\1)", html, flags=re.I | re.S)
+    html = re.sub(
+        r'<a\s[^>]*href="([^"]+)"[^>]*>(.*?)</a>', r"\2 (\1)", html, flags=re.I | re.S
+    )
     text = re.sub(r"<br\s*/?>", "\n", html, flags=re.I)
     text = re.sub(r"</(p|div|h\d|tr)>", "\n", text, flags=re.I)
     text = re.sub(r"<[^>]+>", "", text)
@@ -83,10 +87,7 @@ def send_email(to: str, subject: str, html: str, text: str | None = None) -> boo
             "gmail", "v1", credentials=_get_credentials(), cache_discovery=False
         )
         result = (
-            service.users()
-            .messages()
-            .send(userId="me", body={"raw": raw})
-            .execute()
+            service.users().messages().send(userId="me", body={"raw": raw}).execute()
         )
         logger.info("Correo enviado a %s (id=%s)", to, result.get("id"))
         return True
@@ -101,6 +102,7 @@ def send_email(to: str, subject: str, html: str, text: str | None = None) -> boo
 # ---------------------------------------------------------------------------
 # Plantillas
 # ---------------------------------------------------------------------------
+
 
 def _layout(titulo: str, cuerpo: str, cta_texto: str = "", cta_url: str = "") -> str:
     app_name = os.getenv("APP_NAME", "Portafolio")
@@ -140,16 +142,19 @@ def _layout(titulo: str, cuerpo: str, cta_texto: str = "", cta_url: str = "") ->
 </html>"""
 
 
-def enviar_bienvenida(to: str, nombre: str, activar_url: str = "", horas: int = 8) -> bool:
+def enviar_pin_activacion(to: str, nombre: str, pin: str, minutos: int = 10) -> bool:
     app_name = os.getenv("APP_NAME", "Portafolio")
     cuerpo = f"""
     <p>Hola {nombre}, ¡bienvenido/a a {app_name}!</p>
-    <p>Solo falta un paso: confirma que este correo es tuyo con el botón de abajo.</p>
-    <p style="font-size:13px;color:#5f6368;">El enlace vence en {horas} horas.</p>"""
+    <p>Tu código de activación es:</p>
+    <p style="font-size:34px;font-weight:700;letter-spacing:8px;color:#1a73e8;
+              margin:20px 0;text-align:center;">{pin}</p>
+    <p>Escríbelo en la página de activación. Vence en <strong>{minutos} minutos</strong>.</p>
+    <p style="font-size:13px;color:#5f6368;">Si no te registraste, ignora este correo.</p>"""
     return send_email(
         to,
-        f"Confirma tu cuenta en {app_name}",
-        _layout(f"Bienvenido/a a {app_name}", cuerpo, "Activar mi cuenta", activar_url),
+        f"Tu código de activación · {app_name}",
+        _layout(f"Activa tu cuenta en {app_name}", cuerpo),
     )
 
 
@@ -162,19 +167,18 @@ def enviar_reset_password(to: str, reset_url: str, minutos: int = 60) -> bool:
     return send_email(
         to,
         "Restablece tu contraseña",
-        _layout("Restablece tu contraseña", cuerpo, "Crear nueva contraseña", reset_url),
+        _layout(
+            "Restablece tu contraseña", cuerpo, "Crear nueva contraseña", reset_url
+        ),
     )
 
 
 def enviar_reporte_mensual(to: str, nombre: str, periodo: str, metricas: dict) -> bool:
     """metricas: {'Valor del portafolio': '$12.400', 'Rendimiento': '+3,2%', ...}"""
-    filas = "".join(
-        f"""<tr>
+    filas = "".join(f"""<tr>
               <td style="padding:10px 0;color:#5f6368;">{k}</td>
               <td style="padding:10px 0;text-align:right;font-weight:600;">{v}</td>
-            </tr>"""
-        for k, v in metricas.items()
-    )
+            </tr>""" for k, v in metricas.items())
     cuerpo = f"""
     <p>Hola {nombre}, este es el resumen de tu portafolio en {periodo}.</p>
     <table style="width:100%;border-collapse:collapse;margin-top:8px;">{filas}</table>"""

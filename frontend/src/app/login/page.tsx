@@ -8,6 +8,7 @@ import { LogoMark } from "@/components/ui/logo";
 import { Button } from "@/components/ui/button";
 import { GlowCard } from "@/components/ui/spotlight-card";
 import { authLogin } from "@/lib/api";
+import { ApiError } from "@/lib/api";
 
 const TRIVIA_BIENVENIDA = [
   "Comprar caro y vender barato es una estrategia. Mala, pero estrategia.",
@@ -55,6 +56,10 @@ export default function LoginPage() {
         router.push(`/portafolio/${existe ? ultimo : portafolios[0].archivo}`);
       }
     } catch (err: unknown) {
+      if (err instanceof ApiError && err.data?.requiere_activacion) {
+        router.push(`/activar?email=${encodeURIComponent(email)}`);
+        return;
+      }
       setError(err instanceof Error ? err.message : "Error de conexión");
     } finally {
       setLoading(false);
