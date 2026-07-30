@@ -1716,7 +1716,7 @@ def api_portafolios():
     nombre = data.get("nombre", "").strip()
     perfil = data.get("perfil", "agresivo")
     propietario = data.get("propietario", username).strip()
-    inversion = float(data.get("inversion_inicial", 0) or 0)
+    inversion = float(data.get("inversion_inicial", data.get("inversion", 0)) or 0)
     aporte = float(data.get("aporte_dca", 0) or 0)
     frecuencia = int(data.get("frecuencia_meses", 0) or 0)
 
@@ -1726,7 +1726,12 @@ def api_portafolios():
     archivo = crear_portafolio_para_usuario(
         username, nombre, perfil, propietario, inversion, aporte, frecuencia
     )
-    return jsonify({"ok": True, "archivo": archivo})
+    if not archivo:
+        return jsonify({"ok": False, "error": "No se pudo crear el portafolio"}), 500
+    # devolver solo el nombre del archivo (sin la carpeta) para que el frontend
+    # lo use en las rutas /portafolio/<archivo>
+    import os as _os
+    return jsonify({"ok": True, "archivo": _os.path.basename(archivo)})
 
 
 @app.route("/api/dashboard/<archivo>")
