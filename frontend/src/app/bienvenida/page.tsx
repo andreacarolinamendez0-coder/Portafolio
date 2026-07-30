@@ -338,6 +338,10 @@ function EscenaSeguimiento({ onReady }: EscenaProps) {
             <p style={{ fontSize: 8.5, color: "var(--text-3)", margin: "0 0 4px" }}>Fecha</p>
             <div style={{ background: "var(--bg-2)", border: "1px solid var(--glass-border)", borderRadius: 8, padding: "8px 10px", fontSize: 11, color: "var(--text-2)" }}>12 jun</div>
           </div>
+          <div style={{ flex: 1 }}>
+            <p style={{ fontSize: 8.5, color: "var(--text-3)", margin: "0 0 4px" }}>Cantidad:</p>
+            <div style={{ background: "var(--bg-2)", border: "1px solid var(--glass-border)", borderRadius: 8, padding: "8px 10px", fontSize: 11, color: "var(--text-2)" }}>0.8</div>
+          </div>
           <div style={{ display: "flex", alignItems: "flex-end" }}>
             <div style={{ background: "#0071e3", borderRadius: 8, padding: "8px 14px", fontSize: 11, color: "#fff", fontWeight: 500 }}>+ Añadir</div>
           </div>
@@ -346,7 +350,7 @@ function EscenaSeguimiento({ onReady }: EscenaProps) {
         <div style={{ display: "flex", gap: 10, alignItems: "flex-start", background: "var(--bg-2)", border: "1px solid var(--glass-border)", borderRadius: 10, padding: "9px 12px" }}>
           <LogoMark size={22} />
           <p style={{ fontSize: 11, color: "var(--text-2)", margin: 0, lineHeight: 1.5 }}>
-            Atom calcula por ti las <span style={{ color: "#0071e3", fontWeight: 600 }}>acciones adquiridas</span> — incluso fracciones — gracias a que conoce el valor del activo en tiempo real.
+            Atom lleva por ti las <span style={{ color: "#0071e3", fontWeight: 600 }}>transacciones ejecutadas</span> , y gracias a su perfecto orden y organización, nunca olvidará una compra. Recuerda que puedes adquirir acciones completas o fracciones.
           </p>
         </div>
       </div>
@@ -396,7 +400,7 @@ const PASOS: Paso[] = [
   { eyebrow: "El Analista", titulo: "Conversa y arma tu portafolio", narracion: "Le cuentas en cristiano qué quieres lograr y Atom arma una propuesta de portafolio a tu medida. ¿No te convence? Cambias los pesos, agregas o quitas activos y recalcula las proyecciones al instante. \n\ Y tranquilo, no hay preguntas tontas: queda entre tú y la IA, que no tiene grupo de chismes.", Escena: EscenaAnalista },
   { eyebrow: "El Dashboard", titulo: "Tu sala de control", narracion: "Tu sala de control: la TRM de hoy y su gráfica histórica, los indicadores del mercado y tu composición, todo de un vistazo. Si vas ganando o perdiendo solo lo saben tú y Atom (y Atom no habla). ¿Tienes varios portafolios? Saltas entre ellos sin perderte.", Escena: EscenaDashboard },
   { eyebrow: "El Monitor", titulo: "Un vigía que nunca duerme", narracion: "Atom vigila tus activos leyendo medias móviles, RSI y volumen, y los traduce a un semáforo: verde para entrar, amarillo para esperar, rojo para frenar. \n\ Si te animas, le das tu Telegram y te avisa de una buena entrada. Eso sí: no escribe a medianoche ni manda mensajes coquetos. Trabaja para ti, sin sueldo y sin sentimientos.", Escena: EscenaMonitor },
-  { eyebrow: "El Seguimiento", titulo: "Tu contador de bolsillo", narracion: "Registras cuánto invertiste en dólares y Atom calcula cuántas acciones compraste — fracciones incluidas — con el precio real del momento. Lleva la cuenta de todo, para que después rías por la ganga que pillaste o llores por haber comprado en el máximo histórico justo antes de la caída. Sí: histórico e histérico.", Escena: EscenaSeguimiento },
+  { eyebrow: "El Seguimiento", titulo: "Tu contador de bolsillo", narracion: "Registras cuánto invertiste en dólares y Atom registra cuántas acciones compraste — fracciones incluidas — con el precio real del momento. Lleva la cuenta de todo, para que después rías por la ganga que pillaste o llores por haber comprado en el máximo histórico justo antes de la caída. Sí: histórico e histérico.", Escena: EscenaSeguimiento },
   { eyebrow: "El Asistente", titulo: "La casa de Atom", narracion: "Aquí vive Atom, y su casa es tu casa. Pregúntale lo que sea y te traduce tu portafolio a español de humano.\n\ Te da contexto de la economía y, como buen psicólogo financiero, te baja las pulsaciones cuando el mercado hace de las suyas. Con esta familia, tú y tus inversiones nunca están solas. ¿Empezamos el viaje?", Escena: EscenaAsistente },
 ];
 

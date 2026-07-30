@@ -445,10 +445,17 @@ def crear_portafolio_para_usuario(
     frecuencia_meses=0,
 ):
     """Igual que crear_portafolio pero agrega el campo owner."""
-    nombre_archivo = _slug(nombre)
+    # El nombre de archivo incluye el usuario para que dos personas puedan
+    # tener un portafolio con el mismo nombre sin chocar.
+    nombre_archivo = f"{_slug(username)}_{_slug(nombre)}"
     archivo = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}.json"
     if os.path.exists(archivo):
-        return None  # ya existe
+        # Ya existe uno con ese nombre PARA ESTE usuario: agrega sufijo numerico
+        n = 2
+        while os.path.exists(f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}_{n}.json"):
+            n += 1
+        nombre_archivo = f"{nombre_archivo}_{n}"
+        archivo = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}.json"
 
     portafolio = {
         "owner": username,  # ← CAMPO NUEVO
