@@ -338,6 +338,10 @@ function EscenaSeguimiento({ onReady }: EscenaProps) {
             <p style={{ fontSize: 8.5, color: "var(--text-3)", margin: "0 0 4px" }}>Fecha</p>
             <div style={{ background: "var(--bg-2)", border: "1px solid var(--glass-border)", borderRadius: 8, padding: "8px 10px", fontSize: 11, color: "var(--text-2)" }}>12 jun</div>
           </div>
+          <div style={{ flex: 1 }}>
+            <p style={{ fontSize: 8.5, color: "var(--text-3)", margin: "0 0 4px" }}>Cantidad:</p>
+            <div style={{ background: "var(--bg-2)", border: "1px solid var(--glass-border)", borderRadius: 8, padding: "8px 10px", fontSize: 11, color: "var(--text-2)" }}>0.8</div>
+          </div>
           <div style={{ display: "flex", alignItems: "flex-end" }}>
             <div style={{ background: "#0071e3", borderRadius: 8, padding: "8px 14px", fontSize: 11, color: "#fff", fontWeight: 500 }}>+ Añadir</div>
           </div>
@@ -346,7 +350,7 @@ function EscenaSeguimiento({ onReady }: EscenaProps) {
         <div style={{ display: "flex", gap: 10, alignItems: "flex-start", background: "var(--bg-2)", border: "1px solid var(--glass-border)", borderRadius: 10, padding: "9px 12px" }}>
           <LogoMark size={22} />
           <p style={{ fontSize: 11, color: "var(--text-2)", margin: 0, lineHeight: 1.5 }}>
-            Atom calcula por ti las <span style={{ color: "#0071e3", fontWeight: 600 }}>acciones adquiridas</span> — incluso fracciones — gracias a que conoce el valor del activo en tiempo real.
+            Atom lleva por ti las <span style={{ color: "#0071e3", fontWeight: 600 }}>transacciones ejecutadas</span> , y gracias a su perfecto orden y organización, nunca olvidará una compra. Recuerda que puedes adquirir acciones completas o fracciones.
           </p>
         </div>
       </div>
