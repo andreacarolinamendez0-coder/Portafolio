@@ -14,6 +14,7 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false);
   const [sent, setSent]       = useState(false);
   const router = useRouter();
+  const [password2, setPassword2] = useState("");
 
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) =>
     setForm(f => ({ ...f, [k]: e.target.value }));
@@ -22,6 +23,7 @@ export default function RegisterPage() {
     e.preventDefault();
     setError("");
     if (form.password.length < 6) { setError("La contraseña debe tener al menos 6 caracteres"); return; }
+    if (form.password !== password2) { setError("Las contraseñas no coinciden"); return; }
     setLoading(true);
     try {
       await authRegister(form);
@@ -98,20 +100,7 @@ export default function RegisterPage() {
               <p style={{ color: "var(--text-3)", fontSize: "0.85rem", margin: "4px 0 0" }}>Es rápido y gratis</p>
             </div>
 
-            {sent ? (
-              <div style={{ textAlign: "center" }}>
-                <div style={{ fontSize: 40, marginBottom: 12 }}>📬</div>
-                <h2 style={{ fontSize: "1.4rem", fontWeight: 600, letterSpacing: "-0.02em", margin: 0 }}>Revisa tu correo</h2>
-                <p style={{ color: "var(--text-2)", fontSize: "0.9rem", lineHeight: 1.6, margin: "10px 0 0" }}>
-                  Enviamos un enlace de activación a <strong style={{ color: "var(--text)" }}>{form.email}</strong>.
-                  Ábrelo para activar tu cuenta — revisa también el spam.
-                </p>
-                <p style={{ color: "var(--text-3)", fontSize: "0.82rem", margin: "20px 0 0" }}>
-                  ¿Ya activaste?{" "}
-                  <Link href="/login" style={{ color: "#4da3ff", textDecoration: "none", fontWeight: 500 }}>Inicia sesión</Link>
-                </p>
-              </div>
-            ) : (
+            { (
               <>
                 {error && (
                   <div style={{ background: "rgba(255,69,58,0.08)", border: "1px solid rgba(255,69,58,0.2)", borderRadius: 12, padding: "12px 16px", marginBottom: 16, color: "#ff6961", fontSize: "0.875rem" }}>
@@ -127,6 +116,10 @@ export default function RegisterPage() {
                         <input type={type} value={form[key]} onChange={set(key)} placeholder={placeholder} required={required} style={inputStyle} />
                       </div>
                     ))}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                      <label style={{ color: "var(--text-3)", fontSize: "0.75rem", letterSpacing: "0.04em" }}>Confirmar contraseña</label>
+                      <input type="password" value={password2} onChange={e => setPassword2(e.target.value)} placeholder="Repite la contraseña" required style={inputStyle} />
+                    </div>
 
                     <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
                       <label style={{ color: "var(--text-3)", fontSize: "0.75rem", letterSpacing: "0.04em" }}>

@@ -417,6 +417,25 @@ export default function BienvenidaPage() {
 
   useEffect(() => { setReady(false); }, [paso]);
 
+    async function finalizar() {
+    if (creando) return;
+    setCreando(true);
+    try {
+      const me = await authMe();
+      await crearPortafolio({
+        nombre: "Mi primer portafolio",
+        propietario: me.username,
+        perfil: "moderado",
+        inversion: 0,
+      });
+      const { portafolios } = await getPortafolios();
+      const nuevo = portafolios.find(p => p.nombre === "Mi primer portafolio");
+      router.push(nuevo ? `/portafolio/${nuevo.archivo}/analista` : "/");
+    } catch {
+      router.push("/");
+    }
+  }
+
   async function siguiente() {
     if (!ready || creando) return;
     if (!esUltimo) { setDir(1); setPaso(p => p + 1); return; }
@@ -452,8 +471,14 @@ export default function BienvenidaPage() {
       </div>
 
       <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", justifyContent: "flex-end", padding: "20px 24px", maxWidth: 560, margin: "0 auto", width: "100%" }}>
-        {!esUltimo && (
-          <button onClick={() => router.push("/")} style={{ background: "none", border: "none", color: "var(--text-3)", fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>Saltar</button>
+                {!esUltimo && (
+          <button
+            onClick={() => finalizar()}
+            disabled={creando}
+            style={{ background: "none", border: "none", color: "var(--text-3)", fontSize: 13, cursor: creando ? "default" : "pointer", fontFamily: "inherit", opacity: creando ? 0.5 : 1 }}
+          >
+            {creando ? "Creando…" : "Saltar"}
+          </button>
         )}
       </div>
 
