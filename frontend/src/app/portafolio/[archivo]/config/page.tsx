@@ -4,12 +4,13 @@ import { GlassPanel } from "@/components/ui/glass-panel";
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { getConfig, updateConfig, activarPortafolio } from "@/lib/api";
+import { getConfig, updateConfig, activarPortafolio, getPortafolios, eliminarCuenta } from "@/lib/api";
 import { LiquidButton } from "@/components/ui/liquid-glass-button";
 import { GlowPanel } from "@/components/ui/glow-panel";
 import { PageIntro } from "@/components/ui/page-intro";
 import { desactivarPortafolio } from "@/lib/api";
 import { eliminarPortafolio } from "@/lib/api";
+import { DialogoUltimoPortafolio } from "@/components/ui/dialogo-ultimo-portafolio";
 
 
 
@@ -31,6 +32,8 @@ export default function ConfigPage() {
   const [loading, setLoading] = useState(true);
   const [borrando, setBorrando] = useState(false);
 
+  const [dialogoUltimo, setDialogoUltimo] = useState(false);
+
   useEffect(() => {
     getConfig(archivo)
       .then(d => { setNombre(d.nombre); setActivo(d.activo); setDivisa(d.divisa); })
@@ -48,6 +51,18 @@ export default function ConfigPage() {
     }
   }
 
+    async function guardarNombre() {
+    const limpio = nombre.trim();
+    if (!limpio) { setMsg({ text: "El nombre no puede estar vacío", ok: false }); return; }
+    try {
+      const res = await updateConfig(archivo, { nombre: limpio });
+      window.dispatchEvent(new CustomEvent("portafolio-renombrado", { detail: { archivo, nombre: limpio } }));
+      setMsg({ text: res.mensaje ?? "Nombre actualizado", ok: true });
+    } catch (e: unknown) {
+      setMsg({ text: e instanceof Error ? e.message : "Error", ok: false });
+    }
+  }
+
   async function desactivar() {
     try {
       await activarPortafolio(archivo);
@@ -59,13 +74,13 @@ export default function ConfigPage() {
   }
 
   async function eliminar() {
+    const { portafolios } = await getPortafolios();
+    if (portafolios.length === 1) { setDialogoUltimo(true); return; }   // único → diálogo de Atom
     if (!confirm(`¿Eliminar el portafolio "${nombre}"?\n\nSe borra junto con todo su historial. Esto no se puede deshacer.`)) return;
     setBorrando(true);
     try {
       const r = await eliminarPortafolio(archivo);
       if (r.ok) {
-        // Ya no existe: sacar al usuario de aqui. El desplegable de portafolios
-        // es su forma de elegir otro; lo mandamos a la raiz que redirige.
         router.push("/");
       } else {
         setMsg({ text: r.error ?? "No se pudo eliminar", ok: false });
@@ -104,6 +119,28 @@ export default function ConfigPage() {
                        archivo={archivo}
                        texto="Configura tu portafolio: activa el monitoreo en tiempo real, ajusta tus preferencias y gestiona la conexión con el bot de Telegram."
                      /> 
+        {/* Nombre */}
+        <GlowPanel>
+          <h3 style={{ fontSize: "1rem", marginBottom: 6 }}>Nombre del portafolio</h3>
+          <p style={{ color: "var(--text-3)", fontSize: 12, marginBottom: 16 }}>
+            Como se muestra en tu lista de portafolios.
+          </p>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              value={nombre}
+              onChange={e => setNombre(e.target.value)}
+              maxLength={60}
+              style={{ flex: 1, background: "var(--bg-2)", border: "1px solid var(--glass-border)", borderRadius: 10, color: "var(--text)", fontSize: 14, padding: "11px 14px", fontFamily: "inherit", outline: "none" }}
+            />
+            <button
+              onClick={guardarNombre}
+              style={{ padding: "11px 20px", borderRadius: 10, border: "none", background: "#0071e3", color: "#fff", fontSize: 14, fontWeight: 500, fontFamily: "inherit", cursor: "pointer" }}
+            >
+              Guardar
+            </button>
+          </div>
+        </GlowPanel>
+        
         {/* Divisa */}
         <GlowPanel>
           <h3 style={{ fontSize: "1rem", marginBottom: 6 }}>Divisa de visualización</h3>
@@ -180,7 +217,12 @@ export default function ConfigPage() {
             {borrando ? "Eliminando..." : "Eliminar este portafolio"}
           </button>
         </GlowPanel>
- 
+  {dialogoUltimo && (
+    <DialogoUltimoPortafolio
+      archivo={archivo}
+      onCancelar={() => setDialogoUltimo(false)}
+    />
+  )}
     </>
   );
 }

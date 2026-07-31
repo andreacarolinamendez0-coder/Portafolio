@@ -291,4 +291,7 @@ export const adminToggleAdmin = (username: string, es_admin: boolean) =>
   apiFetch<{ ok: boolean; error?: string }>(`/api/eliminar-portafolio/${archivo}`, {
     method: "POST",
   });
+
+  export const eliminarCuenta = () =>
+  apiFetch<{ ok: boolean; error?: string }>("/api/eliminar-cuenta", { method: "POST" });
  

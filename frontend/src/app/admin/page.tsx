@@ -237,7 +237,7 @@ export default function AdminPage() {
                       <span style={{ color: "var(--text-3)", fontSize: 11, transform: abierto ? "rotate(90deg)" : "none", transition: "transform 0.2s" }}>▸</span>
                       <Badge style={{
                         background: meta.danger ? "rgba(255,69,58,0.12)" : "rgba(255,255,255,0.06)",
-                        color: meta.danger ? "#ff453a" : "var(--text-2)", fontSize: 11,
+                        color: meta.danger ? "#ff453a" : "var(--text-2)", fontSize: 11, padding: "2px 8px",
                       }}>{meta.label}</Badge>
                       <span style={{ fontSize: 13 }}>{a.username || a.email || "—"}</span>
                     </div>

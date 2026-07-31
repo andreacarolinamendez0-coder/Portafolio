@@ -36,6 +36,15 @@ export default function PortafolioLayout({ children }: { children: React.ReactNo
     authMe().then(me => setEsAdmin(me.es_admin)).catch(() => {});
   }, [archivo]);
 
+    useEffect(() => {
+    function onRename(e: Event) {
+      const d = (e as CustomEvent<{ archivo: string; nombre: string }>).detail;
+      if (d.archivo === archivo) setInfo(prev => (prev ? { ...prev, nombre: d.nombre } : prev));
+    }
+    window.addEventListener("portafolio-renombrado", onRename);
+    return () => window.removeEventListener("portafolio-renombrado", onRename);
+  }, [archivo]);
+
   // Detectar pestaña activa por la URL
   const base = `/portafolio/${archivo}`;
   const resto = pathname.replace(base, "");
