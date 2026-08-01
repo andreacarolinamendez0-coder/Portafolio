@@ -110,10 +110,10 @@ export default function SeguimientoPage() {
             {/* Formulario de nueva compra */}
             <GlassPanel>
               <h3 style={{ fontSize: "1rem", marginBottom: 12 }}>Registrar nueva compra</h3>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 12 }}>
                 <div>
                   <label style={{ fontSize: "0.85rem", color: "#a1a1a6" }}>Activo</label>
-                  <select value={activo} onChange={e => setActivo(e.target.value)} style={{ background: "var(--bg-2)", border: "1px solid rgba(255,255,255,0.08)", color: "var(--text)", padding: "8px 12px", borderRadius: 8 }}>
+                  <select value={activo} onChange={e => setActivo(e.target.value)} style={{ background: "var(--bg-2)", border: "1px solid rgba(255,255,255,0.08)", color: "var(--text)", padding: "8px 12px", borderRadius: 8, width: "100%", boxSizing: "border-box" }}>
                     <option value="">Selecciona...</option>
                     {data.pendientes.map(p => <option key={p.activo} value={p.activo}>{p.activo} — pendiente</option>)}
                     {data.entrados.map(a => <option key={a} value={a}>{a} — agregar más</option>)}
@@ -125,17 +125,22 @@ export default function SeguimientoPage() {
                 </div>
                 <div>
                   <label style={s.label}>Monto total pagado (USD)</label>
-                  <input type="number" step="0.01" placeholder="Ej: 54.81" value={montoUsd} onChange={e => setMontoUsd(e.target.value)} style={s.input} />
+                  <input className="no-spin" type="number" step="0.01" placeholder="Ej: 54.81" value={montoUsd} onChange={e => setMontoUsd(e.target.value)} style={s.input} />
                 </div>
                 <div>
                   <label style={s.label}>Fracciones compradas</label>
-                  <input type="number" step="0.0001" placeholder="Ej: 0.2523" value={fracciones} onChange={e => setFracciones(e.target.value)} style={s.input} />
+                  <input className="no-spin" type="number" step="0.0001" placeholder="Ej: 0.2523" value={fracciones} onChange={e => setFracciones(e.target.value)} style={s.input} />
                 </div>
               </div>
               <div style={{ padding: "10px 14px", background: "rgba(0,113,227,0.06)", border: "1px solid rgba(0,113,227,0.15)", borderRadius: 10, marginBottom: 14 }}>
                 <p style={{ color: "#4da3ff", fontSize: 12, margin: 0 }}>El sistema calcula el precio por acción y convierte a COP con la TRM del día.</p>
               </div>
               <LiquidButton onClick={registrar} className="text-white font-semibold !px-10 !py-3">Registrar compra</LiquidButton>
+              <style>{`
+                .no-spin::-webkit-inner-spin-button,
+                .no-spin::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+                .no-spin { -moz-appearance: textfield; appearance: textfield; }
+              `}</style>
             </GlassPanel>
 
             {/* Historial */}
@@ -178,7 +183,7 @@ const s: Record<string, React.CSSProperties> = {
   card:       { background: "var(--glass)", border: "1px solid var(--glass-border)", borderRadius: 14, padding: 20, marginBottom: 16 },
   h3:         { fontSize: "1rem", marginBottom: 12, color: "var(--text)" },
   label:      { display: "block", fontSize: 12, color: "var(--text-3)", marginBottom: 6 },
-  input:      { background: "var(--bg-2)", border: "1px solid var(--glass-border)", borderRadius: 10, color: "var(--text)", fontSize: "0.9rem", padding: "9px 12px", width: "100%" },
+  input:      { background: "var(--bg-2)", border: "1px solid var(--glass-border)", borderRadius: 10, color: "var(--text)", fontSize: "0.9rem", padding: "9px 12px", width: "100%", boxSizing: "border-box" },
   btnPrimary: { padding: "10px 20px", borderRadius: 980, fontSize: 13, cursor: "pointer", background: "#0071e3", color: "#fff", border: "none" },
   th:         { padding: "8px 10px", fontWeight: 500 },
   td:         { padding: "8px 10px", color: "var(--text)" },

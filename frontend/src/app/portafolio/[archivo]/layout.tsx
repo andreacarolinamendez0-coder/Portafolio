@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, Fragment } from "react";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion, useMotionValue, useSpring } from "framer-motion";
@@ -55,7 +55,9 @@ export default function PortafolioLayout({ children }: { children: React.ReactNo
   const containerRef = useRef<HTMLDivElement | null>(null);
   const tabRefs = useRef<Record<string, HTMLAnchorElement | null>>({});
   const x = useMotionValue(0);
+  const y = useMotionValue(0);
   const w = useMotionValue(0);
+  const h = useMotionValue(0);
   const springX = useSpring(x, { stiffness: 300, damping: 25 });
   const springW = useSpring(w, { stiffness: 300, damping: 25 });
 
@@ -67,9 +69,11 @@ export default function PortafolioLayout({ children }: { children: React.ReactNo
       const c = cont.getBoundingClientRect();
       const t = btn.getBoundingClientRect();
       x.set(t.left - c.left);
+      y.set(t.top - c.top);
       w.set(t.width);
+      h.set(t.height);
     }
-  }, [hovered, activa, info, x, w]);
+  }, [hovered, activa, info, x, y, w, h]);
 
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg)", color: "var(--text)" }}>
@@ -114,30 +118,32 @@ export default function PortafolioLayout({ children }: { children: React.ReactNo
         </div>
 
         {/* Nav magnético glass */}
-        <div
-          ref={containerRef}
-          style={{ position: "relative", display: "inline-flex", gap: 2, padding: 4, background: "var(--glass)", border: "1px solid var(--glass-border)", borderRadius: 12, backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)", flexWrap: "wrap" }}
-        >
-          <motion.div
-            style={{ position: "absolute", left: springX, width: springW, top: 4, bottom: 4, background: "rgba(255,255,255,0.10)", border: "1px solid var(--glass-border)", borderRadius: 8, backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", pointerEvents: "none" }}
-          />
-          {TABS.map(t => (
-            <Link
-              key={t.id}
-              href={`${base}${t.sub}`}
-              ref={(el) => { tabRefs.current[t.id] = el; }}
-              onMouseEnter={() => setHovered(t.id)}
-              onMouseLeave={() => setHovered(null)}
-              style={{
-                position: "relative", zIndex: 1, padding: "8px 18px", borderRadius: 8,
-                fontSize: "0.85rem", textDecoration: "none", fontWeight: activa === t.id ? 500 : 400,
-                color: activa === t.id ? "var(--text)" : "var(--text-3)", transition: "color 0.2s",
-              }}
-            >
-              {t.label}
-            </Link>
-          ))}
-        </div>
+          <div
+            ref={containerRef}
+            className="nav-tabs"
+            style={{ position: "relative", display: "inline-flex", gap: 2, padding: 4, background: "var(--glass)", border: "1px solid var(--glass-border)", borderRadius: 12, backdropFilter: "blur(12px)", WebkitBackdropFilter: "blur(12px)", flexWrap: "wrap" }}
+          >
+            <motion.div
+              style={{ position: "absolute", left: springX, top: y, width: springW, height: h, background: "rgba(255,255,255,0.10)", border: "1px solid var(--glass-border)", borderRadius: 8, backdropFilter: "blur(8px)", WebkitBackdropFilter: "blur(8px)", pointerEvents: "none" }}
+            />
+            {TABS.map(t => (
+              <Link
+                key={t.id}
+                href={`${base}${t.sub}`}
+                ref={(el) => { tabRefs.current[t.id] = el; }}
+                onMouseEnter={() => setHovered(t.id)}
+                onMouseLeave={() => setHovered(null)}
+                style={{
+                  position: "relative", zIndex: 1, padding: "8px 18px", borderRadius: 8,
+                  fontSize: "0.85rem", textDecoration: "none", fontWeight: activa === t.id ? 500 : 400,
+                  color: activa === t.id ? "var(--text)" : "var(--text-3)", transition: "color 0.2s",
+                }}
+              >
+                {t.label}
+              </Link>
+            ))}
+          </div>
+        <style>{`@media (max-width: 560px) { .nav-tabs { justify-content: center; } }`}</style>
       </header>
 
       {/* Contenido de la pestaña */}

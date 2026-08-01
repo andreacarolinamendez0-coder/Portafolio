@@ -130,7 +130,7 @@ export default function ConfigPage() {
               value={nombre}
               onChange={e => setNombre(e.target.value)}
               maxLength={60}
-              style={{ flex: 1, background: "var(--bg-2)", border: "1px solid var(--glass-border)", borderRadius: 10, color: "var(--text)", fontSize: 14, padding: "11px 14px", fontFamily: "inherit", outline: "none" }}
+                            style={{ flex: 1, minWidth: 0, boxSizing: "border-box", background: "var(--bg-2)", border: "1px solid var(--glass-border)", borderRadius: 10, color: "var(--text)", fontSize: 14, padding: "11px 14px", fontFamily: "inherit", outline: "none" }}
             />
             <button
               onClick={guardarNombre}

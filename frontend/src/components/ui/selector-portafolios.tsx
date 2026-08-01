@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
-import { getPortafolios, eliminarPortafolio, type PortafolioSummary } from "@/lib/api";
+import { getPortafolios, eliminarPortafolio, eliminarCuenta, updateConfig, type PortafolioSummary } from "@/lib/api";
 import { DialogoUltimoPortafolio } from "@/components/ui/dialogo-ultimo-portafolio";
 
 interface Props {
@@ -18,6 +18,9 @@ export function SelectorPortafolios({ abierto, onCerrar, archivoActual, onCrear 
   const [cargando, setCargando] = useState(true);
   const [borrando, setBorrando] = useState<string | null>(null);
   const [dialogoUltimo, setDialogoUltimo] = useState<PortafolioSummary | null>(null);
+
+  const [editando, setEditando] = useState<string | null>(null);
+  const [nombreEdit, setNombreEdit] = useState("");
 
   useEffect(() => {
     if (abierto) {
@@ -56,6 +59,20 @@ export function SelectorPortafolios({ abierto, onCerrar, archivoActual, onCrear 
       alert(err instanceof Error ? err.message : "Error");
     } finally {
       setBorrando(null);
+    }
+  }
+
+  async function guardarNombre(archivo: string) {
+    const limpio = nombreEdit.trim();
+    if (!limpio) { setEditando(null); return; }
+    try {
+      await updateConfig(archivo, { nombre: limpio });
+      setPortafolios(ps => ps.map(x => x.archivo === archivo ? { ...x, nombre: limpio } : x));
+      window.dispatchEvent(new CustomEvent("portafolio-renombrado", { detail: { archivo, nombre: limpio } }));
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "No se pudo renombrar");
+    } finally {
+      setEditando(null);
     }
   }
 
@@ -111,34 +128,57 @@ export function SelectorPortafolios({ abierto, onCerrar, archivoActual, onCrear 
                         }}
                       >
                         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 4 }}>
-                          <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text)", display: "flex", alignItems: "center", gap: 7 }}>
-                            {p.nombre}
-                            {p.monitoreo_activo && <span style={{ fontSize: 10, color: "#30d158", fontWeight: 400 }}>● en vivo</span>}
-                          </span>
-                          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                            <span style={{
-                              fontSize: "0.6rem", padding: "2px 7px", borderRadius: 980, fontWeight: 500, letterSpacing: "0.04em",
-                              ...(p.perfil === "agresivo"
-                                ? { background: "rgba(255,214,10,0.12)", color: "#ffd60a", border: "1px solid rgba(255,214,10,0.2)" }
-                                : { background: "rgba(0,113,227,0.12)", color: "#4da3ff", border: "1px solid rgba(0,113,227,0.2)" }),
-                            }}>
-                              {p.perfil.toUpperCase()}
-                            </span>
-                            {/* Boton eliminar */}
-                            <button
-                              onClick={(e) => eliminar(e, p)}
-                              disabled={seBorra}
-                              title="Eliminar portafolio"
-                              style={{
-                                background: "none", border: "none", cursor: seBorra ? "default" : "pointer",
-                                color: "var(--text-3)", fontSize: 15, lineHeight: 1, padding: 2,
-                                opacity: 0.6, transition: "color 0.15s, opacity 0.15s",
+                          {editando === p.archivo ? (
+                            <input
+                              value={nombreEdit}
+                              onChange={e => setNombreEdit(e.target.value)}
+                              onClick={e => e.stopPropagation()}
+                              onKeyDown={e => {
+                                if (e.key === "Enter") guardarNombre(p.archivo);
+                                if (e.key === "Escape") setEditando(null);
                               }}
-                              onMouseEnter={(e) => { e.currentTarget.style.color = "#ff453a"; e.currentTarget.style.opacity = "1"; }}
-                              onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-3)"; e.currentTarget.style.opacity = "0.6"; }}
-                            >
-                              🗑
-                            </button>
+                              maxLength={60}
+                              autoFocus
+                              style={{ flex: 1, minWidth: 0, background: "var(--bg-2)", border: "1px solid rgba(0,113,227,0.4)", borderRadius: 8, color: "var(--text)", fontSize: 14, fontWeight: 600, padding: "4px 8px", fontFamily: "inherit", outline: "none" }}
+                            />
+                          ) : (
+                            <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text)", display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
+                              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.nombre}</span>
+                              {p.monitoreo_activo && <span style={{ fontSize: 10, color: "#30d158", fontWeight: 400, flexShrink: 0 }}>● en vivo</span>}
+                            </span>
+                          )}
+
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                            {editando === p.archivo ? (
+                              <>
+                                <button onClick={(e) => { e.stopPropagation(); guardarNombre(p.archivo); }} title="Guardar"
+                                  style={{ background: "none", border: "none", cursor: "pointer", color: "#30d158", fontSize: 15, lineHeight: 1, padding: 2 }}>✓</button>
+                                <button onClick={(e) => { e.stopPropagation(); setEditando(null); }} title="Cancelar"
+                                  style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-3)", fontSize: 15, lineHeight: 1, padding: 2 }}>✕</button>
+                              </>
+                            ) : (
+                              <>
+                                <span style={{
+                                  fontSize: "0.6rem", padding: "2px 7px", borderRadius: 980, fontWeight: 500, letterSpacing: "0.04em",
+                                  ...(p.perfil === "agresivo"
+                                    ? { background: "rgba(255,214,10,0.12)", color: "#ffd60a", border: "1px solid rgba(255,214,10,0.2)" }
+                                    : { background: "rgba(0,113,227,0.12)", color: "#4da3ff", border: "1px solid rgba(0,113,227,0.2)" }),
+                                }}>
+                                  {p.perfil.toUpperCase()}
+                                </span>
+                                <button onClick={(e) => { e.stopPropagation(); setEditando(p.archivo); setNombreEdit(p.nombre); }} title="Renombrar"
+                                  style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-3)", fontSize: 14, lineHeight: 1, padding: 2, opacity: 0.6 }}
+                                  onMouseEnter={(e) => { e.currentTarget.style.color = "#4da3ff"; e.currentTarget.style.opacity = "1"; }}
+                                  onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-3)"; e.currentTarget.style.opacity = "0.6"; }}>🖊</button>
+                                <button
+                                  onClick={(e) => eliminar(e, p)}
+                                  disabled={seBorra}
+                                  title="Eliminar portafolio"
+                                  style={{ background: "none", border: "none", cursor: seBorra ? "default" : "pointer", color: "var(--text-3)", fontSize: 15, lineHeight: 1, padding: 2, opacity: 0.6, transition: "color 0.15s, opacity 0.15s" }}
+                                  onMouseEnter={(e) => { e.currentTarget.style.color = "#ff453a"; e.currentTarget.style.opacity = "1"; }}
+                                  onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-3)"; e.currentTarget.style.opacity = "0.6"; }}>🗑</button>
+                              </>
+                            )}
                           </div>
                         </div>
                         <span style={{ fontSize: 12, color: "var(--text-3)" }}>{p.propietario} · Desde {p.fecha_inicio}</span>

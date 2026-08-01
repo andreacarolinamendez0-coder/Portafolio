@@ -210,9 +210,9 @@ function MacroSection({ macro }: { macro: NonNullable<DashboardData["macro"]> })
   return (
     <>
       <SectionTitle>Indicadores Macro</SectionTitle>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, marginBottom: 24 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gridAutoRows: "1fr", gap: 12, marginBottom: 24 }}>
         {tiles.map(t => (
-          <GlowCard key={t.label} glowColor="blue" className="flex flex-col justify-between" >
+          <GlowCard key={t.label} glowColor="blue" className="flex flex-col h-full">
             <h3 style={{ fontSize: "0.72rem", fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-3)", marginBottom: 12 }}>{t.label}</h3>
             <div style={{ fontSize: "2rem", fontWeight: 600, letterSpacing: "-0.03em", lineHeight: 1, marginBottom: 4, color: "var(--text)" }}>{t.value}</div>
             <div style={{ fontSize: "0.8rem", color: t.subColor ?? "var(--text-3)" }}>{t.sub}</div>
@@ -244,15 +244,26 @@ function MisMetricas({ tr, divisa, tasas }: {
 
   return (
     <GlassPanel style={{ marginBottom: -1, maxWidth: 1500 }}>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", padding: "0px 20px" }}>
-        {cards.map((c, i) => (
-          <div key={c.label} style={{ padding: "0 10px", borderLeft: i === 0 ? "none" : "1px solid rgba(255,255,255,0.07)" }}>
+      <div className="metricas-grid" style={{ display: "grid", padding: "10px 12px" }}>
+        {cards.map(c => (
+          <div key={c.label}>
             <p style={{ fontSize: 12, color: "var(--text-3)", margin: "0 0 7px", textTransform: "uppercase", letterSpacing: "0.06em" }}>{c.label}</p>
             <p style={{ fontSize: 17, fontWeight: 600, margin: 0, color: c.color, letterSpacing: "-0.02em" }}>{c.value}</p>
             <p style={{ fontSize: 12, color: "var(--text-3)", margin: "6px 0 0" }}>{c.sub}</p>
           </div>
         ))}
       </div>
+      <style>{`
+        .metricas-grid { grid-template-columns: repeat(4, 1fr); gap: 0; }
+        .metricas-grid > div { padding: 6px 16px; border-left: 1px solid rgba(255,255,255,0.07); }
+        .metricas-grid > div:first-child { border-left: none; }
+        @media (max-width: 640px) {
+          .metricas-grid { grid-template-columns: 1fr 1fr; }
+          .metricas-grid > div:nth-child(odd)  { border-left: none; }
+          .metricas-grid > div:nth-child(even) { border-left: 1px solid rgba(255,255,255,0.07); }
+          .metricas-grid > div:nth-child(n+3)  { border-top: 1px solid rgba(255,255,255,0.07); padding-top: 14px; }
+        }
+      `}</style>
     </GlassPanel>
   );
 }
@@ -419,7 +430,7 @@ function ComposicionSection({ composicion, archivo, aportes_activos }: { composi
   return (
     <>
       <SectionTitle>Estado de Entradas</SectionTitle>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 12, marginBottom: 16, alignItems: "start" }}>
         {[
           { title: "Ya entraste", items: entrados, badge: { bg: "rgba(48,209,88,0.12)", color: "#30d158", border: "rgba(48,209,88,0.2)", label: "ENTRADO" } },
           { title: "Pendientes",  items: pendientes, badge: { bg: "rgba(255,214,10,0.12)", color: "#ffd60a", border: "rgba(255,214,10,0.2)", label: "PENDIENTE" } },
