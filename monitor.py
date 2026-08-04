@@ -520,6 +520,24 @@ def vigilar_precios(archivo, portafolio, rangos_del_dia, precios_cache=None):
         min_dia = estado[min_key]
         rebote = (precio - min_dia) / min_dia if min_dia else 0.0
 
+        # ── [temporal] ¿el gate de MACD tapó una señal real? ──
+        # Cuenta 1x por ticker/día cuando el precio SÍ tocó la banda
+        # y lo único que faltó para ENTRAR fue el MACD subiendo.
+        if (
+            not rango.get("puede_entrar")
+            and rango.get("score_base", 0) >= UMBRAL_ENTRADA - 2.0
+            and not rango.get("hist_subiendo")
+            and rango.get("banda_inf")
+            and precio < rango["banda_inf"]
+        ):
+            vetos = estado.setdefault("macd_vetos", {})
+            if vetos.get(ticker) != hoy_str:
+                vetos[ticker] = hoy_str
+                estado["macd_vetos_total"] = estado.get("macd_vetos_total", 0) + 1
+                print(f"  🔬 MACD-veto: {ticker} @ ${precio:.2f} < banda "
+                      f"${rango['banda_inf']:.2f} (score {rango['score_base']}, "
+                      f"total={estado['macd_vetos_total']})")
+
         # ── Determinar señal con rangos precalculados ──────────
         rango_entrar = rango.get("rango_entrar")
         rango_vigilar = rango.get("rango_vigilar")
