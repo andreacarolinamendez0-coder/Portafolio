@@ -87,13 +87,13 @@ export default function PortafolioLayout({ children }: { children: React.ReactNo
       <header style={{ position: "relative", zIndex: 1, maxWidth: 1100, margin: "0 auto", padding: "20px 24px 0" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 18 }}>
           <LogoMark size={34} />
-          <div style={{ flex: 1 }}>
-            <button onClick={() => setSelectorAbierto(true)} style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", padding: 0 }}>
-              <p style={{ fontSize: 15, fontWeight: 600, margin: 0, letterSpacing: "-0.01em", color: "var(--text)" }}>{info?.nombre || "Portafolio"}</p>
-              <span style={{ color: "var(--text-3)", fontSize: 12 }}>▾</span>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <button onClick={() => setSelectorAbierto(true)} style={{ display: "flex", alignItems: "center", gap: 8, background: "none", border: "none", cursor: "pointer", fontFamily: "inherit", padding: 0, minWidth: 0, maxWidth: "100%" }}>
+              <p style={{ fontSize: 15, fontWeight: 600, margin: 0, letterSpacing: "-0.01em", color: "var(--text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>{info?.nombre || "Portafolio"}</p>
+              <span style={{ color: "var(--text-3)", fontSize: 12, flexShrink: 0 }}>▾</span>
               {info?.perfil && (
                 <span style={{
-                  fontSize: "0.62rem", padding: "2px 8px", borderRadius: 980, fontWeight: 500, letterSpacing: "0.04em",
+                  fontSize: "0.62rem", padding: "2px 8px", borderRadius: 980, fontWeight: 500, letterSpacing: "0.04em", flexShrink: 0,
                   ...(info.perfil === "agresivo"
                     ? { background: "rgba(255,214,10,0.12)", color: "#ffd60a", border: "1px solid rgba(255,214,10,0.2)" }
                     : { background: "rgba(0,113,227,0.12)", color: "#4da3ff", border: "1px solid rgba(0,113,227,0.2)" }),
