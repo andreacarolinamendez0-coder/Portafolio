@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { getSeguimiento, registrarCompra, type SeguimientoData } from "@/lib/api";
+import { getSeguimiento, registrarCompra, editarAporte, eliminarAporte, type SeguimientoData } from "@/lib/api";
 import { GlassBackground } from "@/components/ui/glass-background";
 import { GlassPanel } from "@/components/ui/glass-panel";
 import { GlowPanel } from "@/components/ui/glow-panel";
@@ -24,6 +24,17 @@ export default function SeguimientoPage() {
   const [fecha, setFecha]           = useState(hoy);
   const [montoUsd, setMontoUsd]     = useState("");
   const [fracciones, setFracciones] = useState("");
+  const [trmReal, setTrmReal]       = useState("");
+
+  // Edición inline de una fila del historial
+  const [editId, setEditId]   = useState<string | null>(null);
+  const [eActivo, setEActivo] = useState("");
+  const [eFecha, setEFecha]   = useState("");
+  const [eUsd, setEUsd]       = useState("");
+  const [eFracc, setEFracc]   = useState("");
+  const [eTrm, setETrm]       = useState("");
+
+  const sEdit: React.CSSProperties = { width: "100%", background: "var(--bg-2)", border: "1px solid rgba(0,113,227,0.4)", borderRadius: 6, color: "var(--text)", fontSize: 12, padding: "4px 6px", fontFamily: "inherit", outline: "none", boxSizing: "border-box" };
 
   useEffect(() => {
     getSeguimiento(archivo)
@@ -42,10 +53,50 @@ export default function SeguimientoPage() {
         activo, fecha,
         monto_usd: parseFloat(montoUsd),
         fracciones: parseFloat(fracciones),
+        trm_real: trmReal ? parseFloat(trmReal) : undefined,
       });
       setData(actualizado);          // refresca con el estado nuevo
       setMsg({ text: `Compra de ${activo} registrada`, ok: true });
-      setMontoUsd(""); setFracciones(""); setActivo("");
+      setMontoUsd(""); setFracciones(""); setActivo(""); setTrmReal("");
+    } catch (e: unknown) {
+      setMsg({ text: e instanceof Error ? e.message : "Error", ok: false });
+    }
+  }
+
+  function empezarEdicion(a: SeguimientoData["aportes"][number]) {
+    setEditId(a.id);
+    setEActivo(a.activo);
+    setEFecha(a.fecha);
+    setEUsd(String(a.monto_usd));
+    setEFracc(String(a.fracciones));
+    setETrm(a.trm_real != null ? String(a.trm_real) : "");
+    setMsg({ text: "", ok: false });
+  }
+
+  async function guardarEdicion(id: string) {
+    try {
+      await editarAporte(archivo, id, {
+        activo: eActivo,
+        fecha: eFecha,
+        monto_usd: parseFloat(eUsd),
+        fracciones: parseFloat(eFracc),
+        trm_real: eTrm ? parseFloat(eTrm) : undefined,
+      });
+      setData(await getSeguimiento(archivo));
+      setEditId(null);
+      setMsg({ text: "Compra actualizada", ok: true });
+    } catch (e: unknown) {
+      setMsg({ text: e instanceof Error ? e.message : "Error", ok: false });
+    }
+  }
+
+  async function eliminar(a: SeguimientoData["aportes"][number]) {
+    if (!confirm(`¿Eliminar la compra de ${a.activo} del ${a.fecha}?\n\nEsto no se puede deshacer.`)) return;
+    try {
+      await eliminarAporte(archivo, a.id);
+      setData(await getSeguimiento(archivo));
+      if (editId === a.id) setEditId(null);
+      setMsg({ text: "Compra eliminada", ok: true });
     } catch (e: unknown) {
       setMsg({ text: e instanceof Error ? e.message : "Error", ok: false });
     }
@@ -131,9 +182,13 @@ export default function SeguimientoPage() {
                   <label style={s.label}>Fracciones compradas</label>
                   <input className="no-spin" type="number" step="0.0001" placeholder="Ej: 0.2523" value={fracciones} onChange={e => setFracciones(e.target.value)} style={s.input} />
                 </div>
+                <div>
+                  <label style={s.label}>TRM de compra (op.)</label>
+                  <input className="no-spin" type="number" step="0.01" placeholder="Solo registro" value={trmReal} onChange={e => setTrmReal(e.target.value)} style={s.input} />
+                </div>
               </div>
               <div style={{ padding: "10px 14px", background: "rgba(0,113,227,0.06)", border: "1px solid rgba(0,113,227,0.15)", borderRadius: 10, marginBottom: 14 }}>
-                <p style={{ color: "#4da3ff", fontSize: 12, margin: 0 }}>El sistema calcula el precio por acción y convierte a COP con la TRM del día.</p>
+                <p style={{ color: "#4da3ff", fontSize: 12, margin: 0 }}>El precio por acción y el COP se calculan con la TRM oficial del día. Si compraste los dólares a otra TRM, regístrala arriba, se guarda solo como referencia tuya.</p>
               </div>
               <LiquidButton onClick={registrar} className="text-white font-semibold !px-10 !py-3">Registrar compra</LiquidButton>
               <style>{`
@@ -152,21 +207,52 @@ export default function SeguimientoPage() {
                     <thead>
                       <tr style={{ color: "#6e6e73", textAlign: "left" }}>
                         <th style={s.th}>Fecha</th><th style={s.th}>Activo</th><th style={s.th}>USD</th>
-                        <th style={s.th}>COP</th><th style={s.th}>Fracciones</th><th style={s.th}>Precio</th><th style={s.th}>TRM</th>
+                        <th style={s.th}>COP</th><th style={s.th}>Fracciones</th><th style={s.th}>Precio</th><th style={s.th}>TRM</th><th style={s.th}>TRM compra</th><th style={s.th}></th>
                       </tr>
                     </thead>
                     <tbody>
-                      {[...data.aportes].reverse().map((a, i) => (
-                        <tr key={i} style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-                          <td style={s.td}>{a.fecha}</td>
-                          <td style={s.td}><strong>{a.activo}</strong></td>
-                          <td style={s.td}>${a.monto_usd.toFixed(2)}</td>
-                          <td style={s.td}>${a.monto_cop.toLocaleString()}</td>
-                          <td style={s.td}>{a.fracciones.toFixed(6)}</td>
-                          <td style={s.td}>${a.precio_usd.toFixed(4)}</td>
-                          <td style={s.td}>${a.trm_dia.toLocaleString()}</td>
+                      {[...data.aportes].reverse().map((a) => {
+                        const editando = editId === a.id;
+                        return (
+                        <tr key={a.id} style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                          {editando ? (
+                            <>
+                              <td style={s.td}><input type="date" value={eFecha} onChange={e => setEFecha(e.target.value)} style={sEdit} /></td>
+                              <td style={s.td}>
+                                <select value={eActivo} onChange={e => setEActivo(e.target.value)} style={sEdit}>
+                                  {Object.keys(data.composicion).map(c => <option key={c} value={c}>{c}</option>)}
+                                </select>
+                              </td>
+                              <td style={s.td}><input className="no-spin" type="number" step="0.01" value={eUsd} onChange={e => setEUsd(e.target.value)} style={sEdit} /></td>
+                              <td style={s.td}>—</td>
+                              <td style={s.td}><input className="no-spin" type="number" step="0.0001" value={eFracc} onChange={e => setEFracc(e.target.value)} style={sEdit} /></td>
+                              <td style={s.td}>—</td>
+                              <td style={s.td}>—</td>
+                              <td style={s.td}><input className="no-spin" type="number" step="0.01" placeholder="—" value={eTrm} onChange={e => setETrm(e.target.value)} style={sEdit} /></td>
+                              <td style={s.td}>
+                                <button onClick={() => guardarEdicion(a.id)} title="Guardar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, padding: "2px 4px", lineHeight: 1, color: "#30d158" }}>✓</button>
+                                <button onClick={() => setEditId(null)} title="Cancelar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, padding: "2px 4px", lineHeight: 1, color: "var(--text-3)" }}>✕</button>
+                              </td>
+                            </>
+                          ) : (
+                            <>
+                              <td style={s.td}>{a.fecha}</td>
+                              <td style={s.td}><strong>{a.activo}</strong></td>
+                              <td style={s.td}>${a.monto_usd.toFixed(2)}</td>
+                              <td style={s.td}>${a.monto_cop.toLocaleString()}</td>
+                              <td style={s.td}>{a.fracciones.toFixed(6)}</td>
+                              <td style={s.td}>${a.precio_usd.toFixed(4)}</td>
+                              <td style={s.td}>${a.trm_dia.toLocaleString()}</td>
+                              <td style={s.td}>{a.trm_real ? `$${a.trm_real.toLocaleString()}` : "—"}</td>
+                              <td style={{ ...s.td, whiteSpace: "nowrap" }}>
+                                <button onClick={() => empezarEdicion(a)} title="Editar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, padding: "2px 4px", lineHeight: 1, opacity: 0.7 }}>🖊</button>
+                                <button onClick={() => eliminar(a)} title="Eliminar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, padding: "2px 4px", lineHeight: 1, opacity: 0.7 }}>🗑</button>
+                              </td>
+                            </>
+                          )}
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

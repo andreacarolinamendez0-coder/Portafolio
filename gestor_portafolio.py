@@ -2,6 +2,8 @@ import json
 import os
 import hashlib
 import logging
+import threading
+import secrets
 from datetime import datetime, timedelta
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -10,6 +12,17 @@ logger = logging.getLogger(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CARPETA_PORTAFOLIOS = os.path.join(BASE_DIR, "datos", "portafolios")
 os.makedirs(CARPETA_PORTAFOLIOS, exist_ok=True)
+
+# Lock en proceso para serializar el read-modify-write de los archivos de
+# portafolio: evita que dos requests casi simultáneos (doble clic, dos pestañas)
+# lean el mismo JSON, ambos hagan append, y se pierda un aporte (gana el último
+# en escribir). Combinado con la escritura atómica de _escribir, deja el flujo
+# consistente en un solo proceso.
+# ponytail: lock global en-proceso. Cubre los hilos de un mismo worker (Flask
+# threaded + el hilo del monitor). NO cubre varios procesos/workers de gunicorn
+# — para eso haría falta un file lock (fcntl/msvcrt) o la migración a Postgres,
+# que da transacciones reales.
+_LOCK = threading.Lock()
 
 # ============================================================
 # UTILIDADES
@@ -56,8 +69,15 @@ def _leer(ruta):
 
 
 def _escribir(ruta, data):
-    with open(ruta, "w", encoding="utf-8") as f:
+    # Escritura atómica: se escribe a un .tmp y se renombra con os.replace
+    # (atómico en el mismo filesystem). Un crash a mitad deja el .tmp incompleto
+    # pero el archivo original intacto — nunca queda un JSON a medias/corrupto.
+    tmp = f"{ruta}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, ruta)
 
 
 def _es_portafolio_real(fn):
@@ -201,10 +221,11 @@ def guardar_composicion(nombre_archivo, pesos_dict):
     if not os.path.exists(ruta):
         print(f"❌ No existe el portafolio {nombre_archivo}")
         return
-    data = _leer(ruta)
-    data["composicion"] = pesos_dict
-    data["fecha_ultima_actualizacion"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-    _escribir(ruta, data)
+    with _LOCK:
+        data = _leer(ruta)
+        data["composicion"] = pesos_dict
+        data["fecha_ultima_actualizacion"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        _escribir(ruta, data)
     print(f"✅ Composición guardada en '{data['nombre']}'.")
 
 
@@ -215,17 +236,56 @@ def guardar_composicion(nombre_archivo, pesos_dict):
 
 def guardar_aporte(nombre_archivo, aporte):
     ruta = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}"
-    data = _leer(ruta)
-    data["aportes"].append(aporte)
-    _escribir(ruta, data)
+    with _LOCK:
+        data = _leer(ruta)
+        aporte.setdefault("id", secrets.token_hex(6))  # id estable para editar/eliminar
+        data["aportes"].append(aporte)
+        _escribir(ruta, data)
 
 
-def borrar_aportes(nombre_archivo):
+def asegurar_ids_aportes(nombre_archivo):
+    """Backfill idempotente: da un id estable a los aportes viejos que no lo
+    tengan, para poder editarlos/eliminarlos individualmente."""
     ruta = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}"
-    data = _leer(ruta)
-    data["aportes"] = []
-    _escribir(ruta, data)
+    with _LOCK:
+        data = _leer(ruta)
+        cambio = False
+        for a in data.get("aportes", []):
+            if "id" not in a:
+                a["id"] = secrets.token_hex(6)
+                cambio = True
+        if cambio:
+            _escribir(ruta, data)
+
+
+def eliminar_aporte(nombre_archivo, aporte_id):
+    """Elimina un aporte por id. Devuelve True si lo encontró y borró."""
+    ruta = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}"
+    with _LOCK:
+        data = _leer(ruta)
+        aportes = data.get("aportes", [])
+        quedan = [a for a in aportes if a.get("id") != aporte_id]
+        if len(quedan) == len(aportes):
+            return False
+        data["aportes"] = quedan
+        _escribir(ruta, data)
     return True
+
+
+def editar_aporte(nombre_archivo, aporte_id, campos):
+    """Reemplaza los campos de un aporte por id (conservando su id).
+    Devuelve True si lo encontró y actualizó."""
+    ruta = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}"
+    with _LOCK:
+        data = _leer(ruta)
+        for a in data.get("aportes", []):
+            if a.get("id") == aporte_id:
+                a.clear()
+                a.update(campos)
+                a["id"] = aporte_id
+                _escribir(ruta, data)
+                return True
+    return False
 
 
 # ============================================================

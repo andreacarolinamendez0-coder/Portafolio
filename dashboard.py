@@ -23,6 +23,9 @@ from gestor_portafolio import (
     crear_portafolio_para_usuario,
     guardar_composicion,
     guardar_aporte,
+    asegurar_ids_aportes,
+    eliminar_aporte,
+    editar_aporte,
     registrar_usuario,
     login_usuario,
     registrar_actividad,
@@ -249,8 +252,10 @@ def calcular_tiempo_real(portafolio):
         return None
     try:
         trm_actual = float(pd.read_parquet("datos/macro/trm.parquet")["TRM"].iloc[-1])
-    except:
-        trm_actual = 4000
+    except Exception:
+        # Sin TRM oficial no se puede valorar en COP; devolver "no disponible"
+        # en vez de cifras calculadas con una TRM inventada (4000).
+        return None
     inf_anual = portafolio.get("inflacion_col", 4.90)
     pos_raw = {}
     for a in portafolio["aportes"]:
@@ -864,42 +869,6 @@ def api_aplicar_propuesta(archivo):
                 }
             )
 
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)})
-
-
-@app.route("/api/borrar-aporte/<archivo>/<int:idx>", methods=["POST"])
-def api_borrar_aporte(archivo, idx):
-    redir = verificar_acceso(archivo)
-    if redir:
-        return jsonify({"ok": False, "error": "No autorizado"})
-    try:
-        ruta = f"datos/portafolios/{archivo}"
-        with open(ruta, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if idx < 0 or idx >= len(data.get("aportes", [])):
-            return jsonify({"ok": False, "error": "Índice inválido"})
-        data["aportes"].pop(idx)
-        with open(ruta, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        return jsonify({"ok": True})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)})
-
-
-@app.route("/api/borrar-aportes/<archivo>", methods=["POST"])
-def api_borrar_aportes(archivo):
-    redir = verificar_acceso(archivo)
-    if redir:
-        return jsonify({"ok": False, "error": "No autorizado"})
-    try:
-        ruta = f"datos/portafolios/{archivo}"
-        with open(ruta, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        data["aportes"] = []
-        with open(ruta, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-        return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
 
@@ -1924,54 +1893,70 @@ def api_config(archivo):
     )
 
 
+def _armar_aporte_desde_form(data, composicion):
+    """Parsea, valida y calcula un aporte desde el body del form de seguimiento.
+    Usa SIEMPRE la TRM oficial para el cálculo (trm_real es solo trazabilidad).
+    Devuelve (aporte, None) si todo bien, o (None, (respuesta_error, status))."""
+    activo = data.get("activo", "").upper()
+    if activo not in {c.upper() for c in composicion}:
+        return None, (jsonify({"error": "Ese activo no pertenece a este portafolio"}), 400)
+    fecha = data.get("fecha", datetime.now().strftime("%Y-%m-%d"))
+    monto_usd = float(str(data.get("monto_usd", "0")).replace(",", "."))
+    fracciones = float(str(data.get("fracciones", "0")).replace(",", "."))
+    if monto_usd <= 0 or fracciones <= 0:
+        return None, (jsonify({"error": "El monto y las fracciones deben ser mayores a 0"}), 400)
+
+    # TRM real (opcional): solo trazabilidad, NO entra al cálculo.
+    trm_real_raw = data.get("trm_real")
+    trm_real = None
+    if trm_real_raw not in (None, ""):
+        trm_real = float(str(trm_real_raw).replace(",", "."))
+        if trm_real <= 0:
+            return None, (jsonify({"error": "La TRM ingresada debe ser mayor a 0"}), 400)
+
+    precio_usd = round(monto_usd / fracciones, 4)
+    try:
+        trm_df = pd.read_parquet("datos/macro/trm.parquet")
+        idx = trm_df.index.get_indexer([pd.to_datetime(fecha)], method="nearest")[0]
+        trm_dia = float(trm_df["TRM"].iloc[idx])
+    except Exception:
+        return None, (jsonify({
+            "error": "No hay TRM oficial disponible para esa fecha. "
+                     "No se registró la compra; intenta más tarde o revisa la fecha."
+        }), 400)
+    monto_cop = round(monto_usd * trm_dia, 0)
+
+    aporte = {
+        "fecha": fecha,
+        "activo": activo,
+        "monto_usd": round(monto_usd, 2),
+        "monto_cop": monto_cop,
+        "precio_usd": precio_usd,
+        "trm_dia": trm_dia,
+        "fracciones": round(fracciones, 8),
+        "tipo": "manual",
+    }
+    if trm_real is not None:
+        aporte["trm_real"] = trm_real  # solo trazabilidad, no calcula
+    return aporte, None
+
+
 @app.route("/api/seguimiento/<archivo>", methods=["GET", "POST"])
 def api_seguimiento(archivo):
     if verificar_acceso(archivo):
         return jsonify({"error": "No autorizado"}), 401
 
+    asegurar_ids_aportes(archivo)  # backfill de ids en aportes viejos
     portafolio = leer_portafolio(archivo)
     composicion = portafolio.get("composicion", {})
 
     if request.method == "POST":
         data = request.get_json(silent=True) or {}
         try:
-            activo = data.get("activo", "").upper()
-            fecha = data.get("fecha", datetime.now().strftime("%Y-%m-%d"))
-            monto_usd = float(str(data.get("monto_usd", "0")).replace(",", "."))
-            fracciones = float(str(data.get("fracciones", "0")).replace(",", "."))
-
-            if monto_usd <= 0 or fracciones <= 0:
-                return (
-                    jsonify(
-                        {"error": "El monto y las fracciones deben ser mayores a 0"}
-                    ),
-                    400,
-                )
-
-            precio_usd = round(monto_usd / fracciones, 4)
-            try:
-                trm_df = pd.read_parquet("datos/macro/trm.parquet")
-                idx = trm_df.index.get_indexer(
-                    [pd.to_datetime(fecha)], method="nearest"
-                )[0]
-                trm_dia = float(trm_df["TRM"].iloc[idx])
-            except:
-                trm_dia = 4000
-            monto_cop = round(monto_usd * trm_dia, 0)
-
-            guardar_aporte(
-                archivo,
-                {
-                    "fecha": fecha,
-                    "activo": activo,
-                    "monto_usd": round(monto_usd, 2),
-                    "monto_cop": monto_cop,
-                    "precio_usd": precio_usd,
-                    "trm_dia": trm_dia,
-                    "fracciones": round(fracciones, 6),
-                    "tipo": "manual",
-                },
-            )
+            aporte, err = _armar_aporte_desde_form(data, composicion)
+            if err:
+                return err
+            guardar_aporte(archivo, aporte)
             portafolio = leer_portafolio(archivo)
         except Exception as e:
             return jsonify({"error": f"Error: {str(e)}"}), 400
@@ -2003,6 +1988,31 @@ def api_seguimiento(archivo):
             "aportes": aportes,
         }
     )
+
+
+@app.route("/api/seguimiento/<archivo>/aporte/<aporte_id>", methods=["PUT", "DELETE"])
+def api_seguimiento_aporte(archivo, aporte_id):
+    if verificar_acceso(archivo):
+        return jsonify({"error": "No autorizado"}), 401
+
+    if request.method == "DELETE":
+        if not eliminar_aporte(archivo, aporte_id):
+            return jsonify({"error": "Aporte no encontrado"}), 404
+        return jsonify({"ok": True})
+
+    # PUT — editar: recalcula con la TRM oficial, igual que un registro.
+    data = request.get_json(silent=True) or {}
+    try:
+        composicion = leer_portafolio(archivo).get("composicion", {})
+        campos, err = _armar_aporte_desde_form(data, composicion)
+        if err:
+            return err
+        if not editar_aporte(archivo, aporte_id, campos):
+            return jsonify({"error": "Aporte no encontrado"}), 404
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": f"Error: {str(e)}"}), 400
+
 
 @app.route('/api/trm-analisis')
 def api_trm_analisis():

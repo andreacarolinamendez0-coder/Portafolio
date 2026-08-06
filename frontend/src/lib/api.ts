@@ -186,12 +186,14 @@ export const updateConfig = (archivo: string, data: { divisa?: string; nombre?: 
 // ── Seguimiento ─────────────────────────────────────────
 
 export interface Aporte {
+  id:         string;
   fecha:      string;
   activo:     string;
   monto_usd:  number;
   monto_cop:  number;
   precio_usd: number;
   trm_dia:    number;
+  trm_real?:  number;   // TRM real de compra — solo referencia, no entra al cálculo
   fracciones: number;
   tipo:       string;
 }
@@ -213,10 +215,28 @@ export const registrarCompra = (archivo: string, data: {
   fecha:      string;
   monto_usd:  number;
   fracciones: number;
+  trm_real?:  number;
 }) =>
   apiFetch<SeguimientoData>(`/api/seguimiento/${archivo}`, {
     method: "POST",
     body: JSON.stringify(data),
+  });
+
+export const editarAporte = (archivo: string, id: string, data: {
+  activo:     string;
+  fecha:      string;
+  monto_usd:  number;
+  fracciones: number;
+  trm_real?:  number;
+}) =>
+  apiFetch<{ ok: boolean }>(`/api/seguimiento/${archivo}/aporte/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+
+export const eliminarAporte = (archivo: string, id: string) =>
+  apiFetch<{ ok: boolean }>(`/api/seguimiento/${archivo}/aporte/${id}`, {
+    method: "DELETE",
   });
  
 export interface AdminUsuario {
