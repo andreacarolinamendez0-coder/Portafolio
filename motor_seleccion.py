@@ -41,6 +41,14 @@ import pandas as pd
 
 DIAS_TRADING_ANIO = 252
 
+MAX_ACTIVOS_SECTOR_CONCENTRADO = 3   # tope de activos finales cuando el universo de entrada
+                                        # esta concentrado en 1 o 2 sectores/categorias
+UMBRAL_PARCIAL_SECTOR_CONCENTRADO = 0.35   # mas laxo que el umbral general (0.20): activos de
+                                              # la(s) misma(s) categoria(s) comparten fundamentales
+                                              # sistemicos por diseno: el umbral general purgaria
+                                              # casi todo el universo por "redundancia" cuando en
+                                              # realidad es la naturaleza esperada de la categoria
+
 
 # ============================================================
 # METRICAS
@@ -280,12 +288,35 @@ def seleccionar(
     fraccion_purga: float = 0.30,
     umbral_parcial: float = 0.20,
     solo_negativos: bool = False,
+    saltar_cobertura_sector: bool = False,
 ) -> dict:
     """Corre los 3 pasos y devuelve la lista final de activos + trazabilidad.
 
     solo_negativos: True -> purga solo los de Sortino negativo en vez del
                     percentil. Criterio absoluto en vez de relativo.
+
+    saltar_cobertura_sector: True cuando el universo de entrada ya fue
+        restringido por fuera a un tipo de vehiculo sin tema (ej. "solo
+        ETFs", cualquier sector) -- no se corre cobertura_por_sector() en
+        absoluto, se toma lo que sobreviva de las purgas 1-2 tal cual,
+        ordenado solo por Sortino. No aplica el umbral laxo ni la
+        advertencia de concentracion (a diferencia de pocos_sectores): un
+        universo amplio de ETFs ya es, en si mismo, diversificado.
+
+    pocos_sectores: si el universo de entrada (parametro `sector`) pertenece
+        a 1 o 2 categorias/sectores distintos, el paso 3
+        (cobertura_por_sector, que fuerza "1 activo por sector") colapsaria o
+        distorsionaria la seleccion -- el usuario ya pidio explicitamente esa
+        concentracion. En ese caso se corre cobertura_por_sector() para
+        garantizar al menos 1 activo de cada sector pedido, se completa el
+        resto del cupo (hasta MAX_ACTIVOS_SECTOR_CONCENTRADO) por mejor
+        Sortino, y se usa UMBRAL_PARCIAL_SECTOR_CONCENTRADO (mas laxo) en el
+        paso 2, porque activos de la(s) misma(s) categoria(s) comparten
+        riesgo propio por diseno (ej. un ETF sectorial correlaciona fuerte
+        con las acciones que representa).
     """
+    pocos_sectores = (not saltar_cobertura_sector) and len(set(sector.values())) <= 2
+
     # --- Paso 1: purga por Sortino (historico completo) ---
     if solo_negativos:
         p1 = purgar_negativos(retornos, mar_anual)
@@ -294,12 +325,29 @@ def seleccionar(
     sortino = p1["sortino"]
 
     # --- Paso 2: purga por redundancia (parcial) ---
-    p2 = purgar_redundantes(p1["sobreviven"], corr_parcial, sortino, umbral_parcial)
+    umbral_efectivo = UMBRAL_PARCIAL_SECTOR_CONCENTRADO if pocos_sectores else umbral_parcial
+    p2 = purgar_redundantes(p1["sobreviven"], corr_parcial, sortino, umbral_efectivo)
 
-    # --- Paso 3: cobertura por sector ---
-    p3 = cobertura_por_sector(p2["sobreviven"], sortino, sector)
+    # --- Paso 3: cobertura por sector, tope concentrado, o passthrough ---
+    if saltar_cobertura_sector:
+        # Vehiculo sin tema (ej. "solo ETFs"): sin cap, sin cobertura por
+        # sector -- se evalua unicamente por rendimiento.
+        p3 = None
+        final = [a for a in sortino.index if a in set(p2["sobreviven"])]
+    elif pocos_sectores:
+        # Garantiza al menos 1 activo de cada sector pedido (hasta 2) antes
+        # de completar el resto del cupo por mejor Sortino -- sin esto, el
+        # top-N global podia dejar uno de los 2 sectores pedidos en cero.
+        p3 = cobertura_por_sector(p2["sobreviven"], sortino, sector)
+        garantizados = p3["seleccion"]
+        resto = [a for a in sortino.index
+                 if a in set(p2["sobreviven"]) and a not in set(garantizados)]
+        cupo_restante = max(0, MAX_ACTIVOS_SECTOR_CONCENTRADO - len(garantizados))
+        final = garantizados + resto[:cupo_restante]
+    else:
+        p3 = cobertura_por_sector(p2["sobreviven"], sortino, sector)
+        final = p3["seleccion"]
 
-    final = p3["seleccion"]
     # .copy() de un slice puede devolver una vista de solo lectura; forzamos
     # un array propio antes de tocarle la diagonal.
     sub = corr_parcial.loc[final, final].to_numpy(copy=True)
@@ -308,6 +356,7 @@ def seleccionar(
     return {
         "seleccion": final,
         "sortino": sortino,
+        "sector_concentrado": pocos_sectores,
         "paso1_purga_sortino": p1,
         "paso2_purga_parcial": p2,
         "paso3_cobertura_sector": p3,

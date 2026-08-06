@@ -35,7 +35,7 @@ const fmtM = (n: number) => {
   return "$" + Math.round(n).toLocaleString("es-CO");
 };
 
-export function ReporteTarjetas({ datos, notaNuevos }: { datos: DatosReporte; notaNuevos?: string }) {
+export function ReporteTarjetas({ datos, notaNuevos, advertenciaCategoria }: { datos: DatosReporte; notaNuevos?: string; advertenciaCategoria?: string }) {
   const hayDca = datos.aporte_dca > 0;
   const m = datos.metricas;
   const composArr = Object.entries(datos.composicion).sort((a, b) => b[1] - a[1]);
@@ -114,7 +114,7 @@ export function ReporteTarjetas({ datos, notaNuevos }: { datos: DatosReporte; no
 
       {/* Composición */}
       <p style={s.seccion}>Composición</p>
-      <GlassPanel style={{ marginBottom: notaNuevos ? 14 : 0 }}>
+      <GlassPanel style={{ marginBottom: (notaNuevos || advertenciaCategoria) ? 14 : 0 }}>
         {composArr.map(([ticker, peso], i) => {
           const color = COLORES[i % COLORES.length];
           return (
@@ -131,6 +131,13 @@ export function ReporteTarjetas({ datos, notaNuevos }: { datos: DatosReporte; no
           );
         })}
       </GlassPanel>
+
+      {/* Advertencia de concentración por categoría */}
+      {advertenciaCategoria && (
+        <div style={{ background: "rgba(255,159,10,0.08)", border: "1px solid rgba(255,159,10,0.2)", borderRadius: 10, padding: "10px 13px", marginBottom: notaNuevos ? 10 : 0 }}>
+          <p style={{ fontSize: 12, color: "#ff9f0a", margin: 0, lineHeight: 1.5 }}>{advertenciaCategoria}</p>
+        </div>
+      )}
 
       {/* Nota de activos nuevos */}
       {notaNuevos && (

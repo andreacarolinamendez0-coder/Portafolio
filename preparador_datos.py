@@ -38,6 +38,8 @@ import recolector as R
 
 CARPETA_PRECIOS = R.CARPETA_PRECIOS
 TICKER_SECTOR = R.TICKER_SECTOR  # capa de sector, ya existe, se hereda tal cual
+ETF_SECTOR_EQUIVALENTE = R.ETF_SECTOR_EQUIVALENTE
+TODOS_LOS_ETFS = R.TODOS_LOS_ETFS
 
 # Cripto opera 7 dias/semana; la bolsa 5. Para que todo viva en el mismo
 # calendario hay que saber quien es quien. Se hereda del recolector.
@@ -87,6 +89,14 @@ UMBRAL_DIA_BOLSA = 0.5
 MIN_DIAS_HISTORIA = 252        # ~1 año de trading, mínimo para correlación confiable
 MAX_HUECO_CONSECUTIVO = 10     # días seguidos sin dato -> sospechoso
 MIN_PRECIO_VALIDO = 0.0001     # precios <= 0 son error de fuente, no un activo barato
+
+# Volatilidad ANUALIZADA mínima de los retornos log. Un activo por debajo de
+# esto tiene un precio efectivamente PLANO (feed congelado por falla de la
+# fuente, no un activo real de baja volatilidad). Con varianza casi-cero,
+# ponderador.ponderar_hrp() le puede asignar peso 1.0 sin ningun error ni
+# warning (dividir por varianza inversa ~0 dispara hacia infinito). Se purga
+# aqui, antes de que llegue a covarianza.py / ponderador.py.
+MIN_VOLATILIDAD_ANUAL = 1e-4
 
 
 # ============================================================
@@ -157,6 +167,20 @@ def validar_calidad(df_precios: pd.DataFrame) -> dict:
         hueco = _hueco_maximo_consecutivo(serie)
         if hueco > MAX_HUECO_CONSECUTIVO:
             excluidos[ticker] = f"hueco de {hueco} días consecutivos sin dato"
+            continue
+
+        # Precio efectivamente plano (feed congelado): varianza casi-cero que
+        # HRP no sabe manejar. Se calcula sobre retorno log, preservando NaN
+        # (no se hace dropna antes) para no fabricar "retornos" entre fechas
+        # que no son consecutivas.
+        retorno_log = np.log(serie / serie.shift(1)).dropna()
+        vol_anual = float(retorno_log.std() * np.sqrt(252)) if not retorno_log.empty else 0.0
+        if not np.isfinite(vol_anual) or vol_anual < MIN_VOLATILIDAD_ANUAL:
+            excluidos[ticker] = (
+                f"volatilidad anualizada casi nula ({vol_anual:.2e}, mínimo "
+                f"{MIN_VOLATILIDAD_ANUAL:.0e}) — precio probablemente congelado "
+                "por falla de feed, no un activo real de baja volatilidad"
+            )
             continue
 
         validos.append(ticker)

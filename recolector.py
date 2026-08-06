@@ -27,16 +27,16 @@ CRIPTO = ["BTC-USD", "ETH-USD", "SOL-USD"]
 
 ACTIVOS_POR_SECTOR = {
     "Technology": ["AAPL", "MSFT", "GOOGL", "NVDA", "AVGO"],
-    "Communication Services": ["META", "NFLX", "DIS", "TMUS"],
-    "Consumer Cyclical": ["AMZN", "TSLA", "HD", "MCD"],
-    "Consumer Defensive": ["WMT", "KO", "PG", "COST"],
-    "Financial Services": ["JPM", "V", "MA", "BAC"],
+    "Communication Services": ["META", "NFLX", "DIS", "TMUS", "CMCSA", "VZ"],
+    "Consumer Cyclical": ["AMZN", "TSLA", "HD", "MCD", "NKE", "LOW"],
+    "Consumer Defensive": ["WMT", "KO", "PG", "COST", "PEP", "CL"],
+    "Financial Services": ["JPM", "V", "MA", "BAC", "WFC", "GS"],
     "Healthcare": ["LLY", "JNJ", "UNH", "ABBV"],
-    "Industrials": ["CAT", "BA", "GE", "HON"],
-    "Energy": ["XOM", "CVX", "COP"],
-    "Utilities": ["NEE", "DUK", "SO"],
-    "Real Estate": ["PLD", "AMT"],
-    "Basic Materials": ["LIN", "FCX"],
+    "Industrials": ["CAT", "BA", "GE", "HON", "LMT", "DE"],
+    "Energy": ["XOM", "CVX", "COP", "SLB", "EOG", "PSX", "OXY"],
+    "Utilities": ["NEE", "DUK", "SO", "AEP", "D"],
+    "Real Estate": ["PLD", "AMT", "EQIX", "O"],
+    "Basic Materials": ["LIN", "FCX", "NEM", "SHW", "APD", "ECL"],
 }
 
 ETFS = {
@@ -61,8 +61,29 @@ ETFS = {
     "REITs": ["VNQ"],
 }
 
+# Para cuando el usuario restringe el universo a un sector especifico (ej.
+# "solo tecnologia"): un ETF sectorial SI cuenta como la misma categoria que
+# las acciones de ese sector, asi que se remapea a su sector GICS equivalente.
+# NO se usa en TICKER_SECTOR (abajo) -- ese debe seguir con la subcategoria de
+# vehiculo para que cobertura_por_sector() los trate como cupos separados en
+# el caso general no restringido.
+ETF_SECTOR_EQUIVALENTE = {
+    "XLK": "Technology", "XLF": "Financial Services", "XLE": "Energy",
+    "XLV": "Healthcare", "XLI": "Industrials", "XLP": "Consumer Defensive",
+    "XLY": "Consumer Cyclical", "XLU": "Utilities", "XLB": "Basic Materials",
+    "XLRE": "Real Estate", "XLC": "Communication Services",
+    "VNQ": "Real Estate",  # REIT, mismo sector que XLRE aunque vive en "REITs"
+}
+
+TODOS_LOS_ETFS = sorted(set(t for lst in ETFS.values() for t in lst))
+
 TICKER_SECTOR = {t: sector for sector, lst in ACTIVOS_POR_SECTOR.items() for t in lst}
-TICKER_SECTOR.update({t: "ETF" for lst in ETFS.values() for t in lst})
+# Cada ETF hereda el nombre de su SUBCATEGORIA (la clave de ETFS), no el
+# string generico "ETF". Con "ETF" unico, motor_seleccion.cobertura_por_sector()
+# solo dejaba pasar UN ETF de los 36 (GLD, SHY, VEA, etc. competian por el
+# mismo cupo), dejando el portafolio final sin bonos, oro/commodities ni
+# exposicion internacional.
+TICKER_SECTOR.update({t: sector for sector, lst in ETFS.items() for t in lst})
 TICKER_SECTOR.update({t: "Crypto" for t in CRIPTO})
 
 ACTIVOS = sorted(set(TICKER_SECTOR.keys()))

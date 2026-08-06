@@ -351,9 +351,13 @@ def _sistema_analista(portafolio, composicion, tiene_inv):
         f"el sistema los descarga automáticamente la primera vez que se usan, así que no te limites a la lista si el tema lo amerita. "
         f"Eso sí: usa siempre tickers reales y reconocibles, nunca inventes símbolos.\n\n"
         f'IMPORTANTE: "activos" SIEMPRE debe ser tickers reales de bolsa (ej. "NVDA","VWO","XLK"), nunca categorías ni descripciones ("tecnología disruptiva", "mercados emergentes"). '
-        f"Si sugieres una distribución temática, tradúcela a 5-8 tickers concretos antes de generar el JSON.\n\n"
+        f"Si sugieres una distribución temática, tradúcela a una cantidad eficiente de tickers reales que representen bien esa categoría "
+        f"(normalmente 4-6, para darle margen al motor de elegir los de mejor desempeño) antes de generar el JSON. "
+        f"Si el usuario restringe el portafolio a una sola categoría (ej. \"solo tecnología\", \"solo ETFs de bonos\"), acláraselo antes de generar el JSON: "
+        f"el resultado final será un portafolio concentrado (2-3 activos de esa categoría, los de mejor desempeño), pensado como complemento y no "
+        f"como su único portafolio de inversión, porque este análisis no evalúa su interacción con otros sectores o activos que ya tenga.\n\n"
         f"FLUJO A — PORTAFOLIO NUEVO: recoge en orden (uno por mensaje): perfil → monto → DCA → horizonte. "
-        f"Si en la conversación el usuario mencionó sectores, temas o tickers de interés, tradúcelos a 5-8 tickers reales antes del JSON final.\n"
+        f"Si en la conversación el usuario mencionó sectores, temas o tickers de interés, tradúcelos a una cantidad eficiente de tickers reales (normalmente 4-6) antes del JSON final.\n"
         f'Cuando tengas todo, responde SOLO el JSON. Si hubo preferencias de sector/tema, incluye "activos":\n'
         f'{{"accion":"analizar","perfil":"agresivo","inversion":1000000,"aporte_dca":0,"frecuencia_meses":1,"horizonte":10,"es_nuevo":true,'
         f'"activos":{{"ARKG":0.25,"NVDA":0.20,"HACK":0.15,"ICLN":0.15,"SMH":0.15,"GOOGL":0.10}}}}\n'
@@ -657,12 +661,16 @@ def api_generar_propuesta(archivo):
                 "horizonte": horizonte,
                 "archivo": archivo,
                 "alfa": alfa,
+                "advertencia": resultado.get("advertencia_concentracion"),
             },
         })
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return jsonify({"ok": False, "error": str(e)})
+        return jsonify({
+            "ok": False,
+            "error": "Ocurrió un problema generando la propuesta. Intenta de nuevo o ajusta tu solicitud.",
+        })
 
 
 # ═══════════════════════════════════════════════════════════════════

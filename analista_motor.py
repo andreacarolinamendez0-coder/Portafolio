@@ -47,6 +47,7 @@ def construir_portafolio(
     fraccion_purga: float = 0.30,
     umbral_parcial: float = 0.20,
     solo_negativos: bool = False,
+    saltar_cobertura_sector: bool = False,
 ) -> dict:
     """Construye el portafolio RIESGOSO. Igual para todos los perfiles.
 
@@ -69,6 +70,7 @@ def construir_portafolio(
         fraccion_purga=fraccion_purga,
         umbral_parcial=umbral_parcial,
         solo_negativos=solo_negativos,
+        saltar_cobertura_sector=saltar_cobertura_sector,
     )
     activos = sel["seleccion"]
 

@@ -43,6 +43,15 @@ import pandas as pd
 from scipy.cluster.hierarchy import linkage, to_tree
 from scipy.spatial.distance import squareform
 
+# Guard de ULTIMA linea, no el filtro principal. El filtro principal vive en
+# preparador_datos.validar_calidad() (MIN_VOLATILIDAD_ANUAL), que purga
+# precios "congelados" (varianza casi-cero) antes de que lleguen aqui. Este
+# umbral es deliberadamente muy bajo (muy por debajo de cualquier activo real)
+# para no chocar con ese filtro; solo existe para fallar RUIDOSAMENTE si, por
+# el motivo que sea, algo con varianza degenerada llega hasta HRP -- en vez de
+# repartirle silenciosamente peso 1.0 (ver docstring del modulo/auditoria).
+VARIANZA_DIARIA_MINIMA = 1e-10
+
 
 def _distancia(corr: pd.DataFrame) -> np.ndarray:
     """Correlacion -> distancia metrica: d = sqrt(0.5 * (1 - corr)).
@@ -121,9 +130,19 @@ def ponderar_hrp(
     activos = list(covarianza.index)
     n = len(activos)
     if n == 1:
-        return {"pesos": pd.Series([1.0], index=activos), "orden": activos}
+        return {"pesos": pd.Series([1.0], index=activos), "orden": activos, "n_efectivo": 1.0}
 
-    d = np.sqrt(np.diag(covarianza.values))
+    varianzas = np.diag(covarianza.values)
+    degenerados = [a for a, v in zip(activos, varianzas) if v <= VARIANZA_DIARIA_MINIMA]
+    if degenerados:
+        raise ValueError(
+            f"Varianza casi-cero (<= {VARIANZA_DIARIA_MINIMA:.0e}) en {degenerados}: "
+            "probable precio congelado (falla de feed). HRP no puede ponderar esto "
+            "sin degenerar a peso 1.0 en ese activo. Debio ser purgado en "
+            "preparador_datos.validar_calidad() antes de llegar aqui."
+        )
+
+    d = np.sqrt(varianzas)
     C = np.array(covarianza.values / np.outer(d, d), copy=True)
     np.fill_diagonal(C, 1.0)
     corr = pd.DataFrame(C, index=activos, columns=activos)

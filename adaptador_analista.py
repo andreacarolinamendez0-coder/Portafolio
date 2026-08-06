@@ -58,6 +58,15 @@ AÑOS_POR_HORIZONTE = {
     "largo": 15,
 }
 
+ADVERTENCIA_CONCENTRACION_CATEGORIA = (
+    "Este portafolio se concentra en una o dos categorías/sectores de "
+    "activos, tal como lo pediste, con los de mejor desempeño dentro de "
+    "esa(s) categoría(s). No debe usarse como tu único portafolio de "
+    "inversión: este análisis no evalúa su interacción con otros sectores o "
+    "activos que puedas tener. Úsalo con cautela, idealmente como "
+    "complemento si ya cuentas con otras inversiones diversificadas."
+)
+
 MAR_ANUAL    = 0.045
 VIDA_MEDIA   = 126
 
@@ -107,6 +116,51 @@ def _ret_mensual_cop_real(
     return r_mens_cop_real.dropna()
 
 
+def _restringir_universo(retornos, sector, tickers_fijos):
+    """Aplica tickers_fijos al universo. Devuelve (retornos, sector,
+    saltar_cobertura_sector).
+
+    Tres casos, en este orden (el orden importa: ver comentario en el paso 2):
+      1. Sin tickers_fijos, o <2 validos: sin cambios (comportamiento actual).
+      2. Tras remapear ETFs sectoriales a su sector GICS equivalente, el
+         universo pedido queda en <=2 categorias distintas: es un pedido de
+         sector(es) concentrado(s) (ej. "solo tecnologia", con o sin ETF
+         sectorial mezclado). Se usa el sector remapeado, sin expandir el
+         universo.
+      3. Si NO colapsa en <=2 categorias tras el remapeo Y todos los tickers
+         son ETFs: es un pedido de vehiculo puro (ej. "solo ETFs", sin tema).
+         Se expande a TODO el universo de ETFs disponible, evaluado solo por
+         rendimiento (saltar_cobertura_sector=True).
+
+    El check de "todos son ETF" va DESPUES del check de <=2 categorias: si
+    fuera al reves, un pedido de "solo bonos" (ya son <=1 categoria hoy)
+    terminaria expandiendose innecesariamente a los ~39 ETFs conocidos.
+    """
+    import preparador_datos as prep
+
+    if not tickers_fijos:
+        return retornos, sector, False
+
+    cols = [t for t in tickers_fijos if t in retornos.columns]
+    if len(cols) < 2:
+        return retornos, sector, False
+
+    sector_efectivo = {
+        t: prep.ETF_SECTOR_EQUIVALENTE.get(t, sector.get(t, "Sin clasificar"))
+        for t in cols
+    }
+
+    if len(set(sector_efectivo.values())) <= 2:
+        return retornos[cols], sector_efectivo, False
+
+    if all(t in prep.TODOS_LOS_ETFS for t in cols):
+        cols_etf = [t for t in prep.TODOS_LOS_ETFS if t in retornos.columns]
+        sector_etf = {t: sector.get(t, "Sin clasificar") for t in cols_etf}
+        return retornos[cols_etf], sector_etf, True
+
+    return retornos[cols], sector_efectivo, False
+
+
 def optimizar_portafolio(
     ret_real=None,
     panel=None,
@@ -141,11 +195,9 @@ def optimizar_portafolio(
     sector = universo["sector"]
 
     # Si el usuario fijo tickers, restringir el universo a esos (los que existan)
-    if tickers_fijos:
-        cols = [t for t in tickers_fijos if t in retornos_diarios.columns]
-        if len(cols) >= 2:
-            retornos_diarios = retornos_diarios[cols]
-            sector = {t: sector.get(t, "Sin clasificar") for t in cols}
+    retornos_diarios, sector, saltar_cobertura_sector = _restringir_universo(
+        retornos_diarios, sector, tickers_fijos
+    )
 
     # TRM diaria en log-retornos (desde panel o desde el parquet)
     import pandas as _pd
@@ -176,6 +228,7 @@ def optimizar_portafolio(
         cdt_nominal=cdt_nominal,
         inflacion_col_anual=inflacion_col_anual,
         capital=inversion_inicial,
+        saltar_cobertura_sector=saltar_cobertura_sector,
     )
 
     # Guardar el resultado completo en un atributo para que la ruta lo lea si quiere
@@ -197,6 +250,7 @@ def _construir(
     capital: float = None,
     fraccion_purga: float = 0.30,
     umbral_parcial: float = 0.20,
+    saltar_cobertura_sector: bool = False,
 ) -> dict:
     """Logica real. horizonte: int (años) o string."""
     perfil_norm = perfil.lower().strip()
@@ -226,6 +280,7 @@ def _construir(
         vida_media=VIDA_MEDIA,
         fraccion_purga=fraccion_purga,
         umbral_parcial=umbral_parcial,
+        saltar_cobertura_sector=saltar_cobertura_sector,
     )
 
     port = resultado["portafolio"]
@@ -282,11 +337,9 @@ def _cargar_todo_para_motor(tickers_fijos=None):
     retornos = universo["retornos"]
     sector = universo["sector"]
 
-    if tickers_fijos:
-        cols = [t for t in tickers_fijos if t in retornos.columns]
-        if len(cols) >= 2:
-            retornos = retornos[cols]
-            sector = {t: sector.get(t, "Sin clasificar") for t in cols}
+    retornos, sector, saltar_cobertura_sector = _restringir_universo(
+        retornos, sector, tickers_fijos
+    )
 
     trm = pd.read_parquet("datos/macro/trm.parquet").sort_index()
     ret_trm = np.log(trm["TRM"] / trm["TRM"].shift(1)).dropna()
@@ -311,7 +364,7 @@ def _cargar_todo_para_motor(tickers_fijos=None):
     return {
         "retornos": retornos, "sector": sector, "ret_trm": ret_trm,
         "inf_col_m": inf_col_m, "inf_col_anual": inf_col_anual,
-        "cdt_nominal": cdt_nominal,
+        "cdt_nominal": cdt_nominal, "saltar_cobertura_sector": saltar_cobertura_sector,
     }
 
 
@@ -435,6 +488,7 @@ def generar_propuesta_completa(perfil, horizonte, inversion, aporte_dca=0,
         retorno_trm=ins["ret_trm"], inflacion_col_mensual=ins["inf_col_m"],
         cdt_nominal=ins["cdt_nominal"], inflacion_col_anual=ins["inf_col_anual"],
         capital=inversion,
+        saltar_cobertura_sector=ins["saltar_cobertura_sector"],
     )
 
     pesos = res["pesos"]
@@ -445,12 +499,17 @@ def generar_propuesta_completa(perfil, horizonte, inversion, aporte_dca=0,
         horizonte, ins["inf_col_anual"], ins["cdt_nominal"]
     )
 
+    sector_concentrado = bool(res["seleccion"].get("sector_concentrado"))
+
     return {
         "pesos": pesos.to_dict(),
         "reporte_txt": reporte_txt,
         "datos": datos,
         "alfa": res.get("alfa"),
         "advertencia_cdt": res.get("advertencia_cdt") or "",
+        "advertencia_concentracion": (
+            ADVERTENCIA_CONCENTRACION_CATEGORIA if sector_concentrado else None
+        ),
     }
 
 

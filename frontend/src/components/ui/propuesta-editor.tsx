@@ -13,6 +13,7 @@ export interface Propuesta {
   frecuencia_meses: number;
   horizonte: number;
   archivo: string;
+  advertencia?: string;
 }
 
 const COLORES = ["#0071e3", "#30d158", "#ff9f0a", "#bf5af2", "#ff453a", "#5ac8fa", "#ffd60a", "#64d2ff", "#ff375f", "#a2845e"];
@@ -249,7 +250,7 @@ export function PropuestaEditor({ propuesta, tieneInv, onAplicar, aplicando, msg
       )}
 
       {/* Resultado en tarjetas */}
-      {datos && !recalculando && <ReporteTarjetas datos={datos} notaNuevos={notaNuevos} />}
+      {datos && !recalculando && <ReporteTarjetas datos={datos} notaNuevos={notaNuevos} advertenciaCategoria={propuesta.advertencia} />}
 
       {/* Resumen + aplicar */}
       <div style={{ marginTop: 16, display: "flex", gap: 16, fontSize: 12, color: "var(--text-3)", flexWrap: "wrap", paddingTop: 12, borderTop: "1px solid var(--glass-border)" }}>
