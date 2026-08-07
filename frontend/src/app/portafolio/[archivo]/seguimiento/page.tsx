@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { getSeguimiento, registrarCompra, editarAporte, eliminarAporte, type SeguimientoData } from "@/lib/api";
+import { getSeguimiento, registrarCompra, editarAporte, eliminarAporte, crearDeposito, editarDeposito, eliminarDeposito, type SeguimientoData, type Deposito } from "@/lib/api";
 import { GlassBackground } from "@/components/ui/glass-background";
 import { GlassPanel } from "@/components/ui/glass-panel";
 import { GlowPanel } from "@/components/ui/glow-panel";
@@ -24,7 +24,17 @@ export default function SeguimientoPage() {
   const [fecha, setFecha]           = useState(hoy);
   const [montoUsd, setMontoUsd]     = useState("");
   const [fracciones, setFracciones] = useState("");
-  const [trmReal, setTrmReal]       = useState("");
+
+  const [comision, setComision] = useState("");
+
+  // Depósitos: form nuevo + edición inline
+  const [depFecha, setDepFecha]   = useState(hoy);
+  const [depCop, setDepCop]       = useState("");
+  const [depTrm, setDepTrm]       = useState("");
+  const [depEditId, setDepEditId] = useState<string | null>(null);
+  const [dFecha, setDFecha]       = useState("");
+  const [dCop, setDCop]           = useState("");
+  const [dTrm, setDTrm]           = useState("");
 
   // Edición inline de una fila del historial
   const [editId, setEditId]   = useState<string | null>(null);
@@ -32,7 +42,6 @@ export default function SeguimientoPage() {
   const [eFecha, setEFecha]   = useState("");
   const [eUsd, setEUsd]       = useState("");
   const [eFracc, setEFracc]   = useState("");
-  const [eTrm, setETrm]       = useState("");
 
   const sEdit: React.CSSProperties = { width: "100%", background: "var(--bg-2)", border: "1px solid rgba(0,113,227,0.4)", borderRadius: 6, color: "var(--text)", fontSize: 12, padding: "4px 6px", fontFamily: "inherit", outline: "none", boxSizing: "border-box" };
 
@@ -42,6 +51,21 @@ export default function SeguimientoPage() {
       .catch(() => router.push("/login"))
       .finally(() => setLoading(false));
   }, [archivo, router]);
+
+  // Bloquea teclear cualquier cosa que no sea número en los campos numéricos.
+  useEffect(() => {
+    function soloNumeros(e: KeyboardEvent) {
+      const t = e.target;
+      if (t instanceof HTMLInputElement && t.type === "number") {
+        // e.key.length === 1 => tecla de carácter (no flechas/Backspace/Tab/etc.)
+        if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !/[0-9.,]/.test(e.key)) {
+          e.preventDefault();
+        }
+      }
+    }
+    document.addEventListener("keydown", soloNumeros, true);
+    return () => document.removeEventListener("keydown", soloNumeros, true);
+  }, []);
 
   async function registrar() {
     if (!activo || !montoUsd || !fracciones) {
@@ -53,11 +77,11 @@ export default function SeguimientoPage() {
         activo, fecha,
         monto_usd: parseFloat(montoUsd),
         fracciones: parseFloat(fracciones),
-        trm_real: trmReal ? parseFloat(trmReal) : undefined,
+        comision: comision ? parseFloat(comision) : undefined,
       });
       setData(actualizado);          // refresca con el estado nuevo
       setMsg({ text: `Compra de ${activo} registrada`, ok: true });
-      setMontoUsd(""); setFracciones(""); setActivo(""); setTrmReal("");
+      setMontoUsd(""); setFracciones(""); setActivo(""); setComision("")
     } catch (e: unknown) {
       setMsg({ text: e instanceof Error ? e.message : "Error", ok: false });
     }
@@ -69,7 +93,6 @@ export default function SeguimientoPage() {
     setEFecha(a.fecha);
     setEUsd(String(a.monto_usd));
     setEFracc(String(a.fracciones));
-    setETrm(a.trm_real != null ? String(a.trm_real) : "");
     setMsg({ text: "", ok: false });
   }
 
@@ -80,7 +103,6 @@ export default function SeguimientoPage() {
         fecha: eFecha,
         monto_usd: parseFloat(eUsd),
         fracciones: parseFloat(eFracc),
-        trm_real: eTrm ? parseFloat(eTrm) : undefined,
       });
       setData(await getSeguimiento(archivo));
       setEditId(null);
@@ -97,6 +119,49 @@ export default function SeguimientoPage() {
       setData(await getSeguimiento(archivo));
       if (editId === a.id) setEditId(null);
       setMsg({ text: "Compra eliminada", ok: true });
+    } catch (e: unknown) {
+      setMsg({ text: e instanceof Error ? e.message : "Error", ok: false });
+    }
+  }
+
+  async function crearDep() {
+    if (!depCop || !depTrm) {
+      setMsg({ text: "Completa el monto en COP y la TRM del depósito", ok: false });
+      return;
+    }
+    try {
+      await crearDeposito(archivo, { fecha: depFecha, monto_cop: parseFloat(depCop), trm_real: parseFloat(depTrm) });
+      setData(await getSeguimiento(archivo));
+      setDepCop(""); setDepTrm("");
+      setMsg({ text: "Depósito registrado", ok: true });
+    } catch (e: unknown) {
+      setMsg({ text: e instanceof Error ? e.message : "Error", ok: false });
+    }
+  }
+
+  function empezarEdicionDep(d: Deposito) {
+    setDepEditId(d.id); setDFecha(d.fecha); setDCop(String(d.monto_cop)); setDTrm(String(d.trm_real));
+    setMsg({ text: "", ok: false });
+  }
+
+  async function guardarEdicionDep(id: string) {
+    try {
+      await editarDeposito(archivo, id, { fecha: dFecha, monto_cop: parseFloat(dCop), trm_real: parseFloat(dTrm) });
+      setData(await getSeguimiento(archivo));
+      setDepEditId(null);
+      setMsg({ text: "Depósito actualizado", ok: true });
+    } catch (e: unknown) {
+      setMsg({ text: e instanceof Error ? e.message : "Error", ok: false });
+    }
+  }
+
+  async function eliminarDep(d: Deposito) {
+    if (!confirm(`¿Eliminar el depósito del ${d.fecha} (US$${d.monto_usd})?`)) return;
+    try {
+      await eliminarDeposito(archivo, d.id);
+      setData(await getSeguimiento(archivo));
+      if (depEditId === d.id) setDepEditId(null);
+      setMsg({ text: "Depósito eliminado", ok: true });
     } catch (e: unknown) {
       setMsg({ text: e instanceof Error ? e.message : "Error", ok: false });
     }
@@ -158,6 +223,79 @@ export default function SeguimientoPage() {
               </GlassPanel>
             )}
 
+            {/* Saldo y depósitos */}
+            <GlassPanel>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+                <h3 style={{ fontSize: "1rem", margin: 0 }}>Saldo y depósitos</h3>
+                <span style={{ fontSize: "0.85rem", color: "#a1a1a6" }}>
+                  Disponible: <strong style={{ color: data.saldo_usd < 0 ? "#ff453a" : "#30d158", fontSize: "1.05rem" }}>US${data.saldo_usd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                </span>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 12 }}>
+                <div>
+                  <label style={s.label}>Fecha</label>
+                  <input type="date" value={depFecha} onChange={e => setDepFecha(e.target.value)} style={s.input} />
+                </div>
+                <div>
+                  <label style={s.label}>Monto depositado (COP)</label>
+                  <input className="no-spin" type="number" step="1" placeholder="Ej: 4000000" value={depCop} onChange={e => setDepCop(e.target.value)} style={s.input} />
+                </div>
+                <div>
+                  <label style={s.label}>TRM de compra de USD</label>
+                  <input className="no-spin" type="number" step="0.01" placeholder="Ej: 4050" value={depTrm} onChange={e => setDepTrm(e.target.value)} style={s.input} />
+                </div>
+              </div>
+              <LiquidButton onClick={crearDep} className="text-white font-semibold !px-8 !py-2.5 text-sm">Registrar depósito</LiquidButton>
+
+              {data.depositos.length > 0 && (
+                <div style={{ overflowX: "auto", marginTop: 14 }}>
+                  <h3 style={{ fontSize: "1rem", marginBottom: 12 , paddingTop: 20 }}>Historial de depósitos</h3>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ color: "#6e6e73", textAlign: "left" }}>
+                        <th style={s.th}>Fecha</th><th style={s.th}>COP</th><th style={s.th}>TRM</th><th style={s.th}>USD</th><th style={s.th}>Tipo</th><th style={s.th}></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...data.depositos].reverse().map((d) => {
+                        const ed = depEditId === d.id;
+                        return (
+                        <tr key={d.id} style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                          {ed ? (
+                            <>
+                              <td style={s.td}><input type="date" value={dFecha} onChange={e => setDFecha(e.target.value)} style={sEdit} /></td>
+                              <td style={s.td}><input className="no-spin" type="number" step="1" value={dCop} onChange={e => setDCop(e.target.value)} style={sEdit} /></td>
+                              <td style={s.td}><input className="no-spin" type="number" step="0.01" value={dTrm} onChange={e => setDTrm(e.target.value)} style={sEdit} /></td>
+                              <td style={s.td}>—</td>
+                              <td style={s.td}>{d.tipo}</td>
+                              <td style={s.td}>
+                                <button onClick={() => guardarEdicionDep(d.id)} title="Guardar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, padding: "2px 4px", lineHeight: 1, color: "#30d158" }}>✓</button>
+                                <button onClick={() => setDepEditId(null)} title="Cancelar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, padding: "2px 4px", lineHeight: 1, color: "var(--text-3)" }}>✕</button>
+                              </td>
+                            </>
+                          ) : (
+                            <>
+                              <td style={s.td}>{d.fecha}</td>
+                              <td style={s.td}>${d.monto_cop.toLocaleString()}</td>
+                              <td style={s.td}>${d.trm_real.toLocaleString()}</td>
+                              <td style={s.td}>${d.monto_usd.toLocaleString()}</td>
+                              <td style={s.td}>{d.tipo === "apertura" ? <span style={{ color: "#6e6e73" }}>apertura</span> : "depósito"}</td>
+                              <td style={{ ...s.td, whiteSpace: "nowrap" }}>
+                                <button onClick={() => empezarEdicionDep(d)} title="Editar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, padding: "2px 4px", lineHeight: 1, opacity: 0.7 }}>🖊</button>
+                                <button onClick={() => eliminarDep(d)} title="Eliminar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, padding: "2px 4px", lineHeight: 1, opacity: 0.7 }}>🗑</button>
+                              </td>
+                            </>
+                          )}
+                        </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </GlassPanel>
+
             {/* Formulario de nueva compra */}
             <GlassPanel>
               <h3 style={{ fontSize: "1rem", marginBottom: 12 }}>Registrar nueva compra</h3>
@@ -183,12 +321,12 @@ export default function SeguimientoPage() {
                   <input className="no-spin" type="number" step="0.0001" placeholder="Ej: 0.2523" value={fracciones} onChange={e => setFracciones(e.target.value)} style={s.input} />
                 </div>
                 <div>
-                  <label style={s.label}>TRM de compra (op.)</label>
-                  <input className="no-spin" type="number" step="0.01" placeholder="Solo registro" value={trmReal} onChange={e => setTrmReal(e.target.value)} style={s.input} />
+                  <label style={s.label}>Comisión (USD, op.)</label>
+                  <input className="no-spin" type="number" step="0.01" placeholder="Vacío = 1% auto si fracc." value={comision} onChange={e => setComision(e.target.value)} style={s.input} />
                 </div>
               </div>
               <div style={{ padding: "10px 14px", background: "rgba(0,113,227,0.06)", border: "1px solid rgba(0,113,227,0.15)", borderRadius: 10, marginBottom: 14 }}>
-                <p style={{ color: "#4da3ff", fontSize: 12, margin: 0 }}>El precio por acción y el COP se calculan con la TRM oficial del día. Si compraste los dólares a otra TRM, regístrala arriba, se guarda solo como referencia tuya.</p>
+                <p style={{ color: "#4da3ff", fontSize: 12, margin: 0 }}>El precio por acción y el COP se calculan con la TRM oficial del día. La TRM real a la que compraste tus dólares se registra en cada depósito, no aquí.</p>
               </div>
               <LiquidButton onClick={registrar} className="text-white font-semibold !px-10 !py-3">Registrar compra</LiquidButton>
               <style>{`
@@ -196,18 +334,17 @@ export default function SeguimientoPage() {
                 .no-spin::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
                 .no-spin { -moz-appearance: textfield; appearance: textfield; }
               `}</style>
-            </GlassPanel>
 
-            {/* Historial */}
-            {data.aportes.length > 0 && (
-              <GlassPanel>
-                <h3 style={{ fontSize: "1rem", marginBottom: 12 }}>Historial de compras</h3>
+              {/* Historial — mismo contenedor que la compra */}
+              {data.aportes.length > 0 && (
+                <div style={{ marginTop: 20 }}>
+                  <h3 style={{ fontSize: "1rem", marginBottom: 12 , paddingTop: 20 }}>Historial de compras</h3>
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                     <thead>
                       <tr style={{ color: "#6e6e73", textAlign: "left" }}>
                         <th style={s.th}>Fecha</th><th style={s.th}>Activo</th><th style={s.th}>USD</th>
-                        <th style={s.th}>COP</th><th style={s.th}>Fracciones</th><th style={s.th}>Precio</th><th style={s.th}>TRM</th><th style={s.th}>TRM compra</th><th style={s.th}></th>
+                        <th style={s.th}>COP</th><th style={s.th}>Fracciones</th><th style={s.th}>Precio</th><th style={s.th}>TRM</th><th style={s.th}></th>
                       </tr>
                     </thead>
                     <tbody>
@@ -228,7 +365,6 @@ export default function SeguimientoPage() {
                               <td style={s.td}><input className="no-spin" type="number" step="0.0001" value={eFracc} onChange={e => setEFracc(e.target.value)} style={sEdit} /></td>
                               <td style={s.td}>—</td>
                               <td style={s.td}>—</td>
-                              <td style={s.td}><input className="no-spin" type="number" step="0.01" placeholder="—" value={eTrm} onChange={e => setETrm(e.target.value)} style={sEdit} /></td>
                               <td style={s.td}>
                                 <button onClick={() => guardarEdicion(a.id)} title="Guardar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, padding: "2px 4px", lineHeight: 1, color: "#30d158" }}>✓</button>
                                 <button onClick={() => setEditId(null)} title="Cancelar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, padding: "2px 4px", lineHeight: 1, color: "var(--text-3)" }}>✕</button>
@@ -243,7 +379,6 @@ export default function SeguimientoPage() {
                               <td style={s.td}>{a.fracciones.toFixed(6)}</td>
                               <td style={s.td}>${a.precio_usd.toFixed(4)}</td>
                               <td style={s.td}>${a.trm_dia.toLocaleString()}</td>
-                              <td style={s.td}>{a.trm_real ? `$${a.trm_real.toLocaleString()}` : "—"}</td>
                               <td style={{ ...s.td, whiteSpace: "nowrap" }}>
                                 <button onClick={() => empezarEdicion(a)} title="Editar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, padding: "2px 4px", lineHeight: 1, opacity: 0.7 }}>🖊</button>
                                 <button onClick={() => eliminar(a)} title="Eliminar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, padding: "2px 4px", lineHeight: 1, opacity: 0.7 }}>🗑</button>
@@ -256,8 +391,9 @@ export default function SeguimientoPage() {
                     </tbody>
                   </table>
                 </div>
-              </GlassPanel>
-            )}
+                </div>
+              )}
+            </GlassPanel>
           </>
         )}
     </>

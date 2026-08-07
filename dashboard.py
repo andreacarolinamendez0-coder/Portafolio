@@ -26,6 +26,12 @@ from gestor_portafolio import (
     asegurar_ids_aportes,
     eliminar_aporte,
     editar_aporte,
+    saldo_disponible,
+    SaldoInsuficiente,
+    guardar_deposito,
+    editar_deposito,
+    eliminar_deposito,
+    asegurar_caja_inicial,
     registrar_usuario,
     login_usuario,
     registrar_actividad,
@@ -1914,6 +1920,17 @@ def _armar_aporte_desde_form(data, composicion):
         if trm_real <= 0:
             return None, (jsonify({"error": "La TRM ingresada debe ser mayor a 0"}), 400)
 
+    # Comisión: 1% del monto USD si la compra es fraccionada; editable (override
+    # desde el form). Sale del saldo pero NO entra al costo/valor de la posición.
+    frac_entera = abs(fracciones - round(fracciones)) < 1e-9
+    comision_raw = data.get("comision")
+    if comision_raw not in (None, ""):
+        comision = round(float(str(comision_raw).replace(",", ".")), 2)
+        if comision < 0:
+            return None, (jsonify({"error": "La comisión no puede ser negativa"}), 400)
+    else:
+        comision = 0.0 if frac_entera else round(monto_usd * 0.01, 2)
+
     precio_usd = round(monto_usd / fracciones, 4)
     try:
         trm_df = pd.read_parquet("datos/macro/trm.parquet")
@@ -1933,6 +1950,7 @@ def _armar_aporte_desde_form(data, composicion):
         "monto_cop": monto_cop,
         "precio_usd": precio_usd,
         "trm_dia": trm_dia,
+        "comision": comision,        
         "fracciones": round(fracciones, 8),
         "tipo": "manual",
     }
@@ -1947,6 +1965,7 @@ def api_seguimiento(archivo):
         return jsonify({"error": "No autorizado"}), 401
 
     asegurar_ids_aportes(archivo)  # backfill de ids en aportes viejos
+    asegurar_caja_inicial(archivo)  # crea depósito de apertura la 1ª vez    
     portafolio = leer_portafolio(archivo)
     composicion = portafolio.get("composicion", {})
 
@@ -1981,6 +2000,8 @@ def api_seguimiento(archivo):
     return jsonify(
         {
             "nombre": portafolio.get("nombre"),
+            "depositos": portafolio.get("depositos", []),
+            "saldo_usd": saldo_disponible(portafolio),
             "composicion": composicion,
             "progreso": {"entrados": total_e, "total": total_a, "pct": pct},
             "pendientes": pendientes_data,
@@ -2010,9 +2031,65 @@ def api_seguimiento_aporte(archivo, aporte_id):
         if not editar_aporte(archivo, aporte_id, campos):
             return jsonify({"error": "Aporte no encontrado"}), 404
         return jsonify({"ok": True})
+    except SaldoInsuficiente as e:
+        return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": f"Error: {str(e)}"}), 400
 
+def _armar_deposito_desde_form(data):
+    """Parsea/valida un depósito. COP→USD a la TRM REAL a la que el usuario
+    compró los dólares. Devuelve (deposito, None) o (None, (err, status))."""
+    fecha = data.get("fecha", datetime.now().strftime("%Y-%m-%d"))
+    monto_cop = float(str(data.get("monto_cop", "0")).replace(",", "."))
+    trm_real = float(str(data.get("trm_real", "0")).replace(",", "."))
+    if monto_cop <= 0 or trm_real <= 0:
+        return None, (jsonify({"error": "El monto en COP y la TRM deben ser mayores a 0"}), 400)
+    return {
+        "fecha": fecha,
+        "monto_cop": round(monto_cop, 0),
+        "trm_real": trm_real,
+        "monto_usd": round(monto_cop / trm_real, 2),
+        "tipo": "deposito",
+    }, None
+
+
+@app.route("/api/depositos/<archivo>", methods=["POST"])
+def api_depositos(archivo):
+    if verificar_acceso(archivo):
+        return jsonify({"error": "No autorizado"}), 401
+    asegurar_caja_inicial(archivo)
+    data = request.get_json(silent=True) or {}
+    try:
+        deposito, err = _armar_deposito_desde_form(data)
+        if err:
+            return err
+        guardar_deposito(archivo, deposito)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": f"Error: {str(e)}"}), 400
+
+
+@app.route("/api/depositos/<archivo>/<deposito_id>", methods=["PUT", "DELETE"])
+def api_depositos_uno(archivo, deposito_id):
+    if verificar_acceso(archivo):
+        return jsonify({"error": "No autorizado"}), 401
+    try:
+        if request.method == "DELETE":
+            if not eliminar_deposito(archivo, deposito_id):
+                return jsonify({"error": "Depósito no encontrado"}), 404
+            return jsonify({"ok": True})
+        # PUT
+        data = request.get_json(silent=True) or {}
+        deposito, err = _armar_deposito_desde_form(data)
+        if err:
+            return err
+        if not editar_deposito(archivo, deposito_id, deposito):
+            return jsonify({"error": "Depósito no encontrado"}), 404
+        return jsonify({"ok": True})
+    except SaldoInsuficiente as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": f"Error: {str(e)}"}), 400
 
 @app.route('/api/trm-analisis')
 def api_trm_analisis():

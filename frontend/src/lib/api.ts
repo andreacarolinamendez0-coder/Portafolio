@@ -184,6 +184,14 @@ export const updateConfig = (archivo: string, data: { divisa?: string; nombre?: 
   });
 
 // ── Seguimiento ─────────────────────────────────────────
+export interface Deposito {
+  id:        string;
+  fecha:     string;
+  monto_cop: number;
+  trm_real:  number;
+  monto_usd: number;
+  tipo:      string;   // "deposito" | "apertura"
+}
 
 export interface Aporte {
   id:         string;
@@ -196,6 +204,7 @@ export interface Aporte {
   trm_real?:  number;   // TRM real de compra — solo referencia, no entra al cálculo
   fracciones: number;
   tipo:       string;
+  comision?:  number;   // USD; sale del saldo, no entra al costo/valor
 }
 
 export interface SeguimientoData {
@@ -205,6 +214,8 @@ export interface SeguimientoData {
   pendientes:  { activo: string; peso: number; precio_usd: number }[];
   entrados:    string[];
   aportes:     Aporte[];
+  depositos:   Deposito[];
+  saldo_usd:   number;
 }
 
 export const getSeguimiento = (archivo: string) =>
@@ -216,6 +227,7 @@ export const registrarCompra = (archivo: string, data: {
   monto_usd:  number;
   fracciones: number;
   trm_real?:  number;
+  comision?:  number;
 }) =>
   apiFetch<SeguimientoData>(`/api/seguimiento/${archivo}`, {
     method: "POST",
@@ -228,6 +240,7 @@ export const editarAporte = (archivo: string, id: string, data: {
   monto_usd:  number;
   fracciones: number;
   trm_real?:  number;
+  comision?:  number;
 }) =>
   apiFetch<{ ok: boolean }>(`/api/seguimiento/${archivo}/aporte/${id}`, {
     method: "PUT",
@@ -238,7 +251,32 @@ export const eliminarAporte = (archivo: string, id: string) =>
   apiFetch<{ ok: boolean }>(`/api/seguimiento/${archivo}/aporte/${id}`, {
     method: "DELETE",
   });
- 
+
+export const crearDeposito = (archivo: string, data: {
+  fecha:     string;
+  monto_cop: number;
+  trm_real:  number;
+}) =>
+  apiFetch<{ ok: boolean }>(`/api/depositos/${archivo}`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+
+export const editarDeposito = (archivo: string, id: string, data: {
+  fecha:     string;
+  monto_cop: number;
+  trm_real:  number;
+}) =>
+  apiFetch<{ ok: boolean }>(`/api/depositos/${archivo}/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+
+export const eliminarDeposito = (archivo: string, id: string) =>
+  apiFetch<{ ok: boolean }>(`/api/depositos/${archivo}/${id}`, {
+    method: "DELETE",
+  });
+
 export interface AdminUsuario {
   username:            string;
   email:               string;

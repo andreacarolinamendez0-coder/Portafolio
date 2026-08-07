@@ -230,6 +230,26 @@ def guardar_composicion(nombre_archivo, pesos_dict):
 
 
 # ============================================================
+# CAJA / SALDO
+# ============================================================
+
+
+class SaldoInsuficiente(Exception):
+    """Se lanza cuando una operación dejaría el saldo de caja en negativo."""
+    pass
+
+
+def saldo_disponible(data):
+    """Saldo en USD = depósitos − (compras + comisiones). Derivado, no se guarda."""
+    dep = sum(float(d.get("monto_usd", 0)) for d in data.get("depositos", []))
+    gastado = sum(
+        float(a.get("monto_usd", 0)) + float(a.get("comision", 0))
+        for a in data.get("aportes", [])
+    )
+    return round(dep - gastado, 2)
+
+
+# ============================================================
 # MANEJAR APORTES
 # ============================================================
 
@@ -238,6 +258,12 @@ def guardar_aporte(nombre_archivo, aporte):
     ruta = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}"
     with _LOCK:
         data = _leer(ruta)
+        costo = float(aporte.get("monto_usd", 0)) + float(aporte.get("comision", 0))
+        if saldo_disponible(data) - costo < -0.005:  # tolerancia de centavos
+            raise SaldoInsuficiente(
+                f"Saldo insuficiente: la compra cuesta US${costo:,.2f} y tienes "
+                f"US${saldo_disponible(data):,.2f}. Registra un depósito primero."
+            )
         aporte.setdefault("id", secrets.token_hex(6))  # id estable para editar/eliminar
         data["aportes"].append(aporte)
         _escribir(ruta, data)
@@ -274,18 +300,113 @@ def eliminar_aporte(nombre_archivo, aporte_id):
 
 def editar_aporte(nombre_archivo, aporte_id, campos):
     """Reemplaza los campos de un aporte por id (conservando su id).
-    Devuelve True si lo encontró y actualizó."""
+    Devuelve True si lo encontró y actualizó. Lanza SaldoInsuficiente si la
+    edición dejaría el saldo negativo."""
     ruta = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}"
     with _LOCK:
         data = _leer(ruta)
         for a in data.get("aportes", []):
             if a.get("id") == aporte_id:
+                costo_viejo = float(a.get("monto_usd", 0)) + float(a.get("comision", 0))
+                costo_nuevo = float(campos.get("monto_usd", 0)) + float(campos.get("comision", 0))
+                if saldo_disponible(data) + costo_viejo - costo_nuevo < -0.005:
+                    raise SaldoInsuficiente(
+                        "Saldo insuficiente para esa edición: dejaría la caja en negativo."
+                    )
                 a.clear()
                 a.update(campos)
                 a["id"] = aporte_id
                 _escribir(ruta, data)
                 return True
     return False
+
+
+# ============================================================
+# MANEJAR DEPÓSITOS / CAJA
+# ============================================================
+
+
+def guardar_deposito(nombre_archivo, deposito):
+    ruta = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}"
+    with _LOCK:
+        data = _leer(ruta)
+        deposito.setdefault("id", secrets.token_hex(6))
+        data.setdefault("depositos", []).append(deposito)
+        _escribir(ruta, data)
+
+
+def editar_deposito(nombre_archivo, deposito_id, campos):
+    """Reemplaza los campos de un depósito por id. Lanza SaldoInsuficiente si
+    dejaría el saldo negativo. Devuelve True si lo encontró."""
+    ruta = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}"
+    with _LOCK:
+        data = _leer(ruta)
+        for d in data.get("depositos", []):
+            if d.get("id") == deposito_id:
+                usd_viejo = float(d.get("monto_usd", 0))
+                usd_nuevo = float(campos.get("monto_usd", 0))
+                if saldo_disponible(data) - usd_viejo + usd_nuevo < -0.005:
+                    raise SaldoInsuficiente(
+                        "No puedes reducir ese depósito: dejaría el saldo negativo "
+                        "(ya usaste esa plata en compras)."
+                    )
+                tipo = d.get("tipo", "deposito")
+                d.clear()
+                d.update(campos)
+                d["id"] = deposito_id
+                d.setdefault("tipo", tipo)
+                _escribir(ruta, data)
+                return True
+    return False
+
+
+def eliminar_deposito(nombre_archivo, deposito_id):
+    """Elimina un depósito por id. Lanza SaldoInsuficiente si dejaría el saldo
+    negativo. Devuelve True si lo encontró y borró."""
+    ruta = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}"
+    with _LOCK:
+        data = _leer(ruta)
+        deps = data.get("depositos", [])
+        dep = next((d for d in deps if d.get("id") == deposito_id), None)
+        if dep is None:
+            return False
+        if saldo_disponible(data) - float(dep.get("monto_usd", 0)) < -0.005:
+            raise SaldoInsuficiente(
+                "No puedes eliminar ese depósito: dejaría el saldo negativo "
+                "(ya usaste esa plata en compras)."
+            )
+        data["depositos"] = [d for d in deps if d.get("id") != deposito_id]
+        _escribir(ruta, data)
+    return True
+
+
+def asegurar_caja_inicial(nombre_archivo):
+    """Reconciliación única (idempotente): si hay compras pero la caja no se ha
+    inicializado, crea un depósito de apertura = Σ compras existentes (USD) para
+    que el saldo arranque en 0. Marcada con la bandera caja_inicializada."""
+    ruta = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}"
+    with _LOCK:
+        data = _leer(ruta)
+        if data.get("caja_inicializada"):
+            return
+        aportes = data.get("aportes", [])
+        if aportes:
+            usd = round(sum(float(a.get("monto_usd", 0)) for a in aportes), 2)
+            cop = round(sum(float(a.get("monto_cop", 0)) for a in aportes), 0)
+            fecha_ap = min(
+                (a["fecha"] for a in aportes if a.get("fecha")),
+                default=datetime.now().strftime("%Y-%m-%d"),
+            )
+            data.setdefault("depositos", []).append({
+                "id": secrets.token_hex(6),
+                "fecha": fecha_ap,
+                "monto_cop": cop,
+                "trm_real": round(cop / usd, 2) if usd else 0,
+                "monto_usd": usd,
+                "tipo": "apertura",
+            })
+        data["caja_inicializada"] = True
+        _escribir(ruta, data)
 
 
 # ============================================================
