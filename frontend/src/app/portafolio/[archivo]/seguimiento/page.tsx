@@ -50,6 +50,7 @@ export default function SeguimientoPage() {
   const [eFecha, setEFecha]   = useState("");
   const [eUsd, setEUsd]       = useState("");
   const [eFracc, setEFracc]   = useState("");
+  const [eComision, setEComision] = useState("");
 
   const [editTipo, setEditTipo] = useState<"compra" | "venta">("compra");
   const [ePrecio, setEPrecio]   = useState("");
@@ -109,6 +110,7 @@ export default function SeguimientoPage() {
   function empezarEdicion(m: Mov) {
     setEditId(m.id); setEditTipo(m._tipo);
     setEActivo(m.activo); setEFecha(m.fecha); setEFracc(String(m.fracciones));
+    setEComision(m.comision != null ? String(m.comision) : "");    
     if (m._tipo === "compra") setEUsd(String(m.monto_usd));
     else setEPrecio(String(m.precio_venta_usd));
     setMsg({ text: "", ok: false });
@@ -116,10 +118,11 @@ export default function SeguimientoPage() {
 
   async function guardarEdicion(m: Mov) {
     try {
+            const comisionEdit = eComision === "" ? undefined : parseFloat(eComision);
       if (m._tipo === "compra") {
-        await editarAporte(archivo, m.id, { activo: eActivo, fecha: eFecha, monto_usd: parseFloat(eUsd), fracciones: parseFloat(eFracc) });
+        await editarAporte(archivo, m.id, { activo: eActivo, fecha: eFecha, monto_usd: parseFloat(eUsd), fracciones: parseFloat(eFracc), comision: comisionEdit });
       } else {
-        await editarVenta(archivo, m.id, { activo: eActivo, fecha: eFecha, fracciones: parseFloat(eFracc), precio_venta_usd: parseFloat(ePrecio) });
+        await editarVenta(archivo, m.id, { activo: eActivo, fecha: eFecha, fracciones: parseFloat(eFracc), precio_venta_usd: parseFloat(ePrecio), comision: comisionEdit });
       }
       setData(await getSeguimiento(archivo));
       setEditId(null);
@@ -393,13 +396,16 @@ export default function SeguimientoPage() {
                       <thead>
                         <tr style={{ color: "#6e6e73", textAlign: "left" }}>
                           <th style={s.th}>Fecha</th><th style={s.th}>Tipo</th><th style={s.th}>Activo</th>
-                          <th style={s.th}>Fracciones</th><th style={s.th}>Precio</th><th style={s.th}>USD</th><th style={s.th}>TRM</th><th style={s.th}></th>
+                          <th style={s.th}>Fracciones</th><th style={s.th}>Precio</th><th style={s.th}>Monto</th><th style={s.th}>Comisión</th><th style={s.th}>Total</th><th style={s.th}>TRM</th><th style={s.th}></th>
                         </tr>
                       </thead>
                       <tbody>
                         {movimientos.map((m) => {
                           const ed = editId === m.id;
                           const esVenta = m._tipo === "venta";
+                          const comisionMov = m._tipo === "venta" ? m.comision : (m.comision ?? 0);
+                          const montoBruto  = m._tipo === "venta" ? m.proceeds_usd + m.comision : m.monto_usd;
+                          const totalMov    = m._tipo === "venta" ? m.proceeds_usd : m.monto_usd + (m.comision ?? 0);
                           return (
                           <tr key={`${m._tipo}-${m.id}`} style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
                             {ed ? (
@@ -417,6 +423,8 @@ export default function SeguimientoPage() {
                                 ) : (
                                   <><td style={s.td}>—</td><td style={s.td}><input className="no-spin" type="number" step="0.01" value={eUsd} onChange={e => setEUsd(e.target.value)} style={sEdit} /></td></>
                                 )}
+                                <td style={s.td}><input className="no-spin" type="number" step="0.01" placeholder="—" value={eComision} onChange={e => setEComision(e.target.value)} style={sEdit} /></td>
+                                <td style={s.td}>—</td>
                                 <td style={s.td}>—</td>
                                 <td style={s.td}>
                                   <button onClick={() => guardarEdicion(m)} title="Guardar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, padding: "2px 4px", lineHeight: 1, color: "#30d158" }}>✓</button>
@@ -429,8 +437,10 @@ export default function SeguimientoPage() {
                                 <td style={s.td}><span style={{ fontSize: 11, fontWeight: 600, color: esVenta ? "#ff453a" : "#4da3ff" }}>{esVenta ? "VENTA" : "COMPRA"}</span></td>
                                 <td style={s.td}><strong>{m.activo}</strong></td>
                                 <td style={s.td}>{m.fracciones.toFixed(6)}</td>
-                                <td style={s.td}>${(m._tipo === "venta" ? m.precio_venta_usd : m.precio_usd).toFixed(4)}</td>
-                                <td style={{ ...s.td, color: esVenta ? "#30d158" : "var(--text)" }}>{m._tipo === "venta" ? `+$${m.proceeds_usd.toFixed(2)}` : `-$${m.monto_usd.toFixed(2)}`}</td>
+                                <td style={s.td}>${(m._tipo === "venta" ? m.precio_venta_usd : m.precio_usd).toFixed(2)}</td>
+                                <td style={s.td}>${montoBruto.toFixed(2)}</td>
+                                <td style={s.td}>{comisionMov > 0 ? `$${comisionMov.toFixed(2)}` : "—"}</td>
+                                <td style={{ ...s.td, color: esVenta ? "#30d158" : "var(--text)" }}>{esVenta ? `+$${totalMov.toFixed(2)}` : `-$${totalMov.toFixed(2)}`}</td>
                                 <td style={s.td}>${m.trm_dia.toLocaleString()}</td>
                                 <td style={{ ...s.td, whiteSpace: "nowrap" }}>
                                   <button onClick={() => empezarEdicion(m)} title="Editar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, padding: "2px 4px", lineHeight: 1, opacity: 0.7 }}>🖊</button>
