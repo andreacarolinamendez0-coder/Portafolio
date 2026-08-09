@@ -2,12 +2,16 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { getSeguimiento, registrarCompra, editarAporte, eliminarAporte, crearDeposito, editarDeposito, eliminarDeposito, type SeguimientoData, type Deposito } from "@/lib/api";
+import { getSeguimiento, registrarCompra, editarAporte, eliminarAporte, crearDeposito, editarDeposito, eliminarDeposito, crearVenta, editarVenta, eliminarVenta, type SeguimientoData, type Deposito } from "@/lib/api";
 import { GlassBackground } from "@/components/ui/glass-background";
 import { GlassPanel } from "@/components/ui/glass-panel";
 import { GlowPanel } from "@/components/ui/glow-panel";
 import { LiquidButton } from "@/components/ui/liquid-glass-button";
 import { PageIntro } from "@/components/ui/page-intro";
+
+type Mov =
+  | (SeguimientoData["aportes"][number] & { _tipo: "compra" })
+  | (SeguimientoData["ventas"][number] & { _tipo: "venta" });
 
 export default function SeguimientoPage() {
   const params  = useParams();
@@ -27,6 +31,10 @@ export default function SeguimientoPage() {
 
   const [comision, setComision] = useState("");
 
+
+  const [modo, setModo] = useState<"compra" | "venta">("compra");
+  const [precioVenta, setPrecioVenta] = useState("");
+
   // Depósitos: form nuevo + edición inline
   const [depFecha, setDepFecha]   = useState(hoy);
   const [depCop, setDepCop]       = useState("");
@@ -42,6 +50,9 @@ export default function SeguimientoPage() {
   const [eFecha, setEFecha]   = useState("");
   const [eUsd, setEUsd]       = useState("");
   const [eFracc, setEFracc]   = useState("");
+
+  const [editTipo, setEditTipo] = useState<"compra" | "venta">("compra");
+  const [ePrecio, setEPrecio]   = useState("");
 
   const sEdit: React.CSSProperties = { width: "100%", background: "var(--bg-2)", border: "1px solid rgba(0,113,227,0.4)", borderRadius: 6, color: "var(--text)", fontSize: 12, padding: "4px 6px", fontFamily: "inherit", outline: "none", boxSizing: "border-box" };
 
@@ -68,57 +79,64 @@ export default function SeguimientoPage() {
   }, []);
 
   async function registrar() {
-    if (!activo || !montoUsd || !fracciones) {
-      setMsg({ text: "Completa activo, monto y fracciones", ok: false });
-      return;
-    }
     try {
-      const actualizado = await registrarCompra(archivo, {
-        activo, fecha,
-        monto_usd: parseFloat(montoUsd),
-        fracciones: parseFloat(fracciones),
-        comision: comision ? parseFloat(comision) : undefined,
-      });
-      setData(actualizado);          // refresca con el estado nuevo
-      setMsg({ text: `Compra de ${activo} registrada`, ok: true });
-      setMontoUsd(""); setFracciones(""); setActivo(""); setComision("")
+      if (modo === "compra") {
+        if (!activo || !montoUsd || !fracciones) { setMsg({ text: "Completa activo, monto y fracciones", ok: false }); return; }
+        setData(await registrarCompra(archivo, {
+          activo, fecha,
+          monto_usd: parseFloat(montoUsd),
+          fracciones: parseFloat(fracciones),
+          comision: comision ? parseFloat(comision) : undefined,
+        }));
+        setMsg({ text: `Compra de ${activo} registrada`, ok: true });
+      } else {
+        if (!activo || !fracciones || !precioVenta) { setMsg({ text: "Completa activo, fracciones y precio de venta", ok: false }); return; }
+        await crearVenta(archivo, {
+          activo, fecha,
+          fracciones: parseFloat(fracciones),
+          precio_venta_usd: parseFloat(precioVenta),
+          comision: comision ? parseFloat(comision) : undefined,
+        });
+        setData(await getSeguimiento(archivo));
+        setMsg({ text: `Venta de ${activo} registrada`, ok: true });
+      }
+      setMontoUsd(""); setFracciones(""); setActivo(""); setComision(""); setPrecioVenta("");
     } catch (e: unknown) {
       setMsg({ text: e instanceof Error ? e.message : "Error", ok: false });
     }
   }
 
-  function empezarEdicion(a: SeguimientoData["aportes"][number]) {
-    setEditId(a.id);
-    setEActivo(a.activo);
-    setEFecha(a.fecha);
-    setEUsd(String(a.monto_usd));
-    setEFracc(String(a.fracciones));
+  function empezarEdicion(m: Mov) {
+    setEditId(m.id); setEditTipo(m._tipo);
+    setEActivo(m.activo); setEFecha(m.fecha); setEFracc(String(m.fracciones));
+    if (m._tipo === "compra") setEUsd(String(m.monto_usd));
+    else setEPrecio(String(m.precio_venta_usd));
     setMsg({ text: "", ok: false });
   }
 
-  async function guardarEdicion(id: string) {
+  async function guardarEdicion(m: Mov) {
     try {
-      await editarAporte(archivo, id, {
-        activo: eActivo,
-        fecha: eFecha,
-        monto_usd: parseFloat(eUsd),
-        fracciones: parseFloat(eFracc),
-      });
+      if (m._tipo === "compra") {
+        await editarAporte(archivo, m.id, { activo: eActivo, fecha: eFecha, monto_usd: parseFloat(eUsd), fracciones: parseFloat(eFracc) });
+      } else {
+        await editarVenta(archivo, m.id, { activo: eActivo, fecha: eFecha, fracciones: parseFloat(eFracc), precio_venta_usd: parseFloat(ePrecio) });
+      }
       setData(await getSeguimiento(archivo));
       setEditId(null);
-      setMsg({ text: "Compra actualizada", ok: true });
+      setMsg({ text: "Movimiento actualizado", ok: true });
     } catch (e: unknown) {
       setMsg({ text: e instanceof Error ? e.message : "Error", ok: false });
     }
   }
 
-  async function eliminar(a: SeguimientoData["aportes"][number]) {
-    if (!confirm(`¿Eliminar la compra de ${a.activo} del ${a.fecha}?\n\nEsto no se puede deshacer.`)) return;
+  async function eliminarMov(m: Mov) {
+    if (!confirm(`¿Eliminar la ${m._tipo} de ${m.activo} del ${m.fecha}?\n\nEsto no se puede deshacer.`)) return;
     try {
-      await eliminarAporte(archivo, a.id);
+      if (m._tipo === "compra") await eliminarAporte(archivo, m.id);
+      else await eliminarVenta(archivo, m.id);
       setData(await getSeguimiento(archivo));
-      if (editId === a.id) setEditId(null);
-      setMsg({ text: "Compra eliminada", ok: true });
+      if (editId === m.id) setEditId(null);
+      setMsg({ text: "Movimiento eliminado", ok: true });
     } catch (e: unknown) {
       setMsg({ text: e instanceof Error ? e.message : "Error", ok: false });
     }
@@ -171,6 +189,11 @@ export default function SeguimientoPage() {
   if (!data)   return <div style={s.load}>No se pudo cargar</div>;
 
   const sinComposicion = data.progreso.total === 0;
+
+  const movimientos: Mov[] = [
+    ...data.aportes.map(a => ({ ...a, _tipo: "compra" as const })),
+    ...data.ventas.map(v => ({ ...v, _tipo: "venta" as const })),
+  ].sort((a, b) => (a.fecha < b.fecha ? 1 : a.fecha > b.fecha ? -1 : 0));
 
   return (
     <>
@@ -296,104 +319,159 @@ export default function SeguimientoPage() {
               )}
             </GlassPanel>
 
-            {/* Formulario de nueva compra */}
+            {/* Registrar movimiento */}
             <GlassPanel>
-              <h3 style={{ fontSize: "1rem", marginBottom: 12 }}>Registrar nueva compra</h3>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+                <h3 style={{ fontSize: "1rem", margin: 0 }}>Registrar movimiento</h3>
+                <div style={{ display: "inline-flex", background: "var(--bg-2)", borderRadius: 980, padding: 3 }}>
+                  {(["compra", "venta"] as const).map(mo => (
+                    <button key={mo} onClick={() => setModo(mo)} style={{
+                      border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 600,
+                      padding: "5px 16px", borderRadius: 980, textTransform: "capitalize",
+                      background: modo === mo ? (mo === "venta" ? "#ff453a" : "#0071e3") : "transparent",
+                      color: modo === mo ? "#fff" : "var(--text-3)",
+                    }}>{mo}</button>
+                  ))}
+                </div>
+              </div>
+
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 12 }}>
                 <div>
                   <label style={{ fontSize: "0.85rem", color: "#a1a1a6" }}>Activo</label>
                   <select value={activo} onChange={e => setActivo(e.target.value)} style={{ background: "var(--bg-2)", border: "1px solid rgba(255,255,255,0.08)", color: "var(--text)", padding: "8px 12px", borderRadius: 8, width: "100%", boxSizing: "border-box" }}>
                     <option value="">Selecciona...</option>
-                    {data.pendientes.map(p => <option key={p.activo} value={p.activo}>{p.activo} — pendiente</option>)}
-                    {data.entrados.map(a => <option key={a} value={a}>{a} — agregar más</option>)}
+                    {modo === "compra"
+                      ? <>{data.pendientes.map(p => <option key={p.activo} value={p.activo}>{p.activo} — pendiente</option>)}
+                         {data.entrados.map(a => <option key={a} value={a}>{a} — agregar más</option>)}</>
+                      : data.entrados.map(a => <option key={a} value={a}>{a}</option>)}
                   </select>
                 </div>
                 <div>
                   <label style={s.label}>Fecha</label>
                   <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} style={s.input} />
                 </div>
+                {modo === "compra" ? (
+                  <div>
+                    <label style={s.label}>Monto total pagado (USD)</label>
+                    <input className="no-spin" type="number" step="0.01" placeholder="Ej: 54.81" value={montoUsd} onChange={e => setMontoUsd(e.target.value)} style={s.input} />
+                  </div>
+                ) : (
+                  <div>
+                    <label style={s.label}>Precio de venta (USD)</label>
+                    <input className="no-spin" type="number" step="0.01" placeholder="Ej: 62.40" value={precioVenta} onChange={e => setPrecioVenta(e.target.value)} style={s.input} />
+                  </div>
+                )}
                 <div>
-                  <label style={s.label}>Monto total pagado (USD)</label>
-                  <input className="no-spin" type="number" step="0.01" placeholder="Ej: 54.81" value={montoUsd} onChange={e => setMontoUsd(e.target.value)} style={s.input} />
-                </div>
-                <div>
-                  <label style={s.label}>Fracciones compradas</label>
+                  <label style={s.label}>{modo === "compra" ? "Fracciones compradas" : "Fracciones a vender"}</label>
                   <input className="no-spin" type="number" step="0.0001" placeholder="Ej: 0.2523" value={fracciones} onChange={e => setFracciones(e.target.value)} style={s.input} />
                 </div>
                 <div>
                   <label style={s.label}>Comisión (USD, op.)</label>
-                  <input className="no-spin" type="number" step="0.01" placeholder="Vacío = 1% auto si fracc." value={comision} onChange={e => setComision(e.target.value)} style={s.input} />
+                  <input className="no-spin" type="number" step="0.01" placeholder={modo === "compra" ? "Vacío = 1% auto si fracc." : "Opcional"} value={comision} onChange={e => setComision(e.target.value)} style={s.input} />
                 </div>
               </div>
               <div style={{ padding: "10px 14px", background: "rgba(0,113,227,0.06)", border: "1px solid rgba(0,113,227,0.15)", borderRadius: 10, marginBottom: 14 }}>
-                <p style={{ color: "#4da3ff", fontSize: 12, margin: 0 }}>El precio por acción y el COP se calculan con la TRM oficial del día. La TRM real a la que compraste tus dólares se registra en cada depósito, no aquí.</p>
+                <p style={{ color: "#4da3ff", fontSize: 12, margin: 0 }}>
+                  {modo === "compra"
+                    ? "El precio por acción y el COP se calculan con la TRM oficial del día. La TRM real de tus dólares va en cada depósito."
+                    : "El producto de la venta entra a tu caja. La ganancia realizada se calcula contra tu costo promedio, con la TRM oficial del día."}
+                </p>
               </div>
-              <LiquidButton onClick={registrar} className="text-white font-semibold !px-10 !py-3">Registrar compra</LiquidButton>
+              <LiquidButton onClick={registrar} className="text-white font-semibold !px-10 !py-3">{modo === "compra" ? "Registrar compra" : "Registrar venta"}</LiquidButton>
               <style>{`
                 .no-spin::-webkit-inner-spin-button,
                 .no-spin::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
                 .no-spin { -moz-appearance: textfield; appearance: textfield; }
               `}</style>
 
-              {/* Historial — mismo contenedor que la compra */}
-              {data.aportes.length > 0 && (
+              {/* Historial de movimientos (compras + ventas) */}
+              {movimientos.length > 0 && (
                 <div style={{ marginTop: 20 }}>
-                  <h3 style={{ fontSize: "1rem", marginBottom: 12 , paddingTop: 20 }}>Historial de compras</h3>
-                <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                    <thead>
-                      <tr style={{ color: "#6e6e73", textAlign: "left" }}>
-                        <th style={s.th}>Fecha</th><th style={s.th}>Activo</th><th style={s.th}>USD</th>
-                        <th style={s.th}>COP</th><th style={s.th}>Fracciones</th><th style={s.th}>Precio</th><th style={s.th}>TRM</th><th style={s.th}></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {[...data.aportes].reverse().map((a) => {
-                        const editando = editId === a.id;
-                        return (
-                        <tr key={a.id} style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-                          {editando ? (
-                            <>
-                              <td style={s.td}><input type="date" value={eFecha} onChange={e => setEFecha(e.target.value)} style={sEdit} /></td>
-                              <td style={s.td}>
-                                <select value={eActivo} onChange={e => setEActivo(e.target.value)} style={sEdit}>
-                                  {Object.keys(data.composicion).map(c => <option key={c} value={c}>{c}</option>)}
-                                </select>
-                              </td>
-                              <td style={s.td}><input className="no-spin" type="number" step="0.01" value={eUsd} onChange={e => setEUsd(e.target.value)} style={sEdit} /></td>
-                              <td style={s.td}>—</td>
-                              <td style={s.td}><input className="no-spin" type="number" step="0.0001" value={eFracc} onChange={e => setEFracc(e.target.value)} style={sEdit} /></td>
-                              <td style={s.td}>—</td>
-                              <td style={s.td}>—</td>
-                              <td style={s.td}>
-                                <button onClick={() => guardarEdicion(a.id)} title="Guardar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, padding: "2px 4px", lineHeight: 1, color: "#30d158" }}>✓</button>
-                                <button onClick={() => setEditId(null)} title="Cancelar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, padding: "2px 4px", lineHeight: 1, color: "var(--text-3)" }}>✕</button>
-                              </td>
-                            </>
-                          ) : (
-                            <>
-                              <td style={s.td}>{a.fecha}</td>
-                              <td style={s.td}><strong>{a.activo}</strong></td>
-                              <td style={s.td}>${a.monto_usd.toFixed(2)}</td>
-                              <td style={s.td}>${a.monto_cop.toLocaleString()}</td>
-                              <td style={s.td}>{a.fracciones.toFixed(6)}</td>
-                              <td style={s.td}>${a.precio_usd.toFixed(4)}</td>
-                              <td style={s.td}>${a.trm_dia.toLocaleString()}</td>
-                              <td style={{ ...s.td, whiteSpace: "nowrap" }}>
-                                <button onClick={() => empezarEdicion(a)} title="Editar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, padding: "2px 4px", lineHeight: 1, opacity: 0.7 }}>🖊</button>
-                                <button onClick={() => eliminar(a)} title="Eliminar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, padding: "2px 4px", lineHeight: 1, opacity: 0.7 }}>🗑</button>
-                              </td>
-                            </>
-                          )}
+                  <h3 style={{ fontSize: "1rem", marginBottom: 12, paddingTop: 20 }}>Historial de movimientos</h3>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                      <thead>
+                        <tr style={{ color: "#6e6e73", textAlign: "left" }}>
+                          <th style={s.th}>Fecha</th><th style={s.th}>Tipo</th><th style={s.th}>Activo</th>
+                          <th style={s.th}>Fracciones</th><th style={s.th}>Precio</th><th style={s.th}>USD</th><th style={s.th}>TRM</th><th style={s.th}></th>
                         </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody>
+                        {movimientos.map((m) => {
+                          const ed = editId === m.id;
+                          const esVenta = m._tipo === "venta";
+                          return (
+                          <tr key={`${m._tipo}-${m.id}`} style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                            {ed ? (
+                              <>
+                                <td style={s.td}><input type="date" value={eFecha} onChange={e => setEFecha(e.target.value)} style={sEdit} /></td>
+                                <td style={s.td}>{m._tipo}</td>
+                                <td style={s.td}>
+                                  <select value={eActivo} onChange={e => setEActivo(e.target.value)} style={sEdit}>
+                                    {Object.keys(data.composicion).map(c => <option key={c} value={c}>{c}</option>)}
+                                  </select>
+                                </td>
+                                <td style={s.td}><input className="no-spin" type="number" step="0.0001" value={eFracc} onChange={e => setEFracc(e.target.value)} style={sEdit} /></td>
+                                {esVenta ? (
+                                  <><td style={s.td}><input className="no-spin" type="number" step="0.01" value={ePrecio} onChange={e => setEPrecio(e.target.value)} style={sEdit} /></td><td style={s.td}>—</td></>
+                                ) : (
+                                  <><td style={s.td}>—</td><td style={s.td}><input className="no-spin" type="number" step="0.01" value={eUsd} onChange={e => setEUsd(e.target.value)} style={sEdit} /></td></>
+                                )}
+                                <td style={s.td}>—</td>
+                                <td style={s.td}>
+                                  <button onClick={() => guardarEdicion(m)} title="Guardar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, padding: "2px 4px", lineHeight: 1, color: "#30d158" }}>✓</button>
+                                  <button onClick={() => setEditId(null)} title="Cancelar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, padding: "2px 4px", lineHeight: 1, color: "var(--text-3)" }}>✕</button>
+                                </td>
+                              </>
+                            ) : (
+                              <>
+                                <td style={s.td}>{m.fecha}</td>
+                                <td style={s.td}><span style={{ fontSize: 11, fontWeight: 600, color: esVenta ? "#ff453a" : "#4da3ff" }}>{esVenta ? "VENTA" : "COMPRA"}</span></td>
+                                <td style={s.td}><strong>{m.activo}</strong></td>
+                                <td style={s.td}>{m.fracciones.toFixed(6)}</td>
+                                <td style={s.td}>${(m._tipo === "venta" ? m.precio_venta_usd : m.precio_usd).toFixed(4)}</td>
+                                <td style={{ ...s.td, color: esVenta ? "#30d158" : "var(--text)" }}>{m._tipo === "venta" ? `+$${m.proceeds_usd.toFixed(2)}` : `-$${m.monto_usd.toFixed(2)}`}</td>
+                                <td style={s.td}>${m.trm_dia.toLocaleString()}</td>
+                                <td style={{ ...s.td, whiteSpace: "nowrap" }}>
+                                  <button onClick={() => empezarEdicion(m)} title="Editar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, padding: "2px 4px", lineHeight: 1, opacity: 0.7 }}>🖊</button>
+                                  <button onClick={() => eliminarMov(m)} title="Eliminar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, padding: "2px 4px", lineHeight: 1, opacity: 0.7 }}>🗑</button>
+                                </td>
+                              </>
+                            )}
+                          </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               )}
             </GlassPanel>
+            {Object.keys(data.realizado.por_ticker).length > 0 && (
+              <GlassPanel>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+                  <h3 style={{ fontSize: "1rem", margin: 0 }}>Ganancia realizada</h3>
+                  <span style={{ fontSize: "0.85rem", color: "#a1a1a6" }}>
+                    Total: <strong style={{ color: data.realizado.total >= 0 ? "#30d158" : "#ff453a", fontSize: "1.05rem" }}>{data.realizado.total >= 0 ? "+" : ""}${data.realizado.total.toLocaleString("es-CO", { maximumFractionDigits: 0 })} COP</strong>
+                  </span>
+                </div>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ color: "#6e6e73", textAlign: "left" }}><th style={s.th}>Activo</th><th style={s.th}>Realizada (COP)</th></tr>
+                    </thead>
+                    <tbody>
+                      {Object.entries(data.realizado.por_ticker).map(([tk, g]) => (
+                        <tr key={tk} style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+                          <td style={s.td}><strong>{tk}</strong></td>
+                          <td style={{ ...s.td, color: g >= 0 ? "#30d158" : "#ff453a" }}>{g >= 0 ? "+" : ""}${g.toLocaleString("es-CO", { maximumFractionDigits: 0 })}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </GlassPanel>
+            )}
           </>
         )}
     </>

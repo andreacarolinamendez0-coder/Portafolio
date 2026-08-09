@@ -193,6 +193,20 @@ export interface Deposito {
   tipo:      string;   // "deposito" | "apertura"
 }
 
+export interface Venta {
+  id:                     string;
+  fecha:                  string;
+  activo:                 string;
+  fracciones:             number;
+  precio_venta_usd:       number;
+  comision:               number;
+  proceeds_usd:           number;
+  trm_dia:                number;
+  costo_base_cop:         number;
+  ganancia_realizada_cop: number;
+  tipo:                   string;
+}
+
 export interface Aporte {
   id:         string;
   fecha:      string;
@@ -216,6 +230,8 @@ export interface SeguimientoData {
   aportes:     Aporte[];
   depositos:   Deposito[];
   saldo_usd:   number;
+  ventas:      Venta[];
+  realizado:   { por_ticker: Record<string, number>; total: number };
 }
 
 export const getSeguimiento = (archivo: string) =>
@@ -274,6 +290,35 @@ export const editarDeposito = (archivo: string, id: string, data: {
 
 export const eliminarDeposito = (archivo: string, id: string) =>
   apiFetch<{ ok: boolean }>(`/api/depositos/${archivo}/${id}`, {
+    method: "DELETE",
+  });
+
+export const crearVenta = (archivo: string, data: {
+  activo:           string;
+  fecha:            string;
+  fracciones:       number;
+  precio_venta_usd: number;
+  comision?:        number;
+}) =>
+  apiFetch<{ ok: boolean }>(`/api/ventas/${archivo}`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+
+export const editarVenta = (archivo: string, id: string, data: {
+  activo:           string;
+  fecha:            string;
+  fracciones:       number;
+  precio_venta_usd: number;
+  comision?:        number;
+}) =>
+  apiFetch<{ ok: boolean }>(`/api/ventas/${archivo}/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+
+export const eliminarVenta = (archivo: string, id: string) =>
+  apiFetch<{ ok: boolean }>(`/api/ventas/${archivo}/${id}`, {
     method: "DELETE",
   });
 

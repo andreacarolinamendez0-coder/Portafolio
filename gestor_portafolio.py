@@ -239,14 +239,38 @@ class SaldoInsuficiente(Exception):
     pass
 
 
+class PosicionInsuficiente(Exception):
+    """Se lanza al intentar vender más fracciones de las que se tienen."""
+    pass
+
+
 def saldo_disponible(data):
-    """Saldo en USD = depósitos − (compras + comisiones). Derivado, no se guarda."""
+    """Saldo en USD = depósitos + producto de ventas − (compras + comisiones de
+    compra). Derivado, no se guarda."""
     dep = sum(float(d.get("monto_usd", 0)) for d in data.get("depositos", []))
+    ventas = sum(float(v.get("proceeds_usd", 0)) for v in data.get("ventas", []))
     gastado = sum(
         float(a.get("monto_usd", 0)) + float(a.get("comision", 0))
         for a in data.get("aportes", [])
     )
-    return round(dep - gastado, 2)
+    return round(dep + ventas - gastado, 2)
+
+
+def fracciones_disponibles(data, activo):
+    """Fracciones de un ticker disponibles para vender: Σ compras − Σ ventas."""
+    comprado = sum(float(a.get("fracciones", 0)) for a in data.get("aportes", []) if a.get("activo") == activo)
+    vendido = sum(float(v.get("fracciones", 0)) for v in data.get("ventas", []) if v.get("activo") == activo)
+    return round(comprado - vendido, 8)
+
+
+def realizado_por_ticker(data):
+    """Ganancia realizada (COP) agregada por ticker + total."""
+    por_ticker = {}
+    for v in data.get("ventas", []):
+        tk = v.get("activo")
+        por_ticker[tk] = por_ticker.get(tk, 0.0) + float(v.get("ganancia_realizada_cop", 0))
+    por_ticker = {tk: round(g, 0) for tk, g in por_ticker.items()}
+    return {"por_ticker": por_ticker, "total": round(sum(por_ticker.values()), 0)}
 
 
 # ============================================================
@@ -407,6 +431,77 @@ def asegurar_caja_inicial(nombre_archivo):
             })
         data["caja_inicializada"] = True
         _escribir(ruta, data)
+
+
+# ============================================================
+# MANEJAR VENTAS
+# ============================================================
+
+
+def guardar_venta(nombre_archivo, venta):
+    """Registra una venta. Lanza PosicionInsuficiente si intentas vender más
+    fracciones de las que tienes de ese ticker."""
+    ruta = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}"
+    with _LOCK:
+        data = _leer(ruta)
+        venta.setdefault("id", secrets.token_hex(6))
+        venta.setdefault("tipo", "venta")
+        activo = venta.get("activo")
+        hipot = {**data, "ventas": list(data.get("ventas", [])) + [venta]}
+        if fracciones_disponibles(hipot, activo) < -1e-6:
+            disp = fracciones_disponibles(data, activo)
+            raise PosicionInsuficiente(
+                f"No tienes suficientes fracciones de {activo}: disponibles "
+                f"{disp}, intentas vender {float(venta.get('fracciones', 0))}."
+            )
+        data.setdefault("ventas", []).append(venta)
+        _escribir(ruta, data)
+
+
+def editar_venta(nombre_archivo, venta_id, campos):
+    """Reemplaza una venta por id (conservando id/tipo). Lanza
+    PosicionInsuficiente o SaldoInsuficiente si la edición viola un invariante.
+    Devuelve True si la encontró."""
+    ruta = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}"
+    with _LOCK:
+        data = _leer(ruta)
+        ventas = data.get("ventas", [])
+        idx = next((i for i, v in enumerate(ventas) if v.get("id") == venta_id), None)
+        if idx is None:
+            return False
+        nueva = {**campos, "id": venta_id, "tipo": ventas[idx].get("tipo", "venta")}
+        hipot = {**data, "ventas": [nueva if i == idx else v for i, v in enumerate(ventas)]}
+        activo = nueva.get("activo")
+        if fracciones_disponibles(hipot, activo) < -1e-6:
+            raise PosicionInsuficiente(
+                f"No tienes suficientes fracciones de {activo} para esa venta."
+            )
+        if saldo_disponible(hipot) < -0.005:
+            raise SaldoInsuficiente("Esa edición dejaría el saldo negativo.")
+        ventas[idx] = nueva
+        _escribir(ruta, data)
+        return True
+
+
+def eliminar_venta(nombre_archivo, venta_id):
+    """Elimina una venta por id. Lanza SaldoInsuficiente si su producto ya se
+    usó y quitarlo dejaría el saldo negativo. Devuelve True si la encontró."""
+    ruta = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}"
+    with _LOCK:
+        data = _leer(ruta)
+        ventas = data.get("ventas", [])
+        v = next((x for x in ventas if x.get("id") == venta_id), None)
+        if v is None:
+            return False
+        hipot = {**data, "ventas": [x for x in ventas if x.get("id") != venta_id]}
+        if saldo_disponible(hipot) < -0.005:
+            raise SaldoInsuficiente(
+                "No puedes eliminar esa venta: su producto ya se usó y el saldo "
+                "quedaría negativo."
+            )
+        data["ventas"] = hipot["ventas"]
+        _escribir(ruta, data)
+    return True
 
 
 # ============================================================

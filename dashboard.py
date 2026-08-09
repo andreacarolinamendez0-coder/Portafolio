@@ -32,6 +32,12 @@ from gestor_portafolio import (
     editar_deposito,
     eliminar_deposito,
     asegurar_caja_inicial,
+    PosicionInsuficiente,
+    fracciones_disponibles,
+    realizado_por_ticker,
+    guardar_venta,
+    editar_venta,
+    eliminar_venta,
     registrar_usuario,
     login_usuario,
     registrar_actividad,
@@ -270,9 +276,17 @@ def calcular_tiempo_real(portafolio):
             pos_raw[tk] = {"fracciones": 0, "invertido": 0, "fecha_inicio": a["fecha"]}
         pos_raw[tk]["fracciones"] += a["fracciones"]
         pos_raw[tk]["invertido"] += a["monto_cop"]
+    # Netear ventas: bajan las fracciones y el costo base (promedio) del ticker.
+    for v in portafolio.get("ventas", []):
+        tk = v.get("activo")
+        if tk in pos_raw:
+            pos_raw[tk]["fracciones"] -= float(v.get("fracciones", 0))
+            pos_raw[tk]["invertido"] -= float(v.get("costo_base_cop", 0))
     resultados = []
     total_inv = total_val = 0
     for tk, d in pos_raw.items():
+        if d["fracciones"] <= 1e-9:  # posición cerrada (vendida completa)
+            continue
         p = precio_actual_usd(tk)
         if p is None:
             continue
@@ -2007,6 +2021,8 @@ def api_seguimiento(archivo):
             "pendientes": pendientes_data,
             "entrados": entrados,
             "aportes": aportes,
+            "ventas": portafolio.get("ventas", []),
+            "realizado": realizado_por_ticker(portafolio),
         }
     )
 
@@ -2090,6 +2106,98 @@ def api_depositos_uno(archivo, deposito_id):
         return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": f"Error: {str(e)}"}), 400
+
+
+def _armar_venta_desde_form(data, portafolio):
+    """Parsea/valida/computa una venta. Costo promedio (Σ compras.monto_cop /
+    Σ compras.fracciones del ticker); TRM oficial del día; producto neto de
+    comisión → caja; ganancia realizada = producto_COP (antes de comisión) −
+    costo base. Devuelve (venta, None) o (None, (err, status))."""
+    activo = data.get("activo", "").upper()
+    fecha = data.get("fecha", datetime.now().strftime("%Y-%m-%d"))
+    fracciones = float(str(data.get("fracciones", "0")).replace(",", "."))
+    precio_venta = float(str(data.get("precio_venta_usd", "0")).replace(",", "."))
+    if fracciones <= 0 or precio_venta <= 0:
+        return None, (jsonify({"error": "Las fracciones y el precio de venta deben ser mayores a 0"}), 400)
+
+    comision = 0.0
+    comision_raw = data.get("comision")
+    if comision_raw not in (None, ""):
+        comision = round(float(str(comision_raw).replace(",", ".")), 2)
+        if comision < 0:
+            return None, (jsonify({"error": "La comisión no puede ser negativa"}), 400)
+
+    aportes = [a for a in portafolio.get("aportes", []) if a.get("activo") == activo]
+    frac_compradas = sum(float(a.get("fracciones", 0)) for a in aportes)
+    cop_comprado = sum(float(a.get("monto_cop", 0)) for a in aportes)
+    if frac_compradas <= 0:
+        return None, (jsonify({"error": f"No tienes posición en {activo}"}), 400)
+    costo_base_cop = round((cop_comprado / frac_compradas) * fracciones, 0)
+
+    try:
+        trm_df = pd.read_parquet("datos/macro/trm.parquet")
+        idx = trm_df.index.get_indexer([pd.to_datetime(fecha)], method="nearest")[0]
+        trm_dia = float(trm_df["TRM"].iloc[idx])
+    except Exception:
+        return None, (jsonify({
+            "error": "No hay TRM oficial disponible para esa fecha. "
+                     "Intenta más tarde o revisa la fecha."
+        }), 400)
+
+    return {
+        "fecha": fecha,
+        "activo": activo,
+        "fracciones": round(fracciones, 8),
+        "precio_venta_usd": round(precio_venta, 4),
+        "comision": comision,
+        "proceeds_usd": round(fracciones * precio_venta - comision, 2),
+        "trm_dia": trm_dia,
+        "costo_base_cop": costo_base_cop,
+        "ganancia_realizada_cop": round(fracciones * precio_venta * trm_dia - costo_base_cop, 0),
+        "tipo": "venta",
+    }, None
+
+
+@app.route("/api/ventas/<archivo>", methods=["POST"])
+def api_ventas(archivo):
+    if verificar_acceso(archivo):
+        return jsonify({"error": "No autorizado"}), 401
+    asegurar_caja_inicial(archivo)
+    data = request.get_json(silent=True) or {}
+    try:
+        venta, err = _armar_venta_desde_form(data, leer_portafolio(archivo))
+        if err:
+            return err
+        guardar_venta(archivo, venta)
+        return jsonify({"ok": True})
+    except (PosicionInsuficiente, SaldoInsuficiente) as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": f"Error: {str(e)}"}), 400
+
+
+@app.route("/api/ventas/<archivo>/<venta_id>", methods=["PUT", "DELETE"])
+def api_ventas_una(archivo, venta_id):
+    if verificar_acceso(archivo):
+        return jsonify({"error": "No autorizado"}), 401
+    try:
+        if request.method == "DELETE":
+            if not eliminar_venta(archivo, venta_id):
+                return jsonify({"error": "Venta no encontrada"}), 404
+            return jsonify({"ok": True})
+        # PUT
+        data = request.get_json(silent=True) or {}
+        venta, err = _armar_venta_desde_form(data, leer_portafolio(archivo))
+        if err:
+            return err
+        if not editar_venta(archivo, venta_id, venta):
+            return jsonify({"error": "Venta no encontrada"}), 404
+        return jsonify({"ok": True})
+    except (PosicionInsuficiente, SaldoInsuficiente) as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": f"Error: {str(e)}"}), 400
+
 
 @app.route('/api/trm-analisis')
 def api_trm_analisis():
