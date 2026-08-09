@@ -105,6 +105,8 @@ export interface Posicion {
   invertido:     number;
   ganancia:      number;
   rentabilidad:  number;
+  fx_cop:        number | null;
+  inflacion_cop: number | null;
 }
 
 export interface TiempoReal {
@@ -113,6 +115,8 @@ export interface TiempoReal {
   total_valor:         number;
   ganancia_total:      number;
   rentabilidad_total:  number;
+  fx_cop_total:        number | null;
+  inflacion_cop_total: number | null;
 }
 
 export interface Macro {
@@ -138,6 +142,7 @@ export interface DashboardData {
   portafolio:  { nombre: string; propietario: string; perfil: string; fecha_inicio: string; monitoreo_activo: boolean };
   composicion: Record<string, number>;
   tiempo_real: TiempoReal | null;
+  saldo_usd:   number;
   historico:   HistoricoEntry[];
   macro:       Macro | null;
 }

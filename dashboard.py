@@ -262,63 +262,81 @@ def precio_actual_usd(ticker):
 def calcular_tiempo_real(portafolio):
     if not portafolio or not portafolio.get("aportes"):
         return None
-    try:
-        trm_actual = float(pd.read_parquet("datos/macro/trm.parquet")["TRM"].iloc[-1])
-    except Exception:
-        # Sin TRM oficial no se puede valorar en COP; devolver "no disponible"
-        # en vez de cifras calculadas con una TRM inventada (4000).
-        return None
     inf_anual = portafolio.get("inflacion_col", 4.90)
+    # TRM de hoy: best-effort. Sin ella el núcleo USD sigue vivo; solo se
+    # anulan las columnas de efecto (dif. cambio / inflación).
+    try:
+        trm_hoy = float(pd.read_parquet("datos/macro/trm.parquet")["TRM"].iloc[-1])
+    except Exception:
+        trm_hoy = None
+
     pos_raw = {}
     for a in portafolio["aportes"]:
         tk = a["activo"]
         if tk not in pos_raw:
-            pos_raw[tk] = {"fracciones": 0, "invertido": 0, "fecha_inicio": a["fecha"]}
-        pos_raw[tk]["fracciones"] += a["fracciones"]
-        pos_raw[tk]["invertido"] += a["monto_cop"]
-    # Netear ventas: bajan las fracciones y el costo base (promedio) del ticker.
+            pos_raw[tk] = {"frac": 0.0, "usd": 0.0, "cop": 0.0, "fecha_inicio": a["fecha"]}
+        pos_raw[tk]["frac"] += a["fracciones"]
+        pos_raw[tk]["usd"] += a["monto_usd"]
+        pos_raw[tk]["cop"] += a["monto_cop"]
+    # Ventas netean solo fracciones; el costo base vivo sale por promedio.
+    vendido = {}
     for v in portafolio.get("ventas", []):
         tk = v.get("activo")
-        if tk in pos_raw:
-            pos_raw[tk]["fracciones"] -= float(v.get("fracciones", 0))
-            pos_raw[tk]["invertido"] -= float(v.get("costo_base_cop", 0))
+        vendido[tk] = vendido.get(tk, 0.0) + float(v.get("fracciones", 0))
+
     resultados = []
-    total_inv = total_val = 0
+    total_inv = total_val = 0.0
+    total_fx = total_infl = 0.0
+    hay_efecto = trm_hoy is not None
     for tk, d in pos_raw.items():
-        if d["fracciones"] <= 1e-9:  # posición cerrada (vendida completa)
+        frac_viva = d["frac"] - vendido.get(tk, 0.0)
+        if frac_viva <= 1e-9:  # posición cerrada (vendida completa)
             continue
         p = precio_actual_usd(tk)
         if p is None:
             continue
-        val = d["fracciones"] * p * trm_actual
-        años = (
-            datetime.now() - datetime.strptime(d["fecha_inicio"], "%Y-%m-%d")
-        ).days / 365.25
-        inv_r = d["invertido"] / (1 + inf_anual / 100) ** años
-        gan = val - inv_r
+        avg_usd = d["usd"] / d["frac"] if d["frac"] else 0.0
+        inv = avg_usd * frac_viva          # invertido USD (costo base vivo)
+        val = frac_viva * p                # valor USD hoy
+        gan = val - inv                    # ganancia USD (P&L de posición)
+
+        fx_cop = infl_cop = None
+        if hay_efecto:
+            trm_prom = d["cop"] / d["usd"] if d["usd"] else 0.0
+            fx_cop = inv * (trm_hoy - trm_prom)   # ganancia/pérdida por FX en pesos
+            años = (datetime.now() - datetime.strptime(d["fecha_inicio"], "%Y-%m-%d")).days / 365.25
+            val_cop = val * trm_hoy
+            infl_cop = val_cop * (1 - 1 / (1 + inf_anual / 100) ** años)  # erosión poder adquisitivo
+            total_fx += fx_cop
+            total_infl += infl_cop
+
         resultados.append(
             {
                 "activo": tk,
-                "fracciones": round(d["fracciones"], 4),
+                "fracciones": round(frac_viva, 4),
                 "precio_hoy": round(p, 2),
-                "valor_hoy": round(val, 0),
-                "invertido": round(inv_r, 0),
-                "ganancia": round(gan, 0),
-                "rentabilidad": round((gan / inv_r * 100) if inv_r > 0 else 0, 2),
+                "valor_hoy": round(val, 2),
+                "invertido": round(inv, 2),
+                "ganancia": round(gan, 2),
+                "rentabilidad": round((gan / inv * 100) if inv > 0 else 0, 2),
+                "fx_cop": round(fx_cop, 0) if fx_cop is not None else None,
+                "inflacion_cop": round(infl_cop, 0) if infl_cop is not None else None,
             }
         )
-        total_inv += inv_r
+        total_inv += inv
         total_val += val
     if not resultados:
         return None
     return {
         "posiciones": resultados,
-        "total_invertido": round(total_inv, 0),
-        "total_valor": round(total_val, 0),
-        "ganancia_total": round(total_val - total_inv, 0),
+        "total_invertido": round(total_inv, 2),
+        "total_valor": round(total_val, 2),
+        "ganancia_total": round(total_val - total_inv, 2),
         "rentabilidad_total": round(
             (total_val - total_inv) / total_inv * 100 if total_inv > 0 else 0, 2
         ),
+        "fx_cop_total": round(total_fx, 0) if hay_efecto else None,
+        "inflacion_cop_total": round(total_infl, 0) if hay_efecto else None,
     }
 
 
@@ -1795,6 +1813,9 @@ def api_dashboard(archivo):
     if not portafolio or portafolio.get("owner") != username:
         return jsonify({"error": "No encontrado"}), 404
 
+    asegurar_caja_inicial(archivo)          
+    portafolio = leer_portafolio(archivo)
+
     tiempo_real = calcular_tiempo_real(portafolio)
     macro = cargar_macro()
 
@@ -1819,6 +1840,7 @@ def api_dashboard(archivo):
         },
         'composicion': portafolio.get('composicion', {}),
         'tiempo_real': tiempo_real,
+        'saldo_usd':   saldo_disponible(portafolio),
         'macro':       macro_json,
         'historico': portafolio.get('historial',[]),
     })
