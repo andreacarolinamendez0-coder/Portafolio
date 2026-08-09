@@ -297,7 +297,7 @@ export const crearVenta = (archivo: string, data: {
   activo:           string;
   fecha:            string;
   fracciones:       number;
-  precio_venta_usd: number;
+  monto_usd:        number;
   comision?:        number;
 }) =>
   apiFetch<{ ok: boolean }>(`/api/ventas/${archivo}`, {
@@ -309,7 +309,7 @@ export const editarVenta = (archivo: string, id: string, data: {
   activo:           string;
   fecha:            string;
   fracciones:       number;
-  precio_venta_usd: number;
+  monto_usd:        number;
   comision?:        number;
 }) =>
   apiFetch<{ ok: boolean }>(`/api/ventas/${archivo}/${id}`, {

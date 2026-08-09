@@ -33,7 +33,6 @@ export default function SeguimientoPage() {
 
 
   const [modo, setModo] = useState<"compra" | "venta">("compra");
-  const [precioVenta, setPrecioVenta] = useState("");
 
   // Depósitos: form nuevo + edición inline
   const [depFecha, setDepFecha]   = useState(hoy);
@@ -53,7 +52,6 @@ export default function SeguimientoPage() {
   const [eComision, setEComision] = useState("");
 
   const [editTipo, setEditTipo] = useState<"compra" | "venta">("compra");
-  const [ePrecio, setEPrecio]   = useState("");
 
   const sEdit: React.CSSProperties = { width: "100%", background: "var(--bg-2)", border: "1px solid rgba(0,113,227,0.4)", borderRadius: 6, color: "var(--text)", fontSize: 12, padding: "4px 6px", fontFamily: "inherit", outline: "none", boxSizing: "border-box" };
 
@@ -91,17 +89,17 @@ export default function SeguimientoPage() {
         }));
         setMsg({ text: `Compra de ${activo} registrada`, ok: true });
       } else {
-        if (!activo || !fracciones || !precioVenta) { setMsg({ text: "Completa activo, fracciones y precio de venta", ok: false }); return; }
+        if (!activo || !fracciones || !montoUsd) { setMsg({ text: "Completa activo, fracciones y monto", ok: false }); return; }
         await crearVenta(archivo, {
           activo, fecha,
           fracciones: parseFloat(fracciones),
-          precio_venta_usd: parseFloat(precioVenta),
+          monto_usd: parseFloat(montoUsd),
           comision: comision ? parseFloat(comision) : undefined,
         });
         setData(await getSeguimiento(archivo));
         setMsg({ text: `Venta de ${activo} registrada`, ok: true });
       }
-      setMontoUsd(""); setFracciones(""); setActivo(""); setComision(""); setPrecioVenta("");
+      setMontoUsd(""); setFracciones(""); setActivo(""); setComision("");
     } catch (e: unknown) {
       setMsg({ text: e instanceof Error ? e.message : "Error", ok: false });
     }
@@ -111,8 +109,7 @@ export default function SeguimientoPage() {
     setEditId(m.id); setEditTipo(m._tipo);
     setEActivo(m.activo); setEFecha(m.fecha); setEFracc(String(m.fracciones));
     setEComision(m.comision != null ? String(m.comision) : "");    
-    if (m._tipo === "compra") setEUsd(String(m.monto_usd));
-    else setEPrecio(String(m.precio_venta_usd));
+    setEUsd(String(m._tipo === "venta" ? m.proceeds_usd + m.comision : m.monto_usd));
     setMsg({ text: "", ok: false });
   }
 
@@ -122,7 +119,7 @@ export default function SeguimientoPage() {
       if (m._tipo === "compra") {
         await editarAporte(archivo, m.id, { activo: eActivo, fecha: eFecha, monto_usd: parseFloat(eUsd), fracciones: parseFloat(eFracc), comision: comisionEdit });
       } else {
-        await editarVenta(archivo, m.id, { activo: eActivo, fecha: eFecha, fracciones: parseFloat(eFracc), precio_venta_usd: parseFloat(ePrecio), comision: comisionEdit });
+        await editarVenta(archivo, m.id, { activo: eActivo, fecha: eFecha, fracciones: parseFloat(eFracc), monto_usd: parseFloat(eUsd), comision: comisionEdit });
       }
       setData(await getSeguimiento(archivo));
       setEditId(null);
@@ -353,24 +350,19 @@ export default function SeguimientoPage() {
                   <label style={s.label}>Fecha</label>
                   <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} style={s.input} />
                 </div>
-                {modo === "compra" ? (
-                  <div>
-                    <label style={s.label}>Monto total pagado (USD)</label>
-                    <input className="no-spin" type="number" step="0.01" placeholder="Ej: 54.81" value={montoUsd} onChange={e => setMontoUsd(e.target.value)} style={s.input} />
-                  </div>
-                ) : (
-                  <div>
-                    <label style={s.label}>Precio de venta (USD)</label>
-                    <input className="no-spin" type="number" step="0.01" placeholder="Ej: 62.40" value={precioVenta} onChange={e => setPrecioVenta(e.target.value)} style={s.input} />
-                  </div>
-                )}
+
+                <div>
+                  <label style={s.label}>{modo === "compra" ? "Monto de la compra (USD)" : "Monto de la venta (USD)"}</label>
+                  <input className="no-spin" type="number" step="0.01" placeholder="Ej: 54.81" value={montoUsd} onChange={e => setMontoUsd(e.target.value)} style={s.input} />
+                </div>
+                
                 <div>
                   <label style={s.label}>{modo === "compra" ? "Fracciones compradas" : "Fracciones a vender"}</label>
                   <input className="no-spin" type="number" step="0.0001" placeholder="Ej: 0.2523" value={fracciones} onChange={e => setFracciones(e.target.value)} style={s.input} />
                 </div>
                 <div>
                   <label style={s.label}>Comisión (USD, op.)</label>
-                  <input className="no-spin" type="number" step="0.01" placeholder={modo === "compra" ? "Vacío = 1% auto si fracc." : "Opcional"} value={comision} onChange={e => setComision(e.target.value)} style={s.input} />
+                  <input className="no-spin" type="number" step="0.01" placeholder="Vacío = 1%" value={comision} onChange={e => setComision(e.target.value)} style={s.input} />
                 </div>
               </div>
               <div style={{ padding: "10px 14px", background: "rgba(0,113,227,0.06)", border: "1px solid rgba(0,113,227,0.15)", borderRadius: 10, marginBottom: 14 }}>
@@ -418,12 +410,8 @@ export default function SeguimientoPage() {
                                   </select>
                                 </td>
                                 <td style={s.td}><input className="no-spin" type="number" step="0.0001" value={eFracc} onChange={e => setEFracc(e.target.value)} style={sEdit} /></td>
-                                {esVenta ? (
-                                  <><td style={s.td}><input className="no-spin" type="number" step="0.01" value={ePrecio} onChange={e => setEPrecio(e.target.value)} style={sEdit} /></td><td style={s.td}>—</td></>
-                                ) : (
-                                  <><td style={s.td}>—</td><td style={s.td}><input className="no-spin" type="number" step="0.01" value={eUsd} onChange={e => setEUsd(e.target.value)} style={sEdit} /></td></>
-                                )}
-                                <td style={s.td}><input className="no-spin" type="number" step="0.01" placeholder="—" value={eComision} onChange={e => setEComision(e.target.value)} style={sEdit} /></td>
+                                <td style={s.td}>—</td>
+                                <td style={s.td}><input className="no-spin" type="number" step="0.01" value={eUsd} onChange={e => setEUsd(e.target.value)} style={sEdit} /></td>                                <td style={s.td}><input className="no-spin" type="number" step="0.01" placeholder="—" value={eComision} onChange={e => setEComision(e.target.value)} style={sEdit} /></td>
                                 <td style={s.td}>—</td>
                                 <td style={s.td}>—</td>
                                 <td style={s.td}>

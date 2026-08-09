@@ -2116,23 +2116,27 @@ def _armar_venta_desde_form(data, portafolio):
     activo = data.get("activo", "").upper()
     fecha = data.get("fecha", datetime.now().strftime("%Y-%m-%d"))
     fracciones = float(str(data.get("fracciones", "0")).replace(",", "."))
-    precio_venta = float(str(data.get("precio_venta_usd", "0")).replace(",", "."))
-    if fracciones <= 0 or precio_venta <= 0:
-        return None, (jsonify({"error": "Las fracciones y el precio de venta deben ser mayores a 0"}), 400)
+    monto_usd = float(str(data.get("monto_usd", "0")).replace(",", "."))
+    if fracciones <= 0 or monto_usd <= 0:
+        return None, (jsonify({"error": "Las fracciones y el monto de la venta deben ser mayores a 0"}), 400)
+    precio_venta = round(monto_usd / fracciones, 4)
 
-    comision = 0.0
+    frac_entera = abs(fracciones - round(fracciones)) < 1e-9
     comision_raw = data.get("comision")
     if comision_raw not in (None, ""):
         comision = round(float(str(comision_raw).replace(",", ".")), 2)
         if comision < 0:
             return None, (jsonify({"error": "La comisión no puede ser negativa"}), 400)
+    else:
+        comision = 0.0 if frac_entera else round(monto_usd * 0.01, 2)
 
     aportes = [a for a in portafolio.get("aportes", []) if a.get("activo") == activo]
     frac_compradas = sum(float(a.get("fracciones", 0)) for a in aportes)
     cop_comprado = sum(float(a.get("monto_cop", 0)) for a in aportes)
+    comm_comprado_cop = sum(float(a.get("comision", 0)) * float(a.get("trm_dia", 0)) for a in aportes)
     if frac_compradas <= 0:
         return None, (jsonify({"error": f"No tienes posición en {activo}"}), 400)
-    costo_base_cop = round((cop_comprado / frac_compradas) * fracciones, 0)
+    costo_base_cop = round(((cop_comprado + comm_comprado_cop) / frac_compradas) * fracciones, 0)
 
     try:
         trm_df = pd.read_parquet("datos/macro/trm.parquet")
@@ -2148,12 +2152,12 @@ def _armar_venta_desde_form(data, portafolio):
         "fecha": fecha,
         "activo": activo,
         "fracciones": round(fracciones, 8),
-        "precio_venta_usd": round(precio_venta, 4),
+        "precio_venta_usd": precio_venta,
         "comision": comision,
-        "proceeds_usd": round(fracciones * precio_venta - comision, 2),
+        "proceeds_usd": round(monto_usd - comision, 2),
         "trm_dia": trm_dia,
         "costo_base_cop": costo_base_cop,
-        "ganancia_realizada_cop": round(fracciones * precio_venta * trm_dia - costo_base_cop, 0),
+        "ganancia_realizada_cop": round((monto_usd - comision) * trm_dia - costo_base_cop, 0),
         "tipo": "venta",
     }, None
 
