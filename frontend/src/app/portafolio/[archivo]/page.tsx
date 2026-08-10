@@ -86,14 +86,15 @@ export default function DashboardPage() {
 
   // Polling liviano: solo /api/precios-rt (no getDashboard completo).
   // Recalcula total_valor/ganancia_total/rentabilidad_total en el cliente
-  // usando las posiciones/trm ya cargados + el precio en vivo por ticker.
+  // usando las posiciones ya cargadas + el precio en vivo por ticker.
+  // Base nativa USD (igual que calcular_tiempo_real en dashboard.py) — la
+  // conversión a COP/EUR para mostrar ocurre en mostrarMonto(), no aquí.
   const pollPrecios = useCallback(async () => {
     if (refrescandoRef.current) return;
     const cur = dataRef.current;
     if (!cur || !cur.portafolio.monitoreo_activo) return;
-    const tr  = cur.tiempo_real;
-    const trm = cur.macro?.trm;
-    if (!tr || tr.posiciones.length === 0 || !trm) return;
+    const tr = cur.tiempo_real;
+    if (!tr || tr.posiciones.length === 0) return;
 
     try {
       const res = await getPreciosRT(archivo);
@@ -108,7 +109,7 @@ export default function DashboardPage() {
       let total_valor = 0;
       for (const p of tr.posiciones) {
         const precio = preciosVivosRef.current[p.activo] ?? p.precio_hoy;
-        total_valor += p.fracciones * precio * trm;
+        total_valor += p.fracciones * precio;
       }
       const total_invertido    = tr.total_invertido;
       const ganancia_total     = total_valor - total_invertido;
@@ -204,14 +205,35 @@ export default function DashboardPage() {
 
         {tab === "hoy" && (
           <>
-            {/* Mis métricas */}
+            {/* Saldo + valor total (primero) */}
+            {macro && (<div style={{ marginTop: 12 }}>
+              <GlassPanel style={{ marginBottom: 10, maxWidth: 1500 }}>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "6px 24px", padding: "10px 16px", fontSize: 16 }}>
+                  <span style={{ color: "var(--text-3)" }}>
+                    Saldo disponible:{" "}
+                    <strong style={{ color: "var(--text)" }}>
+                      {mostrarMonto(data.saldo_usd ?? 0, divisa, { trm: macro.trm, tasa_eur: macro.tasa_eur })}
+                    </strong>
+                  </span>
+                  <span style={{ color: "var(--text-3)" }}>
+                    Valor total:{" "}
+                    <strong style={{ color: "var(--text)" }}>
+                      {mostrarMonto((tiempo_real?.total_valor ?? 0) + (data.saldo_usd ?? 0), divisa, { trm: macro.trm, tasa_eur: macro.tasa_eur })}
+                    </strong>
+                  </span>
+                </div>
+              </GlassPanel>
+            </div>
+            )}
+
+            {/* Mis métricas (después) */}
             {tiempo_real && macro && (
-         <MisMetricas
-         tr={tiempoRealEfectivo ?? tiempo_real}
-         divisa={divisa}
-         tasas={{ trm: macro.trm, tasa_eur: macro.tasa_eur }}
-  />
-)}
+              <MisMetricas
+                tr={tiempoRealEfectivo ?? tiempo_real}
+                divisa={divisa}
+                tasas={{ trm: macro.trm, tasa_eur: macro.tasa_eur }}
+              />
+            )}
 
             {/* Macro tiles */}
             {macro && <MacroSection macro={macro} />}
@@ -220,7 +242,7 @@ export default function DashboardPage() {
             {Object.keys(composicion).length > 0 && <ComposicionSection composicion={composicion} archivo={archivo} aportes_activos={data.tiempo_real?.posiciones.map(p => p.activo) ?? []} />}
 
             {/* Real-time positions */}
-            {tiempo_real ? <PosicionesSection tr={tiempo_real} /> : (
+            {tiempo_real ? <PosicionesSection tr={tiempo_real} divisa={divisa} tasas={{ trm: macro!.trm, tasa_eur: macro!.tasa_eur }} /> : (
               <GlassPanel style={{ padding: 40, textAlign: "center" }}>
                 <p style={{ color: "var(--text-3)", marginBottom: 16 }}>Sin inversiones registradas.</p>
                 <Link href={`/portafolio/${archivo}/seguimiento`}>
@@ -551,27 +573,40 @@ function ComposicionSection({ composicion, archivo, aportes_activos }: { composi
 
 // ── Positions table ──────────────────────────────────────────
 
-function PosicionesSection({ tr }: { tr: NonNullable<DashboardData["tiempo_real"]> }) {
+function PosicionesSection({ tr, divisa, tasas }: {
+  tr: NonNullable<DashboardData["tiempo_real"]>;
+  divisa: Divisa;
+  tasas: { trm: number; tasa_eur: number };
+}) {
   const gc = tr.ganancia_total > 0 ? "#30d158" : "#ff453a";
+  const fmtCop = (v: number | null, signo = false) =>
+    v == null ? "—" : `${signo && v > 0 ? "+" : ""}$${v.toLocaleString("es-CO", { maximumFractionDigits: 0 })}`;
   return (
     <>
       <SectionTitle>Portafolio en Tiempo Real</SectionTitle>
       <GlassPanel style={{ textAlign: "center" }}>
-        <div style={{ color: "var(--text-3)", fontSize: "0.85rem", marginBottom: 8 }}>Ganancia Real Total (pesos de hoy)</div>
+        <div style={{ color: "var(--text-3)", fontSize: "0.85rem", marginBottom: 8 }}>Ganancia Total</div>
         <div style={{ fontSize: "3rem", fontWeight: 600, letterSpacing: "-0.04em", color: gc, lineHeight: 1 }}>
-          {tr.ganancia_total > 0 ? "+" : ""}${tr.ganancia_total.toLocaleString("es-CO", { maximumFractionDigits: 0 })}
+          {tr.ganancia_total > 0 ? "+" : ""}{mostrarMonto(tr.ganancia_total, divisa, tasas)}
         </div>
         <div style={{ marginTop: 12, color: "#6e6e73", fontSize: "0.85rem" }}>
-          Invertido: <strong style={{ color: "#f5f5f7" }}>${tr.total_invertido.toLocaleString("es-CO", { maximumFractionDigits: 0 })}</strong>
-          {" → "}Hoy: <strong style={{ color: "#f5f5f7" }}>${tr.total_valor.toLocaleString("es-CO", { maximumFractionDigits: 0 })}</strong>
+          Invertido: <strong style={{ color: "#f5f5f7" }}>{mostrarMonto(tr.total_invertido, divisa, tasas)}</strong>
+          {" → "}Hoy: <strong style={{ color: "#f5f5f7" }}>{mostrarMonto(tr.total_valor, divisa, tasas)}</strong>
           {" "}<span style={{ color: gc }}>({tr.rentabilidad_total > 0 ? "+" : ""}{tr.rentabilidad_total}%)</span>
         </div>
+        {(tr.fx_cop_total != null || tr.inflacion_cop_total != null) && (
+          <div style={{ marginTop: 6, color: "#6e6e73", fontSize: "0.78rem" }}>
+            Dif. cambio: <strong style={{ color: (tr.fx_cop_total ?? 0) >= 0 ? "#30d158" : "#ff453a" }}>{fmtCop(tr.fx_cop_total, true)}</strong>
+            {"  ·  "}Inflación: <strong style={{ color: "#ff9f0a" }}>−${(tr.inflacion_cop_total ?? 0).toLocaleString("es-CO", { maximumFractionDigits: 0 })}</strong>
+            {"  (COP)"}
+          </div>
+        )}
       </GlassPanel>
       <GlassPanel style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr>
-              {["Activo", "Precio hoy", "Fracciones", "Valor COP", "Ganancia", "Rentabilidad"].map(h => (
+              {["Activo", "Precio hoy", "Fracciones", "Valor", "Ganancia", "Rentabilidad", "Dif. cambio", "Inflación"].map(h => (
                 <th key={h} style={{ fontSize: "0.7rem", fontWeight: 500, letterSpacing: "0.06em", textTransform: "uppercase", color: "#6e6e73", padding: "10px 16px", textAlign: "left", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>
                   {h}
                 </th>
@@ -593,14 +628,20 @@ function PosicionesSection({ tr }: { tr: NonNullable<DashboardData["tiempo_real"
                     {p.fracciones}
                   </td>
                   <td style={{ padding: "14px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", fontSize: "0.875rem", color: "#a1a1a6" }}>
-                    ${p.valor_hoy.toLocaleString("es-CO", { maximumFractionDigits: 0 })}
+                    {mostrarMonto(p.valor_hoy, divisa, tasas)}
                   </td>
                   <td style={{ padding: "14px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", fontSize: "0.875rem", color: c, fontWeight: 500 }}>
-                    {p.ganancia > 0 ? "+" : ""}${p.ganancia.toLocaleString("es-CO", { maximumFractionDigits: 0 })}
+                    {p.ganancia > 0 ? "+" : ""}{mostrarMonto(p.ganancia, divisa, tasas)}
                   </td>
                   <td style={{ padding: "14px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", fontSize: "0.875rem", color: c, fontWeight: 500 }}>
                     {p.rentabilidad > 0 ? "+" : ""}{p.rentabilidad}%
                   </td>
+                  <td style={{ padding: "14px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", fontSize: "0.875rem", color: (p.fx_cop ?? 0) >= 0 ? "#30d158" : "#ff453a" }}>
+                    {fmtCop(p.fx_cop, true)}
+                  </td>
+                  <td style={{ padding: "14px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", fontSize: "0.875rem", color: "#ff9f0a" }}>
+                    {p.inflacion_cop == null ? "—" : `−$${p.inflacion_cop.toLocaleString("es-CO", { maximumFractionDigits: 0 })}`}
+                  </td>                  
                 </tr>
               );
             })}
