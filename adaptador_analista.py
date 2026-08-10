@@ -535,6 +535,20 @@ def recalcular_con_pesos(pesos_usuario, perfil, inversion, aporte_dca=0,
         ret_mens, pesos.to_dict(), inversion, aporte_dca, frecuencia_meses,
         horizonte, ins["inf_col_anual"], ins["cdt_nominal"]
     )
+    # El frontend (DatosReporte en reporte-tarjetas.tsx) espera estos campos
+    # a nivel raiz de "datos" ademas de metricas/composicion/proyecciones
+    # (asi los devolvia el analista.py legacy via calcular_datos_reporte).
+    # _construir_datos_reporte no los incluye por defecto; se completan aqui
+    # para no romper el contrato con /api/recalcular-proyecciones.
+    datos.update({
+        "perfil": perfil,
+        "horizonte": horizonte,
+        "inflacion_col": round(ins["inf_col_anual"] * 100, 1),
+        "cdt_ref": round(ins["cdt_nominal"] * 100, 2),
+        "inversion_inicial": round(inversion, 0),
+        "aporte_dca": round(aporte_dca, 0),
+        "frecuencia_meses": frecuencia_meses,
+    })
 
     nota = ""
     if sin_hist:

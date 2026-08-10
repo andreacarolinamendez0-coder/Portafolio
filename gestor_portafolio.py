@@ -24,6 +24,15 @@ os.makedirs(CARPETA_PORTAFOLIOS, exist_ok=True)
 # que da transacciones reales.
 _LOCK = threading.Lock()
 
+# Lock DEDICADO para los archivos de estado del monitor (monitor_<archivo>.json).
+# Separado de _LOCK a propósito: vigilar_precios() retiene este lock durante
+# todo un ciclo de vigilancia (que incluye llamadas HTTP a Telegram, potencialmente
+# lentas), y no debe bloquear las operaciones financieras de portafolio (aportes,
+# depósitos, ventas) que usan _LOCK. RLock porque se toma tanto alrededor de
+# vigilar_precios()/registrar_decision() completos como, potencialmente, dentro
+# de leer_estado/guardar_estado si se llaman directo desde el mismo hilo.
+_LOCK_MONITOR = threading.RLock()
+
 # ============================================================
 # UTILIDADES
 # ============================================================

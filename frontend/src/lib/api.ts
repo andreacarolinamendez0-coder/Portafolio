@@ -161,8 +161,23 @@ export const updateProfile = (data: Record<string, unknown>) =>
 
 // ── Monitor / prices ────────────────────────────────────────
 
+export interface PrecioRT {
+  precio:        number;
+  cambio_dia:    number;
+  senal:         string;
+  score:         number;
+  rsi:           number;
+  ma20:          number;
+  ma50:          number;
+  rango_entrar?:  unknown;
+  rango_vigilar?: unknown;
+  puede_entrar:  boolean;
+  mercado_rt:    boolean;
+  timestamp:     string;
+}
+
 export const getPreciosRT = (archivo: string) =>
-  apiFetch<{ ok: boolean; precios: Record<string, unknown>; mercado_abierto: boolean; ultimo_update: string }>(
+  apiFetch<{ ok: boolean; precios: Record<string, PrecioRT>; mercado_abierto: boolean; ultimo_update: string; error?: string }>(
     `/api/precios-rt/${archivo}`
   );
 

@@ -48,6 +48,11 @@ K_BOLLINGER = (
 PERSIST_POLLS = 3  # polls consecutivos bajo el rango antes de alertar (~30s)
 REBOTE_MIN = 0.005  # rebote mínimo desde el mínimo intradía antes de alertar (0.5%)
 
+# ── Lotes de alerta "ENTRAR" — espaciados por tiempo real, no por ciclos ──
+TAMANO_LOTE_ALERTA = 3
+INTERVALO_LOTE_ORIGINAL_MIN = 15
+INTERVALO_LOTE_SIGUE_MIN = 20
+
 COINGECKO_MAP = {
     "BTC-USD": "bitcoin",
     "ETH-USD": "ethereum",
@@ -484,222 +489,240 @@ def vigilar_precios(archivo, portafolio, rangos_del_dia, precios_cache=None):
     if not rangos_del_dia:
         return
 
-    estado = leer_estado(archivo)
-    chat_id = chat_id_de(portafolio)
-    hoy_str = hora_colombia().strftime("%Y-%m-%d")
+    # Import perezoso — mismo patrón que chat_id_de() usa para get_usuario,
+    # evita cualquier problema de import circular a nivel de módulo.
+    from gestor_portafolio import _LOCK_MONITOR
 
-    if "resultados_rt" not in estado:
-        estado["resultados_rt"] = {}
+    with _LOCK_MONITOR:
+        estado = leer_estado(archivo)
+        chat_id = chat_id_de(portafolio)
+        hoy_str = hora_colombia().strftime("%Y-%m-%d")
 
-    # Reset de mínimos y persistencia al cambiar de día
-    if estado.get("dia_intradia") != hoy_str:
-        for k in [
-            k
-            for k in estado
-            if k.startswith(("min_intradia_", "persist_entrar_"))
-        ]:
-            del estado[k]
-        estado["dia_intradia"] = hoy_str
+        if "resultados_rt" not in estado:
+            estado["resultados_rt"] = {}
 
-    for ticker, rango in rangos_del_dia["rangos"].items():
+        # Reset de mínimos, persistencia y lotes de alerta al cambiar de día
+        if estado.get("dia_intradia") != hoy_str:
+            for k in [
+                k
+                for k in estado
+                if k.startswith(("min_intradia_", "persist_entrar_"))
+            ]:
+                del estado[k]
+            estado["lotes_alerta"] = {}
+            estado["dia_intradia"] = hoy_str
 
-        # ── Solo precio — una petición a Finnhub ──────────────
-        # Usar precio del cache — ya consultado una vez arriba
-        quote = precios_cache.get(ticker) if precios_cache else finnhub_quote(ticker)
-        if not quote:
-            continue
+        for ticker, rango in rangos_del_dia["rangos"].items():
 
-        precio = float(quote["c"])
-        cambio = float(quote.get("dp", 0))
-
-        # ── Mínimo intradía + rebote ──────────────────────────
-        # Mientras haga nuevos mínimos, NO alertamos (aún está cayendo).
-        min_key = f"min_intradia_{ticker}"
-        if estado.get(min_key) is None or precio < estado[min_key]:
-            estado[min_key] = precio
-        min_dia = estado[min_key]
-        rebote = (precio - min_dia) / min_dia if min_dia else 0.0
-
-        # ── [temporal] ¿el gate de MACD tapó una señal real? ──
-        # Cuenta 1x por ticker/día cuando el precio SÍ tocó la banda
-        # y lo único que faltó para ENTRAR fue el MACD subiendo.
-        if (
-            not rango.get("puede_entrar")
-            and rango.get("score_base", 0) >= UMBRAL_ENTRADA - 2.0
-            and not rango.get("hist_subiendo")
-            and rango.get("banda_inf")
-            and precio < rango["banda_inf"]
-        ):
-            vetos = estado.setdefault("macd_vetos", {})
-            if vetos.get(ticker) != hoy_str:
-                vetos[ticker] = hoy_str
-                estado["macd_vetos_total"] = estado.get("macd_vetos_total", 0) + 1
-                print(f"  🔬 MACD-veto: {ticker} @ ${precio:.2f} < banda "
-                      f"${rango['banda_inf']:.2f} (score {rango['score_base']}, "
-                      f"total={estado['macd_vetos_total']})")
-
-        # ── Determinar señal con rangos precalculados ──────────
-        rango_entrar = rango.get("rango_entrar")
-        rango_vigilar = rango.get("rango_vigilar")
-
-        if rango_entrar and precio < rango_entrar:
-            senal_actual = "ENTRAR"
-        elif rango_vigilar and precio < rango_vigilar:
-            senal_actual = "VIGILAR"
-        else:
-            senal_actual = "NEUTRAL"
-
-        # ── Persistencia: N polls consecutivos en ENTRAR ──────
-        # Filtra ticks malos de Finnhub y flash-dips de un solo ciclo.
-        clave_persist = f"persist_entrar_{ticker}"
-        if senal_actual == "ENTRAR":
-            estado[clave_persist] = estado.get(clave_persist, 0) + 1
-        else:
-            estado[clave_persist] = 0
-
-        # Score real con precio actual (para mostrar en display)
-        score = rango["score_base"]
-        if precio < rango["ma20"]:
-            score += 2.0
-        elif precio < rango["ma50"]:
-            score += 1.0
-        score = round(min(score, 10.0), 1)
-
-        # ── Actualizar estado para el display ─────────────────
-        # El display lee esto cada vez que el browser pide /api/precios-rt
-        estado["resultados_rt"][ticker] = {
-            "ticker": ticker,
-            "precio": round(precio, 2),
-            "cambio_dia": round(cambio, 2),
-            "ma20": rango["ma20"],
-            "ma50": rango["ma50"],
-            "banda_inf": rango.get("banda_inf"),
-            "rsi": rango["rsi"],
-            "tendencia": rango["tendencia"],
-            "vol_ratio": rango["vol_ratio"],
-            "macd_hist": rango.get("macd_hist"),
-            "hist_subiendo": rango.get("hist_subiendo"),
-            "score_base": rango["score_base"],
-            "score": score,
-            "senal": senal_actual,
-            "rango_entrar": rango_entrar,
-            "rango_vigilar": rango_vigilar,
-            "puede_entrar": rango["puede_entrar"],
-            "puede_vigilar": rango["puede_vigilar"],
-            "timestamp": hora_colombia().strftime("%Y-%m-%d %H:%M:%S"),
-        }
-
-        # ── Alertas — solo si la señal es ENTRAR ──────────────
-        if (
-            senal_actual == "ENTRAR"
-            and chat_id
-            and estado.get(clave_persist, 0) >= PERSIST_POLLS
-            and rebote >= REBOTE_MIN
-        ):
-            dec = decision_usuario(estado, ticker)
-
-            # Silenciar según decisión del usuario
-            if dec == "no_entro":
-                continue
-            if dec == "entro":
+            # ── Solo precio — una petición a Finnhub ──────────────
+            # Usar precio del cache — ya consultado una vez arriba
+            quote = precios_cache.get(ticker) if precios_cache else finnhub_quote(ticker)
+            if not quote:
                 continue
 
-            # Anti-spam: máximo 3 alertas sin respuesta
-            if ya_alerte_hoy(estado, ticker) and dec != "sigue":
-                clave = f"ciclos_sin_respuesta_{ticker}"
-                ciclos = estado.get(clave, 0)
-                if ciclos >= 3:
+            precio = float(quote["c"])
+            cambio = float(quote.get("dp", 0))
+
+            # ── Mínimo intradía + rebote ──────────────────────────
+            # Mientras haga nuevos mínimos, NO alertamos (aún está cayendo).
+            min_key = f"min_intradia_{ticker}"
+            if estado.get(min_key) is None or precio < estado[min_key]:
+                estado[min_key] = precio
+            min_dia = estado[min_key]
+            rebote = (precio - min_dia) / min_dia if min_dia else 0.0
+
+            # ── [temporal] ¿el gate de MACD tapó una señal real? ──
+            # Cuenta 1x por ticker/día cuando el precio SÍ tocó la banda
+            # y lo único que faltó para ENTRAR fue el MACD subiendo.
+            if (
+                not rango.get("puede_entrar")
+                and rango.get("score_base", 0) >= UMBRAL_ENTRADA - 2.0
+                and not rango.get("hist_subiendo")
+                and rango.get("banda_inf")
+                and precio < rango["banda_inf"]
+            ):
+                vetos = estado.setdefault("macd_vetos", {})
+                if vetos.get(ticker) != hoy_str:
+                    vetos[ticker] = hoy_str
+                    estado["macd_vetos_total"] = estado.get("macd_vetos_total", 0) + 1
+                    print(f"  🔬 MACD-veto: {ticker} @ ${precio:.2f} < banda "
+                          f"${rango['banda_inf']:.2f} (score {rango['score_base']}, "
+                          f"total={estado['macd_vetos_total']})")
+
+            # ── Determinar señal con rangos precalculados ──────────
+            rango_entrar = rango.get("rango_entrar")
+            rango_vigilar = rango.get("rango_vigilar")
+
+            if rango_entrar and precio < rango_entrar:
+                senal_actual = "ENTRAR"
+            elif rango_vigilar and precio < rango_vigilar:
+                senal_actual = "VIGILAR"
+            else:
+                senal_actual = "NEUTRAL"
+
+            # ── Persistencia: N polls consecutivos en ENTRAR ──────
+            # Filtra ticks malos de Finnhub y flash-dips de un solo ciclo.
+            clave_persist = f"persist_entrar_{ticker}"
+            if senal_actual == "ENTRAR":
+                estado[clave_persist] = estado.get(clave_persist, 0) + 1
+            else:
+                estado[clave_persist] = 0
+
+            # Score real con precio actual (para mostrar en display)
+            score = rango["score_base"]
+            if precio < rango["ma20"]:
+                score += 2.0
+            elif precio < rango["ma50"]:
+                score += 1.0
+            score = round(min(score, 10.0), 1)
+
+            # ── Actualizar estado para el display ─────────────────
+            # El display lee esto cada vez que el browser pide /api/precios-rt
+            estado["resultados_rt"][ticker] = {
+                "ticker": ticker,
+                "precio": round(precio, 2),
+                "cambio_dia": round(cambio, 2),
+                "ma20": rango["ma20"],
+                "ma50": rango["ma50"],
+                "banda_inf": rango.get("banda_inf"),
+                "rsi": rango["rsi"],
+                "tendencia": rango["tendencia"],
+                "vol_ratio": rango["vol_ratio"],
+                "macd_hist": rango.get("macd_hist"),
+                "hist_subiendo": rango.get("hist_subiendo"),
+                "score_base": rango["score_base"],
+                "score": score,
+                "senal": senal_actual,
+                "rango_entrar": rango_entrar,
+                "rango_vigilar": rango_vigilar,
+                "puede_entrar": rango["puede_entrar"],
+                "puede_vigilar": rango["puede_vigilar"],
+                "timestamp": hora_colombia().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+
+            # ── Alertas — solo si la señal es ENTRAR ──────────────
+            if (
+                senal_actual == "ENTRAR"
+                and chat_id
+                and estado.get(clave_persist, 0) >= PERSIST_POLLS
+                and rebote >= REBOTE_MIN
+            ):
+                dec = decision_usuario(estado, ticker)
+
+                # Silenciar según decisión del usuario
+                if dec in ("no_entro", "entro"):
                     continue
 
-                ciclos += 1
-                estado[clave] = ciclos
-
-                if ciclos >= 3:
-                    print(
-                        f"  🚫 Silenciando {ticker} por falta de respuesta tras 3 alertas"
-                    )
-                    continue
-
-            # Construir y enviar alerta
-            msg = (
-                f"🟢 <b>SEÑAL DE ENTRADA — {ticker}</b>\n\n"
-                f"💵 Precio: <b>${precio:,.2f} USD</b> ({cambio:+.2f}% hoy)\n"
-                f"🎯 Cruzó la banda inferior Bollinger (&lt; ${rango_entrar:,.2f})\n"
-                f"📉 Momentum MACD girando al alza ✓\n"
-                f"📈 Rebotó {rebote*100:.1f}% desde el mínimo de hoy (${min_dia:,.2f})\n\n"
-                f"📊 Score: <b>{score}/10</b> · RSI: {rango['rsi']} · "
-                f"Tendencia: {rango['tendencia']:+.1f}%\n"
-                f"📈 MA20: ${rango['ma20']:,.2f} · MA50: ${rango['ma50']:,.2f}"
-            )
-            if dec == "sigue":
-                msg += "\n\n<i>(Actualización — pediste seguir informado)</i>"
-
-            print(f"  📨 Intentando enviar alerta a chat_id='{chat_id}' para {ticker}")
-            telegram(chat_id, msg, reply_markup=teclado_decision(ticker))
-            marcar_alerta_enviada(estado, ticker)
-            print(f"  🟢 ALERTA: {ticker} @ ${precio} cruzó rango ${rango_entrar}")
-
-    # Actualizar contadores de días sin señal
-    hay_entradas = any(
-        v.get("senal") == "ENTRAR" for v in estado["resultados_rt"].values()
-    )
-    if hay_entradas:
-        estado["ultimo_dia_con_senal"] = hoy_str
-        estado["dias_consecutivos_sin_senal"] = 0
-    else:
-        ultimo = estado.get("ultimo_dia_con_senal")
-        if ultimo and ultimo != hoy_str:
-            try:
-                d_hoy = datetime.strptime(hoy_str, "%Y-%m-%d")
-                d_ult = datetime.strptime(ultimo, "%Y-%m-%d")
-                dias = sum(
-                    1
-                    for i in range((d_hoy - d_ult).days)
-                    if (d_ult + timedelta(days=i + 1)).weekday() < 5
+                # ── Lotes de alerta espaciados por tiempo real ─────
+                # Máximo TAMANO_LOTE_ALERTA alertas por lote. Al agotar el
+                # lote se re-pregunta con teclado_decision en vez de quedar
+                # en silencio o spamear cada ciclo del loop (~10-40s).
+                lote = estado.setdefault("lotes_alerta", {}).setdefault(
+                    ticker,
+                    {
+                        "enviadas": 0,
+                        "ultima_alerta_ts": None,
+                        "origen": "original",
+                        "prompt_pendiente": False,
+                    },
                 )
-                estado["dias_consecutivos_sin_senal"] = dias
-            except:
-                pass
 
-    # Predicción para el display
-    vigilando = [
-        t for t, v in estado["resultados_rt"].items() if v.get("senal") == "VIGILAR"
-    ]
-    entrando = [
-        t for t, v in estado["resultados_rt"].items() if v.get("senal") == "ENTRAR"
-    ]
-    if entrando:
-        estado["prediccion"] = f"🟢 {len(entrando)} entrada(s) detectada(s)"
-    elif vigilando:
-        estado["prediccion"] = f"👁 {len(vigilando)} en vigilancia"
-    else:
-        estado["prediccion"] = "⚪ Sin señales este ciclo"
+                # Ya se agotó el lote y se re-preguntó — esperar respuesta
+                if lote["prompt_pendiente"]:
+                    continue
 
-    estado["timestamp"] = hora_colombia().strftime("%Y-%m-%d %H:%M:%S")
-    estado["nombre_portafolio"] = portafolio.get("nombre", "")
+                # Espaciado por tiempo real (no por ciclos del loop)
+                intervalo_min = (
+                    INTERVALO_LOTE_SIGUE_MIN
+                    if lote["origen"] == "sigue"
+                    else INTERVALO_LOTE_ORIGINAL_MIN
+                )
+                if lote["ultima_alerta_ts"] is not None:
+                    transcurrido = hora_colombia() - datetime.fromisoformat(
+                        lote["ultima_alerta_ts"]
+                    )
+                    if transcurrido.total_seconds() < intervalo_min * 60:
+                        continue
 
-    # Convertir resultados_rt a lista para compatibilidad con display existente
-    estado["resultados"] = list(estado["resultados_rt"].values())
+                # Construir y enviar alerta
+                msg = (
+                    f"🟢 <b>SEÑAL DE ENTRADA — {ticker}</b>\n\n"
+                    f"💵 Precio: <b>${precio:,.2f} USD</b> ({cambio:+.2f}% hoy)\n"
+                    f"🎯 Cruzó la banda inferior Bollinger (&lt; ${rango_entrar:,.2f})\n"
+                    f"📉 Momentum MACD girando al alza ✓\n"
+                    f"📈 Rebotó {rebote*100:.1f}% desde el mínimo de hoy (${min_dia:,.2f})\n\n"
+                    f"📊 Score: <b>{score}/10</b> · RSI: {rango['rsi']} · "
+                    f"Tendencia: {rango['tendencia']:+.1f}%\n"
+                    f"📈 MA20: ${rango['ma20']:,.2f} · MA50: ${rango['ma50']:,.2f}"
+                )
+                if lote["origen"] == "sigue":
+                    msg += "\n\n<i>(Actualización — pediste seguir informado)</i>"
 
-    guardar_estado(archivo, estado)
+                print(f"  📨 Intentando enviar alerta a chat_id='{chat_id}' para {ticker}")
+                telegram(chat_id, msg, reply_markup=teclado_decision(ticker))
+                print(f"  🟢 ALERTA: {ticker} @ ${precio} cruzó rango ${rango_entrar}")
+
+                lote["enviadas"] += 1
+                lote["ultima_alerta_ts"] = hora_colombia().isoformat()
+
+                if lote["enviadas"] >= TAMANO_LOTE_ALERTA:
+                    telegram(
+                        chat_id,
+                        f"🔁 <b>{ticker}</b> sigue en rango de entrada — van "
+                        f"{TAMANO_LOTE_ALERTA} avisos.\n¿Sigo informando?",
+                        reply_markup=teclado_decision(ticker),
+                    )
+                    lote["prompt_pendiente"] = True
+                    print(f"  🔁 Re-pregunta enviada para {ticker} tras {TAMANO_LOTE_ALERTA} avisos")
+
+        # Actualizar contadores de días sin señal
+        hay_entradas = any(
+            v.get("senal") == "ENTRAR" for v in estado["resultados_rt"].values()
+        )
+        if hay_entradas:
+            estado["ultimo_dia_con_senal"] = hoy_str
+            estado["dias_consecutivos_sin_senal"] = 0
+        else:
+            ultimo = estado.get("ultimo_dia_con_senal")
+            if ultimo and ultimo != hoy_str:
+                try:
+                    d_hoy = datetime.strptime(hoy_str, "%Y-%m-%d")
+                    d_ult = datetime.strptime(ultimo, "%Y-%m-%d")
+                    dias = sum(
+                        1
+                        for i in range((d_hoy - d_ult).days)
+                        if (d_ult + timedelta(days=i + 1)).weekday() < 5
+                    )
+                    estado["dias_consecutivos_sin_senal"] = dias
+                except:
+                    pass
+
+        # Predicción para el display
+        vigilando = [
+            t for t, v in estado["resultados_rt"].items() if v.get("senal") == "VIGILAR"
+        ]
+        entrando = [
+            t for t, v in estado["resultados_rt"].items() if v.get("senal") == "ENTRAR"
+        ]
+        if entrando:
+            estado["prediccion"] = f"🟢 {len(entrando)} entrada(s) detectada(s)"
+        elif vigilando:
+            estado["prediccion"] = f"👁 {len(vigilando)} en vigilancia"
+        else:
+            estado["prediccion"] = "⚪ Sin señales este ciclo"
+
+        estado["timestamp"] = hora_colombia().strftime("%Y-%m-%d %H:%M:%S")
+        estado["nombre_portafolio"] = portafolio.get("nombre", "")
+
+        # Convertir resultados_rt a lista para compatibilidad con display existente
+        estado["resultados"] = list(estado["resultados_rt"].values())
+
+        guardar_estado(archivo, estado)
 
 
 # ─────────────────────────────────────────────────────────────
 # CONTROL DE ALERTAS
 # ─────────────────────────────────────────────────────────────
-
-
-def ya_alerte_hoy(estado, ticker):
-    hoy = hora_colombia().strftime("%Y-%m-%d")
-    alertas = estado.get("alertas_enviadas_hoy", {})
-    return alertas.get(ticker) == hoy
-
-
-def marcar_alerta_enviada(estado, ticker):
-    hoy = hora_colombia().strftime("%Y-%m-%d")
-    if "alertas_enviadas_hoy" not in estado:
-        estado["alertas_enviadas_hoy"] = {}
-    estado["alertas_enviadas_hoy"][ticker] = hoy
 
 
 def decision_usuario(estado, ticker):
@@ -714,13 +737,26 @@ def decision_usuario(estado, ticker):
 
 def registrar_decision(archivo, ticker, decision):
     """Guarda la decisión del usuario. Llamado desde el webhook de Telegram."""
-    estado = leer_estado(archivo)
-    hoy = hora_colombia().strftime("%Y-%m-%d")
-    if "decisiones_usuario" not in estado:
-        estado["decisiones_usuario"] = {}
-    estado["decisiones_usuario"][ticker] = {"decision": decision, "fecha": hoy}
-    estado[f"ciclos_sin_respuesta_{ticker}"] = 0
-    guardar_estado(archivo, estado)
+    # Import perezoso — mismo patrón que chat_id_de() usa para get_usuario.
+    from gestor_portafolio import _LOCK_MONITOR
+
+    with _LOCK_MONITOR:
+        estado = leer_estado(archivo)
+        hoy = hora_colombia().strftime("%Y-%m-%d")
+        if "decisiones_usuario" not in estado:
+            estado["decisiones_usuario"] = {}
+        estado["decisiones_usuario"][ticker] = {"decision": decision, "fecha": hoy}
+
+        if decision == "sigue":
+            # Reabre un lote NUEVO de alertas para este ticker, espaciado
+            # por INTERVALO_LOTE_SIGUE_MIN en vez del intervalo original.
+            lote = estado.setdefault("lotes_alerta", {}).setdefault(ticker, {})
+            lote["enviadas"] = 0
+            lote["ultima_alerta_ts"] = None
+            lote["origen"] = "sigue"
+            lote["prompt_pendiente"] = False
+
+        guardar_estado(archivo, estado)
     print(f"  💾 Decisión '{decision}' guardada para {ticker}")
 
 
@@ -807,10 +843,16 @@ def leer_estado(archivo):
 
 
 def guardar_estado(archivo, estado):
+    """Escritura atómica: escribe a un .tmp y renombra con os.replace (atómico
+    en el mismo filesystem) — evita que un crash a mitad de json.dump deje el
+    archivo de estado truncado/corrupto (leer_estado lo tragaría en silencio
+    con su except: pass). Reusa el mismo patrón de _escribir() en
+    gestor_portafolio.py."""
     ruta = os.path.join(PORTS_DIR, f"monitor_{archivo}")
     try:
-        with open(ruta, "w", encoding="utf-8") as f:
-            json.dump(estado, f, indent=2, ensure_ascii=False)
+        from gestor_portafolio import _escribir
+
+        _escribir(ruta, estado)
     except Exception as e:
         print(f"❌ Error guardando estado: {e}")
 
@@ -980,12 +1022,12 @@ def reporte_cierre(archivo, portafolio, estado):
     print(f"  📋 Reporte cierre enviado: {portafolio['nombre']}")
 
     # Limpiar alertas del día
-    estado["alertas_enviadas_hoy"] = {}
+    estado["lotes_alerta"] = {}
     estado["decisiones_usuario"] = {}
     for k in [
         k
         for k in estado
-        if k.startswith(("ciclos_sin_respuesta_", "persist_entrar_", "min_intradia_"))
+        if k.startswith(("persist_entrar_", "min_intradia_"))
     ]:
         del estado[k]
 

@@ -3,9 +3,10 @@ import dotenv
 dotenv.load_dotenv()
 from flask import Flask, request, session, jsonify
 import pandas as pd
-import json, os, requests, time, threading
+import json, os, requests, time, threading, re
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
+from urllib.parse import quote as _url_quote
 import yfinance as yf
 from zoneinfo import ZoneInfo
 import anthropic
@@ -51,7 +52,16 @@ from gestor_portafolio import (
     _slug,
     get_usuario_por_email,
     huella_password_hash,
+    _LOCK,
+    _LOCK_MONITOR,
+    _escribir,
 )
+
+# Patron de validacion de tickers: 1-6 letras mayusculas, opcionalmente sufijo
+# -USD (ej. cripto). Reutilizado en todos los endpoints que persisten
+# composicion o interpolan tickers en texto/URLs (auditoria: validacion
+# inconsistente entre endpoints).
+PATRON_TICKER = re.compile(r"[A-Z]{1,6}(-USD)?")
 
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 import secrets, hashlib
@@ -163,9 +173,9 @@ def cargar_macro():
         os.path.join(DATOS_DIR, "macro/tasa_banrep.parquet"),
     ]
     if any(not os.path.exists(f) for f in archivos):
-        os.makedirs("datos/macro", exist_ok=True)
-        os.makedirs("datos/precios", exist_ok=True)
-        os.makedirs("datos/portafolios", exist_ok=True)
+        os.makedirs(os.path.join(DATOS_DIR, "macro"), exist_ok=True)
+        os.makedirs(os.path.join(DATOS_DIR, "precios"), exist_ok=True)
+        os.makedirs(os.path.join(DATOS_DIR, "portafolios"), exist_ok=True)
         from recolector import correr_todo
 
         try:
@@ -263,7 +273,9 @@ def calcular_tiempo_real(portafolio):
     if not portafolio or not portafolio.get("aportes"):
         return None
     try:
-        trm_actual = float(pd.read_parquet("datos/macro/trm.parquet")["TRM"].iloc[-1])
+        trm_actual = float(
+            pd.read_parquet(os.path.join(DATOS_DIR, "macro", "trm.parquet"))["TRM"].iloc[-1]
+        )
     except Exception:
         # Sin TRM oficial no se puede valorar en COP; devolver "no disponible"
         # en vez de cifras calculadas con una TRM inventada (4000).
@@ -539,7 +551,9 @@ def api_generar_propuesta(archivo):
         perfil = data.get("perfil", "agresivo")
         inversion = float(data.get("inversion", 1000000))
         aporte_dca = float(data.get("aporte_dca", 0))
-        freq = int(data.get("frecuencia_meses", 1))
+        freq = int(data.get("frecuencia_meses", 1) or 1)
+        if freq < 1:
+            freq = 1
         horizonte = int(data.get("horizonte", 10))
         if horizonte <= 0 or horizonte > 50:
             horizonte = 10
@@ -548,7 +562,6 @@ def api_generar_propuesta(archivo):
         tiene_inv = len(portafolio.get("aportes", [])) > 0
 
         # --- Tickers fijos (si el analista IA propuso activos concretos) ---
-        import re
         raw_activos = data.get("activos", {})
         if isinstance(raw_activos, list):
             raw_activos = {
@@ -560,7 +573,7 @@ def api_generar_propuesta(archivo):
             {
                 k: v for k, v in raw_activos.items()
                 if isinstance(k, str) and isinstance(v, (int, float))
-                and re.fullmatch(r"[A-Z]{1,6}(-USD)?", k)
+                and PATRON_TICKER.fullmatch(k)
             }
             if isinstance(raw_activos, dict) else {}
         )
@@ -709,101 +722,52 @@ def api_recalcular_proyecciones(archivo):
     if verificar_acceso(archivo):
         return jsonify({"ok": False, "error": "No autorizado"})
     try:
-        from analista import (
-            cargar_datos,
-            construir_panel,
-            calcular_retornos_reales,
-            generar_reporte,
-            completar_precios,
-        )
+        from adaptador_analista import recalcular_con_pesos
 
         data = request.get_json()
         pesos_raw = data.get("pesos", {})
         perfil = data.get("perfil", "agresivo")
         inversion = float(data.get("inversion", 1000000))
         aporte = float(data.get("aporte_dca", 0))
-        freq = int(data.get("frecuencia_meses", 1))
+        freq = int(data.get("frecuencia_meses", 1) or 1)
+        if freq < 1:
+            freq = 1
         horizonte = int(data.get("horizonte", 10))
 
-        precios, trm, inf_usa, inf_col, risk_free, tasa_cdt = cargar_datos()
-        precios = completar_precios(precios, pesos_raw)
-        panel = construir_panel(precios, trm, inf_usa, inf_col, risk_free)
-        ret_real = calcular_retornos_reales(panel, list(precios.columns))
+        if not isinstance(pesos_raw, dict) or not all(
+            isinstance(k, str) and PATRON_TICKER.fullmatch(k)
+            and isinstance(v, (int, float))
+            for k, v in pesos_raw.items()
+        ):
+            return jsonify({
+                "ok": False,
+                "error": "Uno o más tickers o pesos no son válidos.",
+            }), 400
 
-        pesos_con_historico = {
-            k: v for k, v in pesos_raw.items() if k in ret_real.columns
-        }
-        pesos_sin_historico = {
-            k: v for k, v in pesos_raw.items() if k not in ret_real.columns
-        }
-
-        inf_col_actual = float(
-            pd.read_parquet(os.path.join(DATOS_DIR, "macro/inflacion_col.parquet"))[
-                "Inflacion_COL"
-            ].iloc[-1]
+        resultado = recalcular_con_pesos(
+            pesos_usuario=pesos_raw,
+            perfil=perfil,
+            inversion=inversion,
+            aporte_dca=aporte,
+            frecuencia_meses=freq,
+            horizonte=horizonte,
         )
-
-        datos = None
-        reporte_txt = ""
-        if pesos_con_historico:
-            from analista import calcular_datos_reporte
-
-            total = sum(pesos_con_historico.values())
-            pesos_norm = {k: v / total for k, v in pesos_con_historico.items()}
-            pesos_series = pd.Series(pesos_norm)
-            datos = calcular_datos_reporte(
-                pesos=pesos_series,
-                inversion_inicial=inversion,
-                ret_real=ret_real,
-                perfil=perfil,
-                horizonte=horizonte,
-                risk_free=risk_free,
-                inflacion_col=inf_col_actual,
-                tasa_cdt=float(tasa_cdt),
-                aporte_periodico=aporte,
-                frecuencia_meses=freq,
-            )
-            # Capturar el texto formateado del reporte
-            import sys, io
-
-            old = sys.stdout
-            sys.stdout = buf = io.StringIO()
-            try:
-                generar_reporte(
-                    pesos=pesos_series,
-                    inversion_inicial=inversion,
-                    ret_real=ret_real,
-                    perfil=perfil,
-                    horizonte=horizonte,
-                    risk_free=risk_free,
-                    inflacion_col=inf_col_actual,
-                    tasa_cdt=float(tasa_cdt),
-                    aporte_periodico=aporte,
-                    frecuencia_meses=freq,
-                )
-            finally:
-                sys.stdout = old
-            reporte_txt = buf.getvalue()
-
-        nota_nuevos = ""
-        if pesos_sin_historico:
-            tickers_nuevos = ", ".join(pesos_sin_historico.keys())
-            nota_nuevos = (
-                f"{tickers_nuevos} fue agregado manualmente. Las proyecciones corresponden "
-                f"al resto del portafolio; su histórico estará disponible en el próximo análisis completo."
-            )
 
         return jsonify(
             {
                 "ok": True,
-                "datos": datos,
-                "reporte": reporte_txt,
-                "nota_nuevos": nota_nuevos,
+                "datos": resultado["datos"],
+                "reporte": resultado["reporte_txt"],
+                "nota_nuevos": resultado["nota_nuevos"],
             }
         )
 
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)})
+        print(f"❌ api_recalcular_proyecciones error: {e}")
+        return jsonify({
+            "ok": False,
+            "error": "Ocurrió un error al procesar la solicitud.",
+        })
 
 
 @app.route("/api/aplicar-propuesta/<archivo>", methods=["POST"])
@@ -821,26 +785,42 @@ def api_aplicar_propuesta(archivo):
         p = leer_portafolio(archivo)
         username = session.get("username")
 
+        if not isinstance(pesos, dict) or not all(
+            isinstance(k, str) and PATRON_TICKER.fullmatch(k)
+            and isinstance(v, (int, float))
+            for k, v in pesos.items()
+        ):
+            return jsonify({
+                "ok": False,
+                "error": "Uno o más tickers o pesos no son válidos.",
+            }), 400
+
         if tipo == "reemplazar":
+            if not pesos or abs(sum(pesos.values()) - 1.0) > 0.01:
+                return jsonify({
+                    "ok": False,
+                    "error": "Los pesos deben sumar 100% (±1%) antes de aplicar la propuesta.",
+                }), 400
+
             guardar_composicion(archivo, pesos)
             # Resetear monitor automáticamente al cambiar composición
             ruta_monitor = os.path.join(DATOS_DIR, "portafolios", f"monitor_{archivo}")
             if os.path.exists(ruta_monitor):
                 os.remove(ruta_monitor)
                 print(f"🔄 Monitor reseteado automáticamente: {archivo}")
-            ruta = f"datos/portafolios/{archivo}"
-            with open(ruta, "r", encoding="utf-8") as f:
-                dp = json.load(f)
-            dp.update(
-                {
-                    "inversion_inicial": inv,
-                    "aporte_dca": aporte,
-                    "frecuencia_meses": freq,
-                    "perfil": perfil,
-                }
-            )
-            with open(ruta, "w", encoding="utf-8") as f:
-                json.dump(dp, f, indent=2, ensure_ascii=False)
+            ruta = os.path.join(DATOS_DIR, "portafolios", archivo)
+            with _LOCK:
+                with open(ruta, "r", encoding="utf-8") as f:
+                    dp = json.load(f)
+                dp.update(
+                    {
+                        "inversion_inicial": inv,
+                        "aporte_dca": aporte,
+                        "frecuencia_meses": freq,
+                        "perfil": perfil,
+                    }
+                )
+                _escribir(ruta, dp)
             return jsonify(
                 {
                     "ok": True,
@@ -850,13 +830,19 @@ def api_aplicar_propuesta(archivo):
             )
 
         elif tipo == "nuevo":
+            if not pesos or abs(sum(pesos.values()) - 1.0) > 0.01:
+                return jsonify({
+                    "ok": False,
+                    "error": "Los pesos deben sumar 100% (±1%) antes de aplicar la propuesta.",
+                }), 400
+
             base = f"{p['propietario']} {perfil.capitalize()} {datetime.now().strftime('%Y')}"
             nombre_n = base
             contador = 2
             while True:
                 test = f"{nombre_n}-{contador}" if contador > 1 else nombre_n
                 slug = _slug(test)
-                if not os.path.exists(f"datos/portafolios/{slug}.json"):
+                if not os.path.exists(os.path.join(DATOS_DIR, "portafolios", f"{slug}.json")):
                     nombre_n = test
                     break
                 contador += 1
@@ -888,6 +874,12 @@ def api_aplicar_propuesta(archivo):
                     "redirigir": f"/seguimiento/{nm}",
                 }
             )
+
+        else:
+            return jsonify({
+                "ok": False,
+                "error": f"Tipo de propuesta inválido: {tipo}",
+            }), 400
 
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
@@ -945,7 +937,7 @@ def api_bot(archivo):
             tickers = list(p.get("composicion", {}).keys())[:3]
             for tk in tickers:
                 r = requests.get(
-                    f"https://news.google.com/rss/search?q={tk}+stock&hl=es&gl=US&ceid=US:es",
+                    f"https://news.google.com/rss/search?q={_url_quote(tk)}+stock&hl=es&gl=US&ceid=US:es",
                     headers={"User-Agent": "Mozilla/5.0"},
                     timeout=5,
                 )
@@ -986,7 +978,8 @@ def api_bot(archivo):
         )
         return jsonify({"respuesta": resp})
     except Exception as e:
-        return jsonify({"respuesta": f"Error: {str(e)}"})
+        print(f"❌ api_bot error: {e}")
+        return jsonify({"respuesta": "Ocurrió un error al procesar la solicitud."})
 
 
 @app.route("/api/admin/reset-password", methods=["POST"])
@@ -996,8 +989,12 @@ def api_reset_password():
     data = request.get_json()
     username = data.get("username")
     ok = resetear_password(username)
+    if ok:
+        return jsonify(
+            {"ok": True, "mensaje": f"Contraseña de {username} reseteada a: cambiar123"}
+        )
     return jsonify(
-        {"ok": ok, "mensaje": f"Contraseña de {username} reseteada a: cambiar123"}
+        {"ok": False, "error": f"No se encontró el usuario {username}."}
     )
 
 
@@ -1079,8 +1076,8 @@ def api_eliminar_portafolio(archivo):
         except Exception:
             nombre_port = archivo
  
-        ruta = f"datos/portafolios/{archivo}"
-        ruta_monitor = f"datos/portafolios/monitor_{archivo}"
+        ruta = os.path.join(DATOS_DIR, "portafolios", archivo)
+        ruta_monitor = os.path.join(DATOS_DIR, "portafolios", f"monitor_{archivo}")
         if os.path.exists(ruta):
             os.remove(ruta)
         if os.path.exists(ruta_monitor):
@@ -1248,7 +1245,7 @@ def update_profile():
     if "email" in data and data["email"]:
         campos["email"] = data["email"].strip()
     if "telegram_chat_id" in data:
-        campos["telegram_chat_id"] = data["telegram_chat_id"].strip()
+        campos["telegram_chat_id"] = (data.get("telegram_chat_id") or "").strip()
     if "email_notifications" in data:
         campos["email_notifications"] = data["email_notifications"]
     if "new_password" in data and data["new_password"]:
@@ -1338,7 +1335,7 @@ def api_precios_rt(archivo):
 @app.route("/api/ultima-actualizacion")
 def api_ultima_actualizacion():
     try:
-        mtime = os.path.getmtime("datos/macro/trm.parquet")
+        mtime = os.path.getmtime(os.path.join(DATOS_DIR, "macro", "trm.parquet"))
         hora = datetime.fromtimestamp(mtime).strftime("%d %b %Y · %I:%M %p")
         return jsonify({"timestamp": hora})
     except Exception as e:
@@ -1763,26 +1760,30 @@ def api_portafolios():
         portafolios = listar_portafolios_de_usuario(username)
         return jsonify({"portafolios": portafolios})
 
-    data = request.get_json(silent=True) or {}
-    nombre = data.get("nombre", "").strip()
-    perfil = data.get("perfil", "agresivo")
-    propietario = data.get("propietario", username).strip()
-    inversion = float(data.get("inversion_inicial", data.get("inversion", 0)) or 0)
-    aporte = float(data.get("aporte_dca", 0) or 0)
-    frecuencia = int(data.get("frecuencia_meses", 0) or 0)
+    try:
+        data = request.get_json(silent=True) or {}
+        nombre = (data.get("nombre") or "").strip()
+        perfil = data.get("perfil", "agresivo")
+        propietario = (data.get("propietario") or username).strip()
+        inversion = float(data.get("inversion_inicial", data.get("inversion", 0)) or 0)
+        aporte = float(data.get("aporte_dca", 0) or 0)
+        frecuencia = int(data.get("frecuencia_meses", 0) or 0)
 
-    if not nombre:
-        return jsonify({"error": "El nombre del portafolio es obligatorio"}), 400
+        if not nombre:
+            return jsonify({"error": "El nombre del portafolio es obligatorio"}), 400
 
-    archivo = crear_portafolio_para_usuario(
-        username, nombre, perfil, propietario, inversion, aporte, frecuencia
-    )
-    if not archivo:
-        return jsonify({"ok": False, "error": "No se pudo crear el portafolio"}), 500
-    # devolver solo el nombre del archivo (sin la carpeta) para que el frontend
-    # lo use en las rutas /portafolio/<archivo>
-    import os as _os
-    return jsonify({"ok": True, "archivo": _os.path.basename(archivo)})
+        archivo = crear_portafolio_para_usuario(
+            username, nombre, perfil, propietario, inversion, aporte, frecuencia
+        )
+        if not archivo:
+            return jsonify({"ok": False, "error": "No se pudo crear el portafolio"}), 500
+        # devolver solo el nombre del archivo (sin la carpeta) para que el frontend
+        # lo use en las rutas /portafolio/<archivo>
+        import os as _os
+        return jsonify({"ok": True, "archivo": _os.path.basename(archivo)})
+    except Exception as e:
+        print(f"❌ api_portafolios POST error: {e}")
+        return jsonify({"ok": False, "error": "No se pudo crear el portafolio."}), 400
 
 
 @app.route("/api/dashboard/<archivo>")
@@ -1798,7 +1799,11 @@ def api_dashboard(archivo):
     tiempo_real = calcular_tiempo_real(portafolio)
     macro = cargar_macro()
 
-    
+    # macro puede venir None (red caída, parquet corrupto, deploy fresco sin
+    # recolector corrido aún). Inicializar aquí para degradar con gracia:
+    # la respuesta incluye 'macro': null en vez de tumbar el endpoint con
+    # NameError al referenciar macro_json sin definir.
+    macro_json = None
     if macro:
         macro_json = {k: v for k, v in macro.items() if k != 'trm_hist'}
         if 'trm_hist' in macro:
@@ -1816,6 +1821,7 @@ def api_dashboard(archivo):
             'propietario':  portafolio.get('propietario'),
             'perfil':       portafolio.get('perfil'),
             'fecha_inicio': portafolio.get('fecha_inicio'),
+            'monitoreo_activo': portafolio.get('monitoreo_activo', False),
         },
         'composicion': portafolio.get('composicion', {}),
         'tiempo_real': tiempo_real,
@@ -1868,40 +1874,44 @@ def api_config(archivo):
     # PUT: guardar divisa y/o nombre
     data = request.get_json(silent=True) or {}
 
-    ruta = f"datos/portafolios/{archivo}"
-    with open(ruta, "r", encoding="utf-8") as f:
-        d = json.load(f)
+    ruta = os.path.join(DATOS_DIR, "portafolios", archivo)
 
     mensajes = []
 
-    if "divisa" in data:
-        divisa = data.get("divisa", "USD").strip().upper()
-        if divisa not in ("USD", "EUR", "COP"):
-            return jsonify({"error": "Divisa no válida"}), 400
-        d["divisa"] = divisa
-        mensajes.append(f"Divisa cambiada a {divisa}")
+    with _LOCK:
+        with open(ruta, "r", encoding="utf-8") as f:
+            d = json.load(f)
 
-    if "nombre" in data:
-        nombre = data.get("nombre", "").strip()
-        if not nombre:
-            return jsonify({"error": "El nombre no puede estar vacío"}), 400
-        d["nombre"] = nombre
-        mensajes.append("Nombre actualizado")
+        if "divisa" in data:
+            divisa = (data.get("divisa") or "USD").strip().upper()
+            if divisa not in ("USD", "EUR", "COP"):
+                return jsonify({"error": "Divisa no válida"}), 400
+            d["divisa"] = divisa
+            mensajes.append(f"Divisa cambiada a {divisa}")
 
-        # Sincronizar el nombre en el estado del monitor, si existe
-        ruta_monitor = os.path.join(DATOS_DIR, "portafolios", f"monitor_{archivo}")
-        if os.path.exists(ruta_monitor):
-            try:
-                with open(ruta_monitor, "r", encoding="utf-8") as f:
-                    estado = json.load(f)
-                estado["nombre_portafolio"] = nombre
-                with open(ruta_monitor, "w", encoding="utf-8") as f:
-                    json.dump(estado, f, indent=2, ensure_ascii=False)
-            except Exception:
-                pass
+        if "nombre" in data:
+            nombre = (data.get("nombre") or "").strip()
+            if not nombre:
+                return jsonify({"error": "El nombre no puede estar vacío"}), 400
+            d["nombre"] = nombre
+            mensajes.append("Nombre actualizado")
 
-    with open(ruta, "w", encoding="utf-8") as f:
-        json.dump(d, f, indent=2, ensure_ascii=False)
+            # Sincronizar el nombre en el estado del monitor, si existe
+            # Escritura atómica (.tmp + os.replace, vía _escribir) — evita
+            # dejar el archivo de estado del monitor truncado/corrupto si el
+            # proceso muere a mitad del json.dump.
+            ruta_monitor = os.path.join(DATOS_DIR, "portafolios", f"monitor_{archivo}")
+            if os.path.exists(ruta_monitor):
+                try:
+                    with _LOCK_MONITOR:
+                        with open(ruta_monitor, "r", encoding="utf-8") as f:
+                            estado = json.load(f)
+                        estado["nombre_portafolio"] = nombre
+                        _escribir(ruta_monitor, estado)
+                except Exception:
+                    pass
+
+        _escribir(ruta, d)
 
     return jsonify(
         {
@@ -1947,7 +1957,7 @@ def _armar_aporte_desde_form(data, composicion):
 
     precio_usd = round(monto_usd / fracciones, 4)
     try:
-        trm_df = pd.read_parquet("datos/macro/trm.parquet")
+        trm_df = pd.read_parquet(os.path.join(DATOS_DIR, "macro", "trm.parquet"))
         idx = trm_df.index.get_indexer([pd.to_datetime(fecha)], method="nearest")[0]
         trm_dia = float(trm_df["TRM"].iloc[idx])
     except Exception:
@@ -1992,7 +2002,8 @@ def api_seguimiento(archivo):
             guardar_aporte(archivo, aporte)
             portafolio = leer_portafolio(archivo)
         except Exception as e:
-            return jsonify({"error": f"Error: {str(e)}"}), 400
+            print(f"❌ api_seguimiento error: {e}")
+            return jsonify({"error": "Ocurrió un error al procesar la solicitud."}), 400
 
     # GET (y respuesta tras POST): armar el estado completo
     aportes = portafolio.get("aportes", [])
@@ -2050,7 +2061,8 @@ def api_seguimiento_aporte(archivo, aporte_id):
     except SaldoInsuficiente as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
-        return jsonify({"error": f"Error: {str(e)}"}), 400
+        print(f"❌ api_seguimiento_aporte error: {e}")
+        return jsonify({"error": "Ocurrió un error al procesar la solicitud."}), 400
 
 def _armar_deposito_desde_form(data):
     """Parsea/valida un depósito. COP→USD a la TRM REAL a la que el usuario
@@ -2244,29 +2256,28 @@ def api_activar_portafolio_json(archivo):
     if verificar_acceso(archivo):
         return jsonify({'ok': False, 'error': 'No autorizado'}), 401
     try:
-        ruta = f'datos/portafolios/{archivo}'
-        with open(ruta, 'r', encoding='utf-8') as f:
-            d = json.load(f)
+        ruta = os.path.join(DATOS_DIR, 'portafolios', archivo)
+        with _LOCK:
+            with open(ruta, 'r', encoding='utf-8') as f:
+                d = json.load(f)
 
-        d['monitoreo_activo'] = True
+            d['monitoreo_activo'] = True
 
-        # Exclusividad: solo un portafolio activo a la vez (igual que api_toggle_monitor)
-        username = session.get('username', '')
-        for p in listar_portafolios_de_usuario(username):
-            if p['archivo'] != archivo:
-                otra = f'datos/portafolios/{p["archivo"]}'
-                try:
-                    with open(otra, 'r', encoding='utf-8') as f2:
-                        o = json.load(f2)
-                    if o.get('monitoreo_activo'):
-                        o['monitoreo_activo'] = False
-                        with open(otra, 'w', encoding='utf-8') as f2:
-                            json.dump(o, f2, indent=2, ensure_ascii=False)
-                except Exception:
-                    pass
+            # Exclusividad: solo un portafolio activo a la vez (igual que api_toggle_monitor)
+            username = session.get('username', '')
+            for p in listar_portafolios_de_usuario(username):
+                if p['archivo'] != archivo:
+                    otra = os.path.join(DATOS_DIR, 'portafolios', p["archivo"])
+                    try:
+                        with open(otra, 'r', encoding='utf-8') as f2:
+                            o = json.load(f2)
+                        if o.get('monitoreo_activo'):
+                            o['monitoreo_activo'] = False
+                            _escribir(otra, o)
+                    except Exception:
+                        pass
 
-        with open(ruta, 'w', encoding='utf-8') as f:
-            json.dump(d, f, indent=2, ensure_ascii=False)
+            _escribir(ruta, d)
 
         # Primer ciclo SIN hilo — corre ya y muestra errores
         try:
@@ -2294,12 +2305,12 @@ def api_desactivar_portafolio_json(archivo):
     if verificar_acceso(archivo):
         return jsonify({'ok': False, 'error': 'No autorizado'}), 401
     try:
-        ruta = f'datos/portafolios/{archivo}'
-        with open(ruta, 'r', encoding='utf-8') as f:
-            d = json.load(f)
-        d['monitoreo_activo'] = False
-        with open(ruta, 'w', encoding='utf-8') as f:
-            json.dump(d, f, indent=2, ensure_ascii=False)
+        ruta = os.path.join(DATOS_DIR, 'portafolios', archivo)
+        with _LOCK:
+            with open(ruta, 'r', encoding='utf-8') as f:
+                d = json.load(f)
+            d['monitoreo_activo'] = False
+            _escribir(ruta, d)
         return jsonify({'ok': True, 'activo': False})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500

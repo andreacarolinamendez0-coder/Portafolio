@@ -5,19 +5,28 @@ import { LiquidButton } from "@/components/ui/liquid-glass-button";
 import { GlassPanel } from "@/components/ui/glass-panel";
 import { GlowCard } from "@/components/ui/spotlight-card";
 import { GlassBackground } from "@/components/ui/glass-background";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter, useParams } from "next/navigation";
 import Link from "next/link";
 import { LogoMark } from "@/components/ui/logo";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SectionTitle } from "@/components/ui/card";
-import { authMe, authLogout, triggerRecolector, getUltimaActualizacion, type DashboardData } from "@/lib/api";
+import { authMe, authLogout, triggerRecolector, getUltimaActualizacion, getPreciosRT, type DashboardData } from "@/lib/api";
 import { getDashboard, getTrmAnalisis } from "@/lib/api";
 import { style } from "framer-motion/client";
 import { PageIntro } from "@/components/ui/page-intro";
 import {getConfig} from "@/lib/api";
 import { mostrarMonto, type Divisa } from "@/lib/divisas";
+import { AnimatedValue } from "@/components/ui/animated-value";
+
+// Métricas recalculadas en vivo (polling de /api/precios-rt) que sobrescriben
+// total_valor / ganancia_total / rentabilidad_total mientras hay monitoreo activo.
+interface MetricasVivas {
+  total_valor:        number;
+  ganancia_total:     number;
+  rentabilidad_total: number;
+}
 
 // Tabs: "hoy" | "historico"
 type Tab = "hoy" | "historico";
@@ -34,6 +43,20 @@ export default function DashboardPage() {
   const [lastUpdate, setLastUpdate] = useState("");
   const [username, setUsername]   = useState("");
   const [divisa, setDivisa] = useState<"USD" | "EUR" | "COP">("COP");
+  const [liveTR, setLiveTR]       = useState<MetricasVivas | null>(null);
+
+  // Ref con el último `data` cargado — el intervalo de polling lo lee para
+  // no quedarse con un closure viejo (no se re-crea el interval en cada render).
+  const dataRef = useRef<DashboardData | null>(null);
+  useEffect(() => { dataRef.current = data; }, [data]);
+
+  // Último precio en vivo conocido por ticker (USD), para no perder el valor
+  // si un poll llega sin ese ticker (mercado cerrado momentáneamente, etc).
+  const preciosVivosRef = useRef<Record<string, number>>({});
+
+  // Evita que el polling pise los datos justo cuando "Actualizar datos" está
+  // corriendo (triggerRecolector + load completo).
+  const refrescandoRef = useRef(false);
 
   const load = useCallback(async () => {
     try {
@@ -42,6 +65,14 @@ export default function DashboardPage() {
       setUsername(me.username);
       const d = await getDashboard(archivo);
       setData(d);
+      // Los valores en vivo se recalculan de nuevo sobre esta base fresca.
+      setLiveTR(null);
+      preciosVivosRef.current = {};
+      if (d.tiempo_real) {
+        for (const p of d.tiempo_real.posiciones) {
+          preciosVivosRef.current[p.activo] = p.precio_hoy;
+        }
+      }
       const cfg = await getConfig(archivo);   // ← trae la divisa guardada
       setDivisa(cfg.divisa as "USD" | "EUR" | "COP");
       const { timestamp } = await getUltimaActualizacion();
@@ -53,7 +84,47 @@ export default function DashboardPage() {
     }
   }, [archivo, router]);
 
-  useEffect(() => { load(); }, [load]);
+  // Polling liviano: solo /api/precios-rt (no getDashboard completo).
+  // Recalcula total_valor/ganancia_total/rentabilidad_total en el cliente
+  // usando las posiciones/trm ya cargados + el precio en vivo por ticker.
+  const pollPrecios = useCallback(async () => {
+    if (refrescandoRef.current) return;
+    const cur = dataRef.current;
+    if (!cur || !cur.portafolio.monitoreo_activo) return;
+    const tr  = cur.tiempo_real;
+    const trm = cur.macro?.trm;
+    if (!tr || tr.posiciones.length === 0 || !trm) return;
+
+    try {
+      const res = await getPreciosRT(archivo);
+      if (!res.ok || !res.precios || Object.keys(res.precios).length === 0) return;
+
+      for (const [ticker, info] of Object.entries(res.precios)) {
+        if (info && typeof info.precio === "number" && info.precio > 0) {
+          preciosVivosRef.current[ticker] = info.precio;
+        }
+      }
+
+      let total_valor = 0;
+      for (const p of tr.posiciones) {
+        const precio = preciosVivosRef.current[p.activo] ?? p.precio_hoy;
+        total_valor += p.fracciones * precio * trm;
+      }
+      const total_invertido    = tr.total_invertido;
+      const ganancia_total     = total_valor - total_invertido;
+      const rentabilidad_total = total_invertido > 0 ? (ganancia_total / total_invertido) * 100 : 0;
+
+      setLiveTR({ total_valor, ganancia_total, rentabilidad_total });
+    } catch {
+      // Poll silencioso: si falla, se dejan los últimos valores mostrados.
+    }
+  }, [archivo]);
+
+  useEffect(() => {
+    load();
+    const id = setInterval(() => { pollPrecios(); }, 10000);
+    return () => clearInterval(id);
+  }, [load, pollPrecios]);
 
   async function handleLogout() {
     await authLogout();
@@ -62,11 +133,13 @@ export default function DashboardPage() {
 
   async function handleRefresh() {
     setUpdating(true);
+    refrescandoRef.current = true;
     try {
       await triggerRecolector();
       await load();
     } finally {
       setUpdating(false);
+      refrescandoRef.current = false;
     }
   }
 
@@ -79,6 +152,13 @@ export default function DashboardPage() {
   const { portafolio, composicion, tiempo_real, historico, macro } = data;
   const perfil = portafolio.perfil;
   const gc     = tiempo_real && tiempo_real.ganancia_total > 0 ? "#30d158" : "#ff453a";
+
+  // Métricas efectivas para las stat cards: si hay un poll en vivo reciente,
+  // sobrescribe total_valor/ganancia_total/rentabilidad_total; el resto
+  // (posiciones, total_invertido) se queda igual que en la última carga completa.
+  const tiempoRealEfectivo = tiempo_real && liveTR
+    ? { ...tiempo_real, ...liveTR }
+    : tiempo_real;
 
   return (
     <>
@@ -127,7 +207,7 @@ export default function DashboardPage() {
             {/* Mis métricas */}
             {tiempo_real && macro && (
          <MisMetricas
-         tr={tiempo_real}
+         tr={tiempoRealEfectivo ?? tiempo_real}
          divisa={divisa}
          tasas={{ trm: macro.trm, tasa_eur: macro.tasa_eur }}
   />
@@ -235,11 +315,21 @@ function MisMetricas({ tr, divisa, tasas }: {
   const gPos = tr.ganancia_total >= 0;
   const rPos = tr.rentabilidad_total >= 0;
 
-  const cards = [
+  // Formateadores reusados por AnimatedValue — mismo formato que se usaba antes,
+  // solo que ahora se recalculan cada vez que cambia el valor animado.
+  const fmtMonto     = (n: number) => mostrarMonto(n, divisa, tasas);
+  const fmtGanancia  = (n: number) => `${n >= 0 ? "+" : ""}${mostrarMonto(n, divisa, tasas)}`;
+  const fmtRentab    = (n: number) => `${n >= 0 ? "+" : ""}${n.toFixed(1)}%`;
+
+  const cards: {
+    label: string; sub: string; color: string;
+    value?: string;
+    raw?: number; format?: (n: number) => string;
+  }[] = [
     { label: "Invertido",    value: mostrarMonto(tr.total_invertido, divisa, tasas), sub: divisa, color: "#f0f0f3" },
-    { label: "Valor hoy",    value: mostrarMonto(tr.total_valor, divisa, tasas),     sub: divisa, color: "#f0f0f3" },
-    { label: "Ganancia",     value: `${gPos ? "+" : ""}${mostrarMonto(tr.ganancia_total, divisa, tasas)}`, sub: divisa, color: gPos ? "#30d158" : "#ff453a" },
-    { label: "Rentabilidad", value: `${rPos ? "+" : ""}${tr.rentabilidad_total.toFixed(1)}%`, sub: "total", color: rPos ? "#30d158" : "#ff453a" },
+    { label: "Valor hoy",    raw: tr.total_valor,        format: fmtMonto,    sub: divisa, color: "#f0f0f3" },
+    { label: "Ganancia",     raw: tr.ganancia_total,     format: fmtGanancia, sub: divisa, color: gPos ? "#30d158" : "#ff453a" },
+    { label: "Rentabilidad", raw: tr.rentabilidad_total, format: fmtRentab,   sub: "total", color: rPos ? "#30d158" : "#ff453a" },
   ];
 
   return (
@@ -248,7 +338,11 @@ function MisMetricas({ tr, divisa, tasas }: {
         {cards.map(c => (
           <div key={c.label}>
             <p style={{ fontSize: 12, color: "var(--text-3)", margin: "0 0 7px", textTransform: "uppercase", letterSpacing: "0.06em" }}>{c.label}</p>
-            <p style={{ fontSize: 17, fontWeight: 600, margin: 0, color: c.color, letterSpacing: "-0.02em" }}>{c.value}</p>
+            <p style={{ fontSize: 17, fontWeight: 600, margin: 0, color: c.color, letterSpacing: "-0.02em" }}>
+              {c.raw !== undefined && c.format
+                ? <AnimatedValue value={c.raw} format={c.format} />
+                : c.value}
+            </p>
             <p style={{ fontSize: 12, color: "var(--text-3)", margin: "6px 0 0" }}>{c.sub}</p>
           </div>
         ))}
