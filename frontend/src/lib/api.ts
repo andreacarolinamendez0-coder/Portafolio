@@ -167,24 +167,49 @@ export const updateProfile = (data: Record<string, unknown>) =>
 // ── Monitor / prices ────────────────────────────────────────
 
 export interface PrecioRT {
-  precio:        number;
-  cambio_dia:    number;
-  senal:         string;
-  score:         number;
-  rsi:           number;
-  ma20:          number;
-  ma50:          number;
-  rango_entrar?:  unknown;
-  rango_vigilar?: unknown;
-  puede_entrar:  boolean;
-  mercado_rt:    boolean;
-  timestamp:     string;
+  precio:         number;
+  cambio_dia:     number;
+  senal:          string;
+  score:          number;
+  rsi:            number;
+  ma20:           number;
+  ma50:           number;
+  rango_entrar?:  number | null;
+  rango_vigilar?: number | null;
+  puede_entrar:   boolean;
+  mercado_rt:     boolean;
+  timestamp:      string;
+}
+
+// Rango de entrada/vigilancia precalculado para el día — lo que el backend
+// expone cuando no hay precios en vivo (mercado cerrado). Ver dashboard.py
+// /api/precios-rt/<archivo> y monitor.py (rangos_hoy).
+export interface RangoTicker {
+  ma20:           number;
+  ma50:           number;
+  banda_inf:      number;
+  rsi:            number;
+  tendencia:      number;
+  vol_ratio:      number;
+  macd_hist:      number;
+  hist_subiendo:  boolean;
+  score_base:     number;
+  rango_entrar:   number | null;
+  rango_vigilar:  number | null;
+  puede_entrar:   boolean;
+  puede_vigilar:  boolean;
 }
 
 export const getPreciosRT = (archivo: string) =>
-  apiFetch<{ ok: boolean; precios: Record<string, PrecioRT>; mercado_abierto: boolean; ultimo_update: string; error?: string }>(
-    `/api/precios-rt/${archivo}`
-  );
+  apiFetch<{
+    ok:              boolean;
+    precios:         Record<string, PrecioRT>;
+    mercado_abierto: boolean;
+    ultimo_update:   string;
+    rangos:          Record<string, RangoTicker>;
+    rangos_fecha:    string;
+    error?:          string;
+  }>(`/api/precios-rt/${archivo}`);
 
 export const triggerRecolector = () =>
   apiFetch<{ ok: boolean }>("/api/recolector", { method: "POST" });
