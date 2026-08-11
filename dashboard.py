@@ -1260,7 +1260,15 @@ def update_profile():
     campos = {}
     if "email" in data and data["email"]:
         campos["email"] = data["email"].strip()
+
+    # chat_id anterior — para detectar si es una conexión nueva/distinta y
+    # disparar el saludo de bienvenida de Telegram (ver más abajo).
+    chat_id_anterior = ""
     if "telegram_chat_id" in data:
+        u_actual = get_usuario(username)
+        chat_id_anterior = (
+            (u_actual.get("telegram_chat_id") or "").strip() if u_actual else ""
+        )
         campos["telegram_chat_id"] = (data.get("telegram_chat_id") or "").strip()
     if "email_notifications" in data:
         campos["email_notifications"] = data["email_notifications"]
@@ -1275,6 +1283,38 @@ def update_profile():
         return jsonify({"error": "Sin cambios"}), 400
     ok = actualizar_usuario(username, campos)
     if ok:
+        # ── Saludo automático de Telegram al conectar/cambiar el chat_id ──
+        # Dispara cuando se guarda un telegram_chat_id nuevo o distinto al
+        # que ya tenía el usuario (cubre la primera conexión y un cambio de
+        # chat_id posterior). telegram_chat_id es un campo del USUARIO, no
+        # de cada portafolio individual — un mismo usuario puede tener
+        # varios portafolios con distinto monitoreo_activo, así que el
+        # mensaje resume si AL MENOS UNO ya tiene el monitoreo activo en
+        # vez de listar cada portafolio (mantiene el mensaje simple).
+        nuevo_chat_id = campos.get("telegram_chat_id", "")
+        if nuevo_chat_id and nuevo_chat_id != chat_id_anterior:
+            try:
+                from monitor import telegram
+
+                portafolios_usuario = listar_portafolios_de_usuario(username)
+                hay_monitoreo_activo = any(
+                    p.get("monitoreo_activo") for p in portafolios_usuario
+                )
+                if hay_monitoreo_activo:
+                    saludo = (
+                        "👋 ¡Hola! Ya conecté tu Telegram y tu monitoreo ya está "
+                        "activo. En cuanto hagamos la próxima ronda de análisis, "
+                        "te aviso por aquí."
+                    )
+                else:
+                    saludo = (
+                        "👋 ¡Hola! Ya conecté tu Telegram. Activa el monitoreo de "
+                        "tu portafolio para que te empiece a mandar alertas por "
+                        "aquí."
+                    )
+                telegram(nuevo_chat_id, saludo)
+            except Exception as e:
+                print(f"⚠️ No se pudo enviar saludo de bienvenida por Telegram: {e}")
         return jsonify({"ok": True, "mensaje": "Perfil actualizado correctamente"})
     return jsonify({"error": "Error actualizando perfil"}), 500
 
@@ -1321,6 +1361,13 @@ def api_precios_rt(archivo):
                 "rango_entrar": r.get("rango_entrar"),
                 "rango_vigilar": r.get("rango_vigilar"),
                 "puede_entrar": r.get("puede_entrar", False),
+                "banda_inf": r.get("banda_inf", 0),
+                "tendencia": r.get("tendencia", 0),
+                "vol_ratio": r.get("vol_ratio", 0),
+                "macd_hist": r.get("macd_hist", 0),
+                "hist_subiendo": r.get("hist_subiendo", False),
+                "score_base": r.get("score_base", 0),
+                "puede_vigilar": r.get("puede_vigilar", False),
                 "mercado_rt": mercado_rt,
                 "timestamp": r.get("timestamp", ""),
             }
@@ -1342,6 +1389,7 @@ def api_precios_rt(archivo):
             'ultimo_update':   estado.get('timestamp', ''),
             'rangos':          rangos_data.get('rangos', {}),
             'rangos_fecha':    rangos_data.get('fecha', ''),
+            'macd_sin_confirmacion_total': estado.get('macd_sin_confirmacion_total', 0),
         })
 
     except Exception as e:

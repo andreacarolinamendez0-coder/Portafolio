@@ -177,6 +177,13 @@ export interface PrecioRT {
   rango_entrar?:  number | null;
   rango_vigilar?: number | null;
   puede_entrar:   boolean;
+  banda_inf:      number;
+  tendencia:      number;
+  vol_ratio:      number;
+  macd_hist:      number;
+  hist_subiendo:  boolean;
+  score_base:     number;
+  puede_vigilar:  boolean;
   mercado_rt:     boolean;
   timestamp:      string;
 }
@@ -208,6 +215,10 @@ export const getPreciosRT = (archivo: string) =>
     ultimo_update:   string;
     rangos:          Record<string, RangoTicker>;
     rangos_fecha:    string;
+    // Cuántas veces hoy una entrada se disparó sin confirmación de momentum
+    // MACD (score suficiente, pero histograma MACD sin girar al alza). Ver
+    // monitor.py, vigilar_precios() y dashboard.py /api/precios-rt.
+    macd_sin_confirmacion_total?: number;
     error?:          string;
   }>(`/api/precios-rt/${archivo}`);
 

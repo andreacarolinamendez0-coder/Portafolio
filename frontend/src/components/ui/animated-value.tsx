@@ -23,6 +23,20 @@ export function AnimatedValue({ value, format, className, style }: AnimatedValue
   const anteriorRef     = useRef(value); // "usePrevious" — se lee antes de actualizar
   const [flash, setFlash] = useState<"up" | "down" | null>(null);
 
+  // react-countup reinicia la animación (reset + restart desde `start`) cada
+  // vez que `formattingFn` cambia de referencia (ver su efecto interno que
+  // depende de props.formattingFn). Si el caller pasa `format` como arrow
+  // inline (ej. monitor/page.tsx), es una función nueva en cada render — y
+  // como este componente vive dentro de un árbol que re-renderiza cada
+  // ~100ms (anillo de "próximo refresh"), el reinicio nunca deja completar
+  // la animación y el número queda pegado cerca del valor con el que montó
+  // (bug: header de DetallePanel mostrando el precio del ticker anterior).
+  // Envolvemos `format` en una referencia estable para que `formattingFn`
+  // nunca cambie de identidad, sin dejar de usar la versión más reciente.
+  const formatRef = useRef(format);
+  formatRef.current = format;
+  const formatEstable = useRef((n: number) => formatRef.current(n)).current;
+
   useEffect(() => {
     const anterior = anteriorRef.current;
     if (value > anterior) setFlash("up");
@@ -63,7 +77,7 @@ export function AnimatedValue({ value, format, className, style }: AnimatedValue
           duration={0.5}
           preserveValue
           useEasing
-          formattingFn={format}
+          formattingFn={formatEstable}
         />
       </span>
     </span>

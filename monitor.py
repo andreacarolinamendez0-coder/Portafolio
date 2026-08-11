@@ -24,7 +24,7 @@ FUENTES DE DATOS:
   yfinance →  histórico 90 días UNA VEZ a las 8am
 """
 
-import os, json, time, threading, requests
+import os, json, time, threading, requests, html
 from datetime import datetime, timedelta, timezone
 import pandas as pd
 import yfinance as yf
@@ -165,7 +165,7 @@ def segundos_hasta_precalculo():
 
 def telegram(chat_id, texto, reply_markup=None):
     if not chat_id:
-        return
+        return False
     try:
         payload = {"chat_id": chat_id, "text": texto, "parse_mode": "HTML"}
         if reply_markup:
@@ -175,8 +175,16 @@ def telegram(chat_id, texto, reply_markup=None):
             json=payload,
             timeout=10,
         )
+        if resp.status_code != 200 or not resp.json().get("ok", False):
+            print(
+                f"❌ Telegram rechazó el mensaje a {chat_id}: "
+                f"{resp.status_code} {resp.text[:200]}"
+            )
+            return False
+        return True
     except Exception as e:
         print(f"❌ Telegram error: {e}")
+        return False
 
 
 def teclado_decision(ticker):
@@ -190,6 +198,64 @@ def teclado_decision(ticker):
             ]
         ]
     }
+
+
+def teclado_decision_multiple(tickers):
+    """Mismo teclado que teclado_decision, pero para un mensaje agrupado con
+    varios tickers (ver Cambio 1 — agrupación de alertas ENTRAR simultáneas).
+    Una fila de botones por ticker, cada botón sigue codificando su propio
+    ticker en el callback_data ("decision:ticker") — procesar_callback_telegram
+    no necesita ningún cambio para leer estos botones."""
+    return {
+        "inline_keyboard": [
+            [
+                {"text": f"✅ Ya entré ({t})", "callback_data": f"entro:{t}"},
+                {"text": f"❌ No ({t})", "callback_data": f"no_entro:{t}"},
+                {"text": f"📊 Sigue ({t})", "callback_data": f"sigue:{t}"},
+            ]
+            for t in tickers
+        ]
+    }
+
+
+def _mensaje_alerta_individual(a):
+    """Texto de la alerta ENTRAR para un solo ticker. Tono de sugerencia
+    informativa, no de instrucción — ver Cambio 3 (Andrea)."""
+    msg = (
+        f"🟢 <b>POSIBLE ENTRADA — {a['ticker']}</b>\n\n"
+        f"💵 Precio: <b>${a['precio']:,.2f} USD</b> ({a['cambio']:+.2f}% hoy)\n"
+        f"🎯 Cruzó la banda inferior Bollinger (&lt; ${a['rango_entrar']:,.2f})\n"
+        f"📉 Momentum MACD girando al alza ✓\n"
+        f"📈 Rebotó {a['rebote']*100:.1f}% desde el mínimo de hoy (${a['min_dia']:,.2f})\n\n"
+        f"📊 Score: <b>{a['score']}/10</b> · RSI: {a['rsi']} · "
+        f"Tendencia: {a['tendencia']:+.1f}%\n"
+        f"📈 MA20: ${a['ma20']:,.2f} · MA50: ${a['ma50']:,.2f}\n\n"
+        f"<i>Sugerencia informativa según indicadores técnicos — no es una "
+        f"orden de actuar ya. Entra cuando te parezca el mejor momento.</i>"
+    )
+    if a["origen_lote"] == "sigue":
+        msg += "\n\n<i>(Actualización — pediste seguir informado)</i>"
+    return msg
+
+
+def _mensaje_alerta_agrupada(alertas):
+    """Texto del mensaje cuando 2+ tickers cruzan su rango de entrada en el
+    mismo ciclo (ver Cambio 1). Mismo tono de sugerencia que la alerta
+    individual (ver Cambio 3)."""
+    lineas = "\n".join(
+        f"• <b>{a['ticker']}</b> — ${a['precio']:,.2f} ({a['cambio']:+.2f}% hoy) · "
+        f"Score {a['score']}/10 · RSI {a['rsi']}"
+        for a in alertas
+    )
+    return (
+        f"🎯 <b>{len(alertas)} activos cruzaron su rango de entrada</b>\n\n"
+        f"{lineas}\n\n"
+        f"<i>Son sugerencias informativas según indicadores técnicos — no "
+        f"son órdenes de actuar ya. Entra en cada uno cuando te parezca el "
+        f"mejor momento.</i>\n\n"
+        f"Responde por cada uno con los botones de abajo:\n"
+        f"✅ Ya entré · ❌ No voy a entrar · 📊 Sigue informando"
+    )
 
 
 # ─────────────────────────────────────────────────────────────
@@ -410,12 +476,14 @@ def precalcular_rangos(archivo, portafolio):
             banda_inf, macd_hist, hist_subiendo = _macd_bollinger(close)
 
             # ── Rangos de precio ───────────────────────────────
-            # ENTRAR exige score suficiente Y momentum girando (MACD).
+            # ENTRAR exige score suficiente. El momentum MACD (hist_subiendo)
+            # ya NO es un gate duro — confirmado por backtest que bloqueaba
+            # ~50% de señales que ya calificaban por score. Ahora suma +0.5
+            # al score_base cuando el momentum está girando al alza.
             # El trigger es la banda inferior de Bollinger — se adapta a la
             # volatilidad de cada activo, no la MA20 fija.
-            # ponytail: MACD es un gate duro. Si te quedas sin señales,
-            # cambiar "and hist_subiendo" por sumar +0.5 al score_base.
-            puede_entrar = (score_base + 2.0) >= UMBRAL_ENTRADA and hist_subiendo
+            score_para_entrar = score_base + (0.5 if hist_subiendo else 0.0)
+            puede_entrar = (score_para_entrar + 2.0) >= UMBRAL_ENTRADA
             puede_vigilar = (score_base + 1.0) >= UMBRAL_VIGILAR
 
             rango_entrar = round(banda_inf, 2) if puede_entrar else None
@@ -512,6 +580,16 @@ def vigilar_precios(archivo, portafolio, rangos_del_dia, precios_cache=None):
             estado["lotes_alerta"] = {}
             estado["dia_intradia"] = hoy_str
 
+        # Alertas ENTRAR que califican este ciclo se acumulan aquí en vez de
+        # enviarse una por una dentro del loop — se despachan al final, en un
+        # solo mensaje si son 2+ tickers, para no pegarle varios mensajes
+        # seguidos a Telegram en el mismo ciclo (riesgo de rate limit ~1
+        # msg/seg por chat). Ver Cambio 1.
+        alertas_pendientes = []
+        # Re-preguntas ("¿sigo informando?") de lotes que se agotaron este
+        # ciclo — se mandan individualmente al final, una por ticker.
+        reprompts_pendientes = []
+
         for ticker, rango in rangos_del_dia["rangos"].items():
 
             # ── Solo precio — una petición a Finnhub ──────────────
@@ -531,23 +609,28 @@ def vigilar_precios(archivo, portafolio, rangos_del_dia, precios_cache=None):
             min_dia = estado[min_key]
             rebote = (precio - min_dia) / min_dia if min_dia else 0.0
 
-            # ── [temporal] ¿el gate de MACD tapó una señal real? ──
-            # Cuenta 1x por ticker/día cuando el precio SÍ tocó la banda
-            # y lo único que faltó para ENTRAR fue el MACD subiendo.
+            # ── [temporal] ¿cuántas entradas se disparan sin momentum MACD? ──
+            # Antes este contador medía "cuántas veces el gate duro de MACD
+            # bloqueó una entrada que ya calificaba por score" (el gate ya
+            # no existe — ver fix del gate rígido más arriba). Ahora mide
+            # cuántas veces ENTRAR se dispara con hist_subiendo=False, es
+            # decir, entradas donde el resto del score sí calificaba pero
+            # el momentum MACD no confirmaba. Cuenta 1x por ticker/día.
             if (
-                not rango.get("puede_entrar")
-                and rango.get("score_base", 0) >= UMBRAL_ENTRADA - 2.0
+                rango.get("puede_entrar")
                 and not rango.get("hist_subiendo")
-                and rango.get("banda_inf")
-                and precio < rango["banda_inf"]
+                and rango.get("rango_entrar")
+                and precio < rango["rango_entrar"]
             ):
-                vetos = estado.setdefault("macd_vetos", {})
+                vetos = estado.setdefault("macd_sin_confirmacion", {})
                 if vetos.get(ticker) != hoy_str:
                     vetos[ticker] = hoy_str
-                    estado["macd_vetos_total"] = estado.get("macd_vetos_total", 0) + 1
-                    print(f"  🔬 MACD-veto: {ticker} @ ${precio:.2f} < banda "
-                          f"${rango['banda_inf']:.2f} (score {rango['score_base']}, "
-                          f"total={estado['macd_vetos_total']})")
+                    estado["macd_sin_confirmacion_total"] = (
+                        estado.get("macd_sin_confirmacion_total", 0) + 1
+                    )
+                    print(f"  🔬 MACD sin confirmar: {ticker} @ ${precio:.2f} entró sin "
+                          f"momentum al alza (score {rango['score_base']}, "
+                          f"total={estado['macd_sin_confirmacion_total']})")
 
             # ── Determinar señal con rangos precalculados ──────────
             rango_entrar = rango.get("rango_entrar")
@@ -644,36 +727,64 @@ def vigilar_precios(archivo, portafolio, rangos_del_dia, precios_cache=None):
                     if transcurrido.total_seconds() < intervalo_min * 60:
                         continue
 
-                # Construir y enviar alerta
-                msg = (
-                    f"🟢 <b>SEÑAL DE ENTRADA — {ticker}</b>\n\n"
-                    f"💵 Precio: <b>${precio:,.2f} USD</b> ({cambio:+.2f}% hoy)\n"
-                    f"🎯 Cruzó la banda inferior Bollinger (&lt; ${rango_entrar:,.2f})\n"
-                    f"📉 Momentum MACD girando al alza ✓\n"
-                    f"📈 Rebotó {rebote*100:.1f}% desde el mínimo de hoy (${min_dia:,.2f})\n\n"
-                    f"📊 Score: <b>{score}/10</b> · RSI: {rango['rsi']} · "
-                    f"Tendencia: {rango['tendencia']:+.1f}%\n"
-                    f"📈 MA20: ${rango['ma20']:,.2f} · MA50: ${rango['ma50']:,.2f}"
-                )
-                if lote["origen"] == "sigue":
-                    msg += "\n\n<i>(Actualización — pediste seguir informado)</i>"
-
-                print(f"  📨 Intentando enviar alerta a chat_id='{chat_id}' para {ticker}")
-                telegram(chat_id, msg, reply_markup=teclado_decision(ticker))
-                print(f"  🟢 ALERTA: {ticker} @ ${precio} cruzó rango ${rango_entrar}")
+                # Acumular la alerta — se envía al final del loop, junto con
+                # las de los demás tickers de este ciclo (ver Cambio 1). El
+                # marcado de lote (enviadas/ultima_alerta_ts) se actualiza
+                # aquí igual que antes, como si cada ticker ya hubiera
+                # recibido su propia alerta.
+                alertas_pendientes.append({
+                    "ticker": ticker,
+                    "precio": precio,
+                    "cambio": cambio,
+                    "rango_entrar": rango_entrar,
+                    "rebote": rebote,
+                    "min_dia": min_dia,
+                    "score": score,
+                    "rsi": rango["rsi"],
+                    "tendencia": rango["tendencia"],
+                    "ma20": rango["ma20"],
+                    "ma50": rango["ma50"],
+                    "origen_lote": lote["origen"],
+                })
 
                 lote["enviadas"] += 1
                 lote["ultima_alerta_ts"] = hora_colombia().isoformat()
 
                 if lote["enviadas"] >= TAMANO_LOTE_ALERTA:
-                    telegram(
-                        chat_id,
-                        f"🔁 <b>{ticker}</b> sigue en rango de entrada — van "
-                        f"{TAMANO_LOTE_ALERTA} avisos.\n¿Sigo informando?",
-                        reply_markup=teclado_decision(ticker),
-                    )
+                    reprompts_pendientes.append(ticker)
                     lote["prompt_pendiente"] = True
-                    print(f"  🔁 Re-pregunta enviada para {ticker} tras {TAMANO_LOTE_ALERTA} avisos")
+
+        # ── Despachar alertas acumuladas este ciclo ────────────────
+        # 1 ticker → mensaje individual de siempre. 2+ tickers → un solo
+        # mensaje agrupado con un teclado de varias filas (ver Cambio 1).
+        if alertas_pendientes:
+            if len(alertas_pendientes) == 1:
+                a = alertas_pendientes[0]
+                msg = _mensaje_alerta_individual(a)
+                print(f"  📨 Intentando enviar alerta a chat_id='{chat_id}' para {a['ticker']}")
+                telegram(chat_id, msg, reply_markup=teclado_decision(a["ticker"]))
+                print(f"  🟢 ALERTA: {a['ticker']} @ ${a['precio']} cruzó rango ${a['rango_entrar']}")
+            else:
+                tickers_txt = ", ".join(a["ticker"] for a in alertas_pendientes)
+                msg = _mensaje_alerta_agrupada(alertas_pendientes)
+                print(f"  📨 Intentando enviar alerta agrupada a chat_id='{chat_id}' para {tickers_txt}")
+                telegram(
+                    chat_id,
+                    msg,
+                    reply_markup=teclado_decision_multiple(
+                        [a["ticker"] for a in alertas_pendientes]
+                    ),
+                )
+                print(f"  🟢 ALERTA AGRUPADA ({len(alertas_pendientes)}): {tickers_txt}")
+
+        for ticker_rp in reprompts_pendientes:
+            telegram(
+                chat_id,
+                f"🔁 <b>{ticker_rp}</b> sigue en rango de entrada — van "
+                f"{TAMANO_LOTE_ALERTA} avisos.\n¿Sigo informando?",
+                reply_markup=teclado_decision(ticker_rp),
+            )
+            print(f"  🔁 Re-pregunta enviada para {ticker_rp} tras {TAMANO_LOTE_ALERTA} avisos")
 
         # Actualizar contadores de días sin señal
         hay_entradas = any(
@@ -937,7 +1048,7 @@ def enviar_buenos_dias(archivo, portafolio):
 
     msg = (
         f"☀️ <b>Buenos días — {dia_semana} {ahora.strftime('%d/%m')}</b>\n\n"
-        f"📋 Portafolio: <b>{nombre_port}</b>\n\n"
+        f"📋 Portafolio: <b>{html.escape(nombre_port)}</b>\n\n"
         f"<b>Rangos calculados para hoy:</b>\n{resumen_rangos}\n"
         f"🔍 Monitoreando cada ~10-15 segundos de 8:30am a 3:00pm.\n"
         f"Te aviso al instante si algún precio cruza su rango.\n\n"
@@ -948,7 +1059,7 @@ def enviar_buenos_dias(archivo, portafolio):
     try:
         ia_saludo = analisis_ia([], portafolio, tipo="buenos_dias")
         if ia_saludo:
-            msg += f"\n\n💬 <i>{ia_saludo}</i>"
+            msg += f"\n\n💬 <i>{html.escape(ia_saludo)}</i>"
     except:
         pass
 
@@ -985,7 +1096,7 @@ def reporte_cierre(archivo, portafolio, estado):
     dias_sin = estado.get("dias_consecutivos_sin_senal", 0)
 
     lineas = [
-        f"📋 <b>REPORTE DE CIERRE — {portafolio['nombre']}</b>",
+        f"📋 <b>REPORTE DE CIERRE — {html.escape(portafolio['nombre'])}</b>",
         f"📅 {hoy_str}\n",
     ]
     for r in sorted(resultados, key=lambda x: x["score"], reverse=True):
@@ -1010,12 +1121,12 @@ def reporte_cierre(archivo, portafolio, estado):
     ia_cierre = analisis_ia(resultados, portafolio, tipo="cierre")
     msg_final = "\n".join(lineas)
     if ia_cierre:
-        msg_final += f"\n\n💬 <b>Análisis:</b>\n<i>{ia_cierre}</i>"
+        msg_final += f"\n\n💬 <b>Análisis:</b>\n<i>{html.escape(ia_cierre)}</i>"
 
     if dias_sin >= DIAS_SIN_SENAL_MAX and hora_colombia().weekday() == 4:
         ia_sub = analisis_ia(resultados, portafolio, tipo="suboptimal")
         msg_final += f"\n\n⚠️ <b>ALERTA: {dias_sin} días sin señal ideal</b>\n" + (
-            f"<i>{ia_sub}</i>" if ia_sub else ""
+            f"<i>{html.escape(ia_sub)}</i>" if ia_sub else ""
         )
 
     telegram(chat_id, msg_final)
