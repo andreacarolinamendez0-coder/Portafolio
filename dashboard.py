@@ -211,13 +211,15 @@ def _tool_simular_propuesta(input_):
     try:
         from adaptador_analista import generar_propuesta_completa
 
+        activos_ancla = input_.get("activos_ancla")
         resultado = generar_propuesta_completa(
             perfil=input_.get("perfil"),
             horizonte=input_.get("horizonte", 10),
             inversion=input_.get("inversion"),
             aporte_dca=input_.get("aporte_dca", 0),
             frecuencia_meses=input_.get("frecuencia_meses", 1),
-            tickers_fijos=input_.get("tickers_candidatos"),
+            tickers_fijos=input_.get("tickers_candidatos") if not activos_ancla else None,
+            activos_ancla=activos_ancla,
         )
 
         pesos = resultado.get("pesos") or {}
@@ -469,6 +471,18 @@ SIMULAR_PROPUESTA_TOOL = {
                     "omite, el motor usa su universo completo."
                 ),
             },
+            "activos_ancla": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "SOLO cuando el usuario confirmó explícitamente partir de su "
+                    "portafolio actual para editarlo: tickers que YA tiene y deben "
+                    "mantenerse en la propuesta pase lo que pase en la simulación "
+                    "(el motor los ancla y busca en TODO el universo la mejor forma "
+                    "de agregar/ajustar el resto alrededor de ellos). NUNCA uses "
+                    "esto en una propuesta nueva."
+                ),
+            },
         },
         "required": ["perfil", "inversion"],
     },
@@ -499,12 +513,20 @@ def _sistema_analista(portafolio, composicion, tiene_inv):
             f'{", ".join(composicion.keys())}, o agregar/quitar activos)'
         )
         instruccion_6 = (
-            "Si elige opción 6: pregunta qué quiere cambiar de la composición actual. "
-            'Luego genera el JSON incluyendo "activos" con la composición final. '
-            'SIEMPRE incluye "activos" cuando hay composición existente.\n'
+            "Si elige opción 6: primero pregunta EXPLÍCITAMENTE, en un mensaje aparte, si quiere "
+            f'partir de su portafolio actual ({", ".join(composicion.keys())}) y ajustar desde ahí '
+            "(agregar/quitar activos mientras conserva el resto), o si prefiere una propuesta "
+            "completamente nueva evaluando todo el universo desde cero. No lo asumas, pregúntalo.\n"
+            'Si confirma partir de su base actual: llama simular_propuesta con "activos_ancla" = '
+            "los tickers que confirmó mantener (todos los actuales, o un subconjunto si quiere "
+            "soltar alguno) para ver la mejor forma real de sumar lo que pide sobre el universo "
+            'completo. Luego genera el JSON final incluyendo ese mismo "activos_ancla" -- NO '
+            'adivines pesos finales en "activos", el motor los recalcula.\n'
             'Ejemplo: {"accion":"analizar","perfil":"agresivo","inversion":2000000,'
             '"aporte_dca":200000,"frecuencia_meses":1,"horizonte":10,"es_nuevo":false,'
-            '"activos":{"WMT":0.265,"LLY":0.212,"XLK":0.159,"GOOGL":0.154,"MSFT":0.110,"VTI":0.100}}'
+            '"activos_ancla":["WMT","VTI"]}\n'
+            "Si prefiere empezar de cero: procede como con un portafolio nuevo (ver FLUJO A), "
+            'con "activos" solo si hubo preferencias de tema/sector, sin "activos_ancla".'
         )
     else:
         opcion_6 = "6. Definir la composición de activos (aún no tienes ninguna — te sugiero una optimizada para tu perfil)"
@@ -550,7 +572,11 @@ def _sistema_analista(portafolio, composicion, tiene_inv):
         f'Si NO mencionó preferencias de sector, omite "activos" y deja que el optimizador elija automáticamente.\n\n'
         f"FLUJO B — ACTUALIZAR EXISTENTE: ya tienes los datos. Pregunta UNA VEZ qué quiere cambiar. "
         f"Evalúa si el cambio tiene sentido para su perfil. Si es riesgoso, díselo antes de proceder. "
-        f'Luego genera el JSON con los valores finales (actuales + cambios). SIEMPRE incluye "activos" en actualizaciones.\n\n'
+        f'Luego genera el JSON con los valores finales (actuales + cambios). Si el cambio NO toca la '
+        f'composición (monto, DCA, frecuencia, perfil u horizonte), incluye "activos" con la composición '
+        f'actual sin modificar, para no perderla. Si el cambio SÍ toca la composición, es la opción 6: '
+        f"sigue esas instrucciones en su lugar (activos_ancla si confirmó partir de su base, nunca "
+        f'pesos adivinados en "activos").\n\n'
         f"Presenta UNA VEZ estas opciones al usuario:\n"
         f"1. El monto total invertido (actualmente ${portafolio.get('inversion_inicial', 0):,.0f} COP)\n"
         f"2. El aporte periódico DCA (actualmente ${portafolio.get('aporte_dca', 0):,.0f} COP cada {portafolio.get('frecuencia_meses', 1)} mes(es))\n"
@@ -565,10 +591,12 @@ def _sistema_analista(portafolio, composicion, tiene_inv):
         f"Si agregas cualquier palabra al lado del JSON, el sistema falla y el usuario no recibe su propuesta."
         f"FORMATO CRÍTICO: PROHIBIDO usar asteriscos (*), guiones de lista, viñetas (•) o markdown. "
         f"Si necesitas enumerar, usa números seguidos de punto (1. 2. 3.) en líneas separadas, texto plano. Sin **negritas**. Horizonte entre 1 y 30, nunca 0."
-        f"Cuando el usuario pida agregar/cambiar un activo después de una propuesta generada, "
-        f"toma la composición real del último mensaje 'Propuesta generada' del historial como base, "
-        f"NUNCA inventes tickers que no estén ahí. Para agregar un nuevo activo, redistribuye los pesos "
-        f"proporcionalmente y emite el JSON con la nueva lista, el optimizador refinará los pesos finales.\n\n"
+        f"Cuando el usuario pida agregar/cambiar un activo después de una propuesta ya generada en esta "
+        f"conversación, pregunta si quiere mantener esa composición como base o partir de cero. Si "
+        f"mantiene la base, usa 'activos_ancla' con los tickers de esa propuesta que confirme conservar "
+        f"(tomados del último mensaje 'Propuesta generada' del historial, NUNCA inventes tickers que no "
+        f"estén ahí) tanto al llamar simular_propuesta como en el JSON final -- no adivines pesos a mano, "
+        f"el motor los recalcula sobre el universo completo con esos tickers protegidos.\n\n"
         f"HERRAMIENTA simular_propuesta — USO OBLIGATORIO: nunca menciones un ticker o un porcentaje "
         f"final de una propuesta (en texto o en el JSON) sin haber llamado antes a la herramienta "
         f"simular_propuesta y usar EXACTAMENTE lo que devolvió esa llamada (pesos_reales, alfa, métricas). "
@@ -576,6 +604,9 @@ def _sistema_analista(portafolio, composicion, tiene_inv):
         f"del usuario durante la conversación (ej. '¿y si agrego MSFT?', '¿qué pasa si quito XLK?'), no solo "
         f"al final. Si simular_propuesta excluyó alguno de los tickers candidatos, revisa 'motivos_exclusion' "
         f"en su respuesta y explícaselo al usuario con ese hecho concreto, en vez de especular. "
+        f"Recuerda: 'activos_ancla' es SOLO para editar un portafolio existente sobre el universo completo "
+        f"(el usuario confirmó mantener esos tickers); 'tickers_candidatos' restringe el universo a un tema "
+        f"o categoría concreta para una propuesta nueva. No los mezcles ni confundas su propósito.\n"
         f'El JSON de ejemplo embebido arriba en este prompt (con pesos como "0.265", "0.212") es SOLO un '
         f"ejemplo de FORMATO — no son cifras reales, nunca las repitas ni las imites como si lo fueran; el "
         f'campo "activos" que finalmente emitas debe reflejar (o ser compatible con) lo que devolvió '
@@ -749,6 +780,14 @@ def api_generar_propuesta(archivo):
                          '(ej. "Biotecnología" en vez de "IBB"). Pídele tickers concretos.',
             })
 
+        # --- Activos ancla (edicion de un portafolio existente, universo
+        # completo, esos tickers protegidos de las purgas) ---
+        raw_ancla = data.get("activos_ancla") or []
+        activos_ancla = (
+            [t for t in raw_ancla if isinstance(t, str) and PATRON_TICKER.fullmatch(t)]
+            or None
+        )
+
         # --- MOTOR NUEVO: hace todo (seleccion, pesos, perfil, proyecciones) ---
         resultado = generar_propuesta_completa(
             perfil=perfil,
@@ -756,7 +795,11 @@ def api_generar_propuesta(archivo):
             inversion=inversion,
             aporte_dca=aporte_dca,
             frecuencia_meses=freq,
-            tickers_fijos=list(activos_propuestos.keys()) if activos_propuestos else None,
+            tickers_fijos=(
+                list(activos_propuestos.keys())
+                if (activos_propuestos and not activos_ancla) else None
+            ),
+            activos_ancla=activos_ancla,
         )
 
         pesos_dict = resultado["pesos"]

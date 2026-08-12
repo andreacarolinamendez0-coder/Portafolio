@@ -1,0 +1,130 @@
+Rango de datos: 2016-07-23 -> 2026-08-05 (3666 filas)
+Folds generados: 48 (cada ~63 dias calendario)
+ADVERTENCIA: las ventanas de evaluacion se solapan entre folds -- no son independientes, sirve para descartar configuraciones malas, no para un test estadistico riguroso de significancia.
+
+Fold 1/48 -- corte 2017-10-29
+Fold 2/48 -- corte 2017-12-31
+Fold 3/48 -- corte 2018-03-04
+Fold 4/48 -- corte 2018-05-06
+Fold 5/48 -- corte 2018-07-08
+Fold 6/48 -- corte 2018-09-09
+Fold 7/48 -- corte 2018-11-11
+Fold 8/48 -- corte 2019-01-13
+Fold 9/48 -- corte 2019-03-17
+Fold 10/48 -- corte 2019-05-19
+Fold 11/48 -- corte 2019-07-21
+Fold 12/48 -- corte 2019-09-22
+Fold 13/48 -- corte 2019-11-24
+Fold 14/48 -- corte 2020-01-26
+Fold 15/48 -- corte 2020-03-29
+Fold 16/48 -- corte 2020-05-31
+Fold 17/48 -- corte 2020-08-02
+Fold 18/48 -- corte 2020-10-04
+Fold 19/48 -- corte 2020-12-06
+Fold 20/48 -- corte 2021-02-07
+Fold 21/48 -- corte 2021-04-11
+Fold 22/48 -- corte 2021-06-13
+Fold 23/48 -- corte 2021-08-15
+Fold 24/48 -- corte 2021-10-17
+Fold 25/48 -- corte 2021-12-19
+Fold 26/48 -- corte 2022-02-20
+Fold 27/48 -- corte 2022-04-24
+Fold 28/48 -- corte 2022-06-26
+Fold 29/48 -- corte 2022-08-28
+Fold 30/48 -- corte 2022-10-30
+Fold 31/48 -- corte 2023-01-01
+Fold 32/48 -- corte 2023-03-05
+Fold 33/48 -- corte 2023-05-07
+Fold 34/48 -- corte 2023-07-09
+Fold 35/48 -- corte 2023-09-10
+Fold 36/48 -- corte 2023-11-12
+Fold 37/48 -- corte 2024-01-14
+Fold 38/48 -- corte 2024-03-17
+Fold 39/48 -- corte 2024-05-19
+Fold 40/48 -- corte 2024-07-21
+Fold 41/48 -- corte 2024-09-22
+Fold 42/48 -- corte 2024-11-24
+Fold 43/48 -- corte 2025-01-26
+Fold 44/48 -- corte 2025-03-30
+Fold 45/48 -- corte 2025-06-01
+Fold 46/48 -- corte 2025-08-03
+Fold 47/48 -- corte 2025-10-05
+Fold 48/48 -- corte 2025-12-07
+
+Guardado: backtest_motor_resultados.csv (1344 filas)
+
+==============================================================================
+RESUMEN — pregunta 1: ¿el pipeline le gana a los baselines fuera de muestra?
+==============================================================================
+                                                 folds  retorno_anualizado_prom  sortino_realizado_prom  max_drawdown_prom  n_efectivo_prom
+variante                         horizonte_dias                                                                                            
+equal_weight_universo_produccion 63                 48                   0.1082                  1.6967            -0.0678          16.5417
+                                 126                48                   0.1114                  1.0710            -0.1049          16.5417
+hrp_crudo_sin_purga              63                 48                   0.0286                 -1.0086            -0.0102           2.2181
+                                 126                48                   0.0292                 -1.3175            -0.0163           2.2181
+produccion_126_0.20              63                 48                   0.0651                  1.5342            -0.0434           7.7031
+                                 126                48                   0.0729                  0.8262            -0.0679           7.7031
+
+==============================================================================
+RESUMEN — pregunta 2: ¿126/0.20 es de los mejores parámetros del barrido?
+==============================================================================
+                                          folds  retorno_anualizado_prom  sortino_realizado_prom  max_drawdown_prom
+vida_media umbral_parcial horizonte_dias                                                                           
+63.0       0.1            63                 48                   0.0652                  1.5068            -0.0453
+                          126                48                   0.0718                  0.8201            -0.0721
+           0.2            63                 48                   0.0635                  1.5111            -0.0434
+                          126                48                   0.0740                  0.8291            -0.0677
+           0.3            63                 48                   0.0638                  1.5167            -0.0437
+                          126                48                   0.0720                  0.8177            -0.0686
+126.0      0.1            63                 48                   0.0579                  1.5024            -0.0450
+                          126                48                   0.0717                  0.8887            -0.0711
+           0.2            63                 48                   0.0651                  1.5342            -0.0434
+                          126                48                   0.0729                  0.8262            -0.0679
+           0.3            63                 48                   0.0635                  1.4328            -0.0442
+                          126                48                   0.0727                  0.7925            -0.0685
+189.0      0.1            63                 48                   0.0713                  1.6579            -0.0475
+                          126                48                   0.0843                  1.0267            -0.0744
+           0.2            63                 48                   0.0635                  1.5489            -0.0440
+                          126                48                   0.0724                  0.8211            -0.0684
+           0.3            63                 48                   0.0648                  1.5178            -0.0440
+                          126                48                   0.0757                  0.8591            -0.0682
+252.0      0.1            63                 48                   0.0727                  1.5681            -0.0481
+                          126                48                   0.0890                  1.0373            -0.0744
+           0.2            63                 48                   0.0653                  1.5267            -0.0441
+                          126                48                   0.0740                  0.8474            -0.0684
+           0.3            63                 48                   0.0677                  1.6071            -0.0442
+                          126                48                   0.0765                  0.8924            -0.0688
+
+Ranking por sortino_realizado_prom promedio (dentro de cada horizonte):
+
+  horizonte=63 dias:
+                           folds  retorno_anualizado_prom  sortino_realizado_prom  max_drawdown_prom
+vida_media umbral_parcial                                                                           
+189.0      0.1                48                   0.0713                  1.6579            -0.0475
+252.0      0.3                48                   0.0677                  1.6071            -0.0442
+           0.1                48                   0.0727                  1.5681            -0.0481
+189.0      0.2                48                   0.0635                  1.5489            -0.0440
+126.0      0.2                48                   0.0651                  1.5342            -0.0434
+252.0      0.2                48                   0.0653                  1.5267            -0.0441
+189.0      0.3                48                   0.0648                  1.5178            -0.0440
+63.0       0.3                48                   0.0638                  1.5167            -0.0437
+           0.2                48                   0.0635                  1.5111            -0.0434
+           0.1                48                   0.0652                  1.5068            -0.0453
+126.0      0.1                48                   0.0579                  1.5024            -0.0450
+           0.3                48                   0.0635                  1.4328            -0.0442
+
+  horizonte=126 dias:
+                           folds  retorno_anualizado_prom  sortino_realizado_prom  max_drawdown_prom
+vida_media umbral_parcial                                                                           
+252.0      0.1                48                   0.0890                  1.0373            -0.0744
+189.0      0.1                48                   0.0843                  1.0267            -0.0744
+252.0      0.3                48                   0.0765                  0.8924            -0.0688
+126.0      0.1                48                   0.0717                  0.8887            -0.0711
+189.0      0.3                48                   0.0757                  0.8591            -0.0682
+252.0      0.2                48                   0.0740                  0.8474            -0.0684
+63.0       0.2                48                   0.0740                  0.8291            -0.0677
+126.0      0.2                48                   0.0729                  0.8262            -0.0679
+189.0      0.2                48                   0.0724                  0.8211            -0.0684
+63.0       0.1                48                   0.0718                  0.8201            -0.0721
+           0.3                48                   0.0720                  0.8177            -0.0686
+126.0      0.3                48                   0.0727                  0.7925            -0.0685

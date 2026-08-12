@@ -252,6 +252,7 @@ def _construir(
     fraccion_purga: float = 0.30,
     umbral_parcial: float = 0.20,
     saltar_cobertura_sector: bool = False,
+    activos_ancla: list = None,
 ) -> dict:
     """Logica real. horizonte: int (años) o string."""
     perfil_norm = perfil.lower().strip()
@@ -282,6 +283,7 @@ def _construir(
         fraccion_purga=fraccion_purga,
         umbral_parcial=umbral_parcial,
         saltar_cobertura_sector=saltar_cobertura_sector,
+        activos_ancla=activos_ancla,
     )
 
     port = resultado["portafolio"]
@@ -328,8 +330,13 @@ def _construir(
 # Encapsulan TODO el pipeline para que las rutas de Flask no tengan que
 # saber nada del motor. Devuelven diccionarios listos para jsonify.
 
-def _cargar_todo_para_motor(tickers_fijos=None):
-    """Lee parquets y arma los inputs del motor. Un solo lugar."""
+def _cargar_todo_para_motor(tickers_fijos=None, activos_ancla=None):
+    """Lee parquets y arma los inputs del motor. Un solo lugar.
+
+    activos_ancla: al editar un portafolio existente, el universo se deja
+    COMPLETO (no se restringe como con tickers_fijos) -- solo se anclan esos
+    tickers mas abajo, en motor_seleccion.seleccionar_anclado().
+    """
     import numpy as np
     import pandas as pd
     import preparador_datos as prep
@@ -338,9 +345,12 @@ def _cargar_todo_para_motor(tickers_fijos=None):
     retornos = universo["retornos"]
     sector = universo["sector"]
 
-    retornos, sector, saltar_cobertura_sector = _restringir_universo(
-        retornos, sector, tickers_fijos
-    )
+    if activos_ancla:
+        saltar_cobertura_sector = False
+    else:
+        retornos, sector, saltar_cobertura_sector = _restringir_universo(
+            retornos, sector, tickers_fijos
+        )
 
     trm = pd.read_parquet("datos/macro/trm.parquet").sort_index()
     ret_trm = np.log(trm["TRM"] / trm["TRM"].shift(1)).dropna()
@@ -556,9 +566,18 @@ def _resumir_exclusiones(seleccion: dict, sector: dict) -> dict:
 
 
 def generar_propuesta_completa(perfil, horizonte, inversion, aporte_dca=0,
-                                frecuencia_meses=1, tickers_fijos=None):
-    """TODO el pipeline para /api/generar-propuesta. Devuelve dict listo."""
-    ins = _cargar_todo_para_motor(tickers_fijos)
+                                frecuencia_meses=1, tickers_fijos=None,
+                                activos_ancla=None):
+    """TODO el pipeline para /api/generar-propuesta. Devuelve dict listo.
+
+    activos_ancla: tickers que el usuario YA tiene y que se mantienen sin
+    importar el resultado de las purgas -- se usa para EDITAR un portafolio
+    existente (universo completo, con esos tickers protegidos), a
+    diferencia de tickers_fijos (restringe el universo a solo esos
+    tickers, para pedidos de tema/categoria concreta). No se combinan en
+    el uso normal.
+    """
+    ins = _cargar_todo_para_motor(tickers_fijos, activos_ancla)
 
     res = _construir(
         perfil=perfil, horizonte=horizonte,
@@ -567,6 +586,7 @@ def generar_propuesta_completa(perfil, horizonte, inversion, aporte_dca=0,
         cdt_nominal=ins["cdt_nominal"], inflacion_col_anual=ins["inf_col_anual"],
         capital=inversion,
         saltar_cobertura_sector=ins["saltar_cobertura_sector"],
+        activos_ancla=activos_ancla,
     )
 
     pesos = res["pesos"]

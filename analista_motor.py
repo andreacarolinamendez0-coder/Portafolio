@@ -48,12 +48,19 @@ def construir_portafolio(
     umbral_parcial: float = 0.20,
     solo_negativos: bool = False,
     saltar_cobertura_sector: bool = False,
+    activos_ancla: list = None,
 ) -> dict:
     """Construye el portafolio RIESGOSO. Igual para todos los perfiles.
 
     mar_anual: por defecto 4.5% (tasa libre USD nominal, que es la moneda de
         los retornos). Con MAR=0 el motor mete SHY de primero -- y la seguridad
         es trabajo del alfa, no del sobre riesgoso.
+
+    activos_ancla: tickers que el usuario YA tiene (se esta editando un
+        portafolio existente) -- nunca se purgan, y el resto del universo
+        COMPLETO compite libremente por los cupos que sobran. No se combina
+        con fraccion_purga/umbral_parcial/solo_negativos/
+        saltar_cobertura_sector -- ver motor_seleccion.seleccionar_anclado().
     """
     # --- Covarianza ponderada al reciente ---
     cov = cv.covarianza_robusta(retornos, vida_media=vida_media)
@@ -61,17 +68,28 @@ def construir_portafolio(
     # --- Correlacion parcial sobre esa covarianza ---
     parcial = rr.matriz_correlacion_parcial(cov["covarianza"])
 
-    # --- Seleccion: Sortino -> parcial -> sector ---
-    sel = ms.seleccionar(
-        retornos=retornos,
-        corr_parcial=parcial,
-        sector=sector,
-        mar_anual=mar_anual,
-        fraccion_purga=fraccion_purga,
-        umbral_parcial=umbral_parcial,
-        solo_negativos=solo_negativos,
-        saltar_cobertura_sector=saltar_cobertura_sector,
-    )
+    # --- Seleccion: Sortino -> parcial -> sector (o anclada, si se edita) ---
+    if activos_ancla:
+        sel = ms.seleccionar_anclado(
+            retornos=retornos,
+            corr_parcial=parcial,
+            sector=sector,
+            activos_ancla=activos_ancla,
+            mar_anual=mar_anual,
+            fraccion_purga=fraccion_purga,
+            umbral_parcial=umbral_parcial,
+        )
+    else:
+        sel = ms.seleccionar(
+            retornos=retornos,
+            corr_parcial=parcial,
+            sector=sector,
+            mar_anual=mar_anual,
+            fraccion_purga=fraccion_purga,
+            umbral_parcial=umbral_parcial,
+            solo_negativos=solo_negativos,
+            saltar_cobertura_sector=saltar_cobertura_sector,
+        )
     activos = sel["seleccion"]
 
     # --- HRP sobre la misma covarianza, restringida a los seleccionados ---

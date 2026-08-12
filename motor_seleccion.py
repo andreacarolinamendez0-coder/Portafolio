@@ -186,6 +186,7 @@ def purgar_redundantes(
     corr_parcial: pd.DataFrame,
     metrica: pd.Series,
     umbral: float = 0.20,
+    protegidos: set = None,
 ) -> dict:
     """De cada par con correlacion PARCIAL alta, elimina el de peor metrica.
 
@@ -198,7 +199,14 @@ def purgar_redundantes(
 
     Procesa los pares de mayor a menor parcial, y salta los que ya fueron
     eliminados (para no botar los dos miembros de un trio).
+
+    protegidos: tickers que nunca se eliminan en este paso (son posiciones
+        que el usuario YA tiene, no candidatos nuevos en evaluacion). Un par
+        donde ambos son protegidos se ignora por completo -- no se
+        re-evaluan entre si -- y en un par protegido-vs-nuevo el protegido
+        nunca sale, sin importar la metrica.
     """
+    protegidos = set(protegidos) if protegidos else set()
     vivos = list(candidatos)
     eliminados = []
 
@@ -209,16 +217,22 @@ def purgar_redundantes(
         (vivos[i], vivos[j], float(sub.values[i, j]))
         for i, j in zip(*iu)
         if sub.values[i, j] > umbral
+        and not (vivos[i] in protegidos and vivos[j] in protegidos)
     ]
     pares.sort(key=lambda x: -x[2])
 
     for a, b, pc in pares:
         if a not in vivos or b not in vivos:
             continue  # uno ya salio en un par anterior
-        ma = metrica.get(a, -np.inf)
-        mb = metrica.get(b, -np.inf)
-        fuera = a if ma < mb else b
-        queda = b if fuera == a else a
+        if a in protegidos:
+            fuera, queda = b, a
+        elif b in protegidos:
+            fuera, queda = a, b
+        else:
+            ma = metrica.get(a, -np.inf)
+            mb = metrica.get(b, -np.inf)
+            fuera = a if ma < mb else b
+            queda = b if fuera == a else a
         vivos.remove(fuera)
         eliminados.append(
             {"eliminado": fuera, "por": queda, "parcial": round(pc, 3),
@@ -237,7 +251,8 @@ def purgar_redundantes(
 # PASO 3 — COBERTURA POR SECTOR
 # ============================================================
 
-def cobertura_por_sector(candidatos: list, metrica: pd.Series, sector: dict) -> dict:
+def cobertura_por_sector(candidatos: list, metrica: pd.Series, sector: dict,
+                          protegidos: list = None) -> dict:
     """Toma el mejor activo de CADA sector segun `metrica`.
 
     Este paso es el que define la composicion, y es el que evita que HRP se
@@ -254,13 +269,33 @@ def cobertura_por_sector(candidatos: list, metrica: pd.Series, sector: dict) -> 
     la metrica (ruidosa) decidiria cuales 10 sectores MUEREN -- y esa si es una
     pregunta fina que mu no puede responder. Eso explicaba la inestabilidad de
     0.64 entre ventanas que medimos. Dejando un cupo por sector, ninguno muere.
+
+    protegidos: tickers que reclaman su sector ANTES del recorrido normal por
+        metrica y SIEMPRE entran a la seleccion (son posiciones que el
+        usuario YA tiene, no candidatos nuevos) -- un candidato nuevo con
+        mejor metrica no le puede quitar el cupo de sector a una posicion
+        actual. Si dos protegidos comparten sector, ambos entran igual: el
+        limite de "uno por sector" solo aplica a los candidatos nuevos que
+        compiten por el resto de los cupos.
     """
+    candidatos_set = set(candidatos)
+    protegidos = [a for a in (protegidos or []) if a in candidatos_set]
+
     seleccion = []
     vistos = set()
     detalle = []
 
+    for activo in protegidos:
+        s = sector.get(activo, "Sin clasificar")
+        vistos.add(s)
+        seleccion.append(activo)
+        detalle.append({"sector": s, "elegido": activo,
+                        "metrica": round(float(metrica.get(activo, np.nan)), 3)})
+
     # recorrer en orden de metrica descendente toma el mejor de cada sector
-    orden = [a for a in metrica.index if a in set(candidatos)]
+    # (entre los candidatos nuevos -- los sectores ya reclamados por un
+    # protegido se saltan, aunque el candidato nuevo tenga mejor metrica)
+    orden = [a for a in metrica.index if a in candidatos_set and a not in protegidos]
     for activo in orden:
         s = sector.get(activo, "Sin clasificar")
         if s not in vistos:
@@ -363,6 +398,67 @@ def seleccionar(
         "embudo": {
             "universo": len(retornos.columns),
             "tras_purga_sortino": len(p1["sobreviven"]),
+            "tras_purga_parcial": len(p2["sobreviven"]),
+            "final": len(final),
+        },
+        "parcial_maxima_seleccion": float(np.abs(sub).max()) if len(final) > 1 else 0.0,
+    }
+
+
+# ============================================================
+# ORQUESTADOR — edicion de un portafolio existente (anclado)
+# ============================================================
+
+def seleccionar_anclado(
+    retornos: pd.DataFrame,
+    corr_parcial: pd.DataFrame,
+    sector: dict,
+    activos_ancla: list,
+    mar_anual: float = 0.0,
+    fraccion_purga: float = 0.30,
+    umbral_parcial: float = 0.20,
+) -> dict:
+    """Como seleccionar(), pero los tickers en `activos_ancla` NUNCA se
+    purgan en ningun paso: son posiciones que el usuario YA tiene (se esta
+    EDITANDO un portafolio existente, no proponiendo uno desde cero). El
+    resto del universo se evalua normalmente y compite por los sectores que
+    ningun ancla ya cubre.
+
+    A diferencia de seleccionar(), siempre corre sobre el universo COMPLETO
+    que recibe -- no maneja el caso pocos_sectores/saltar_cobertura_sector,
+    que es exclusivo del flujo de tema/categoria restringida (tickers_fijos
+    en adaptador_analista.py).
+    """
+    ancla = [a for a in activos_ancla if a in retornos.columns]
+
+    # --- Paso 1: purga por Sortino (historico completo); el ancla se
+    # reincorpora despues sin importar en que percentil haya caido ---
+    p1 = purgar_peores(retornos, fraccion_purga, mar_anual)
+    sortino = p1["sortino"]
+    sobreviven_1 = list(dict.fromkeys(p1["sobreviven"] + ancla))
+
+    # --- Paso 2: purga por redundancia (parcial); el ancla nunca pierde ---
+    p2 = purgar_redundantes(sobreviven_1, corr_parcial, sortino, umbral_parcial,
+                             protegidos=ancla)
+
+    # --- Paso 3: cobertura por sector; el ancla reclama su sector primero ---
+    p3 = cobertura_por_sector(p2["sobreviven"], sortino, sector, protegidos=ancla)
+    final = p3["seleccion"]
+
+    sub = corr_parcial.loc[final, final].to_numpy(copy=True)
+    np.fill_diagonal(sub, 0.0)
+
+    return {
+        "seleccion": final,
+        "sortino": sortino,
+        "sector_concentrado": False,
+        "activos_ancla": ancla,
+        "paso1_purga_sortino": p1,
+        "paso2_purga_parcial": p2,
+        "paso3_cobertura_sector": p3,
+        "embudo": {
+            "universo": len(retornos.columns),
+            "tras_purga_sortino": len(sobreviven_1),
             "tras_purga_parcial": len(p2["sobreviven"]),
             "final": len(final),
         },
