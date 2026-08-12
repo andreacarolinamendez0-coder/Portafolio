@@ -276,7 +276,7 @@ export default function MonitorPage() {
 
     <PageIntro
       archivo={archivo}
-      texto="Precios en tiempo real de tus activos con señales técnicas (RSI, medias móviles) para ayudarte a decidir cuándo entrar o salir."
+      texto="Precios en tiempo real de tus activos con señales técnicas (RSI, medias móviles) para ayudarte a decidir cuándo entrar o salir. Recuerda, es una sugerencia basada en datos históricos y no constituye asesoramiento financiero."
     />
 
       {/* Barra de estado en vivo */}

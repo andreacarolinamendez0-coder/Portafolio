@@ -66,7 +66,7 @@ export default function BotPage() {
 
        <PageIntro
                        archivo={archivo}
-                       texto="Este es el chat con Atom. Pregúntale sobre tu portafolio, los mercados o cualquier estrategia de inversión."
+                       texto="Este es el chat con Atom. Pregúntale sobre tu portafolio, los mercados o cualquier estrategia de inversión. Recuerda que Atom es un asistente virtual y no constituye asesoramiento financiero. Sus respuestas se basan en datos históricos y no garantizan resultados futuros."
                      />
 
       {/* Mensajes */}

@@ -138,7 +138,7 @@ export default function AnalistaPage() {
         <h2 style={{ fontSize: "1.4rem", margin: "16px 0 24px" }}>Analista — {data.portafolio.nombre}</h2>
          <PageIntro
                archivo={archivo}
-               texto="Atom estudia tu perfil y arma una propuesta de portafolio. Puedes simular escenarios y ajustar los pesos antes de aplicarla."
+               texto="Atom estudia tu perfil y arma una propuesta de portafolio. Puedes simular escenarios y ajustar los pesos antes de aplicarla. Recuerda que Atom es un asistente virtual y no constituye asesoramiento financiero. Sus respuestas se basan en datos históricos y no garantizan resultados futuros."
              /> 
         {/* Chat */}
         <GlassPanel style={{ padding: 0, overflow: "hidden" }}>
