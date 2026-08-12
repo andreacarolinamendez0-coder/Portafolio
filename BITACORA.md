@@ -404,3 +404,151 @@ entrada nueva se agrega al final, las anteriores no se modifican.
   pixel-perfecta en otra sesión.
 
 ---
+
+## [2026-08-11] PROBLEMA CRÍTICO ABIERTO — desalineación entre el chat del Analista (IA) y la propuesta cuantitativa (motor)
+
+**Estado: SIN DIAGNOSTICAR, SIN CORREGIR.** Esta entrada solo deja constancia
+inmediata del problema tal como lo reportó Andrea, a su pedido explícito
+("quiero dejarlo registrado en este momento para que empecemos a
+solucionarlo fuertemente"). No es un cierre de trabajo, es el registro de
+apertura de un problema.
+
+**Qué se reportó:**
+- Andrea reportó que en el chat del Analista, Claude conversa de forma
+  contextualizada sobre el portafolio y el mercado, describe/sugiere una
+  acción concreta (ej. "voy a incluir MSFT al 15% junto con tus otros
+  activos"), pero cuando se genera la propuesta/proyección numérica real
+  (salida del motor cuantitativo — HRP vía `ponderador.py`, purga de
+  `motor_seleccion.py`, `red_riesgo.py`), el resultado no coincide con lo
+  que la IA acababa de decir.
+- Ejemplo real compartido por Andrea (cita textual de la propia IA
+  reconociendo la incoherencia después del hecho, en vez de evitarla antes):
+  "Tienes toda la razón en cuestionar eso. Te debo una explicación clara: Te
+  sugerí incluir MSFT al 15% junto con tus otros activos, pero el
+  optimizador (el motor que calcula la mejor combinación basándose en datos
+  históricos, correlaciones y tu perfil de riesgo) determinó que para tu
+  perfil moderado, la composición más eficiente con menor volatilidad es
+  concentrarse en COST y VTI únicamente. ¿Por qué eliminó JNJ y MSFT?
+  Probablemente porque: VTI ya contiene Microsoft (es el 3er componente más
+  grande del ETF); La correlación entre COST, JNJ y MSFT no mejoró el
+  balance riesgo-retorno; Para volatilidad baja en 10 años, prefirió
+  simplificar. Aquí está el dilema: puedo forzar que incluya los 4 activos
+  (COST, JNJ, VTI, MSFT) como te sugerí, pero el optimizador ajustará los
+  pesos según lo que considera óptimo matemáticamente, que puede diferir de
+  mi sugerencia inicial. ¿Prefieres que fuerce la inclusión de los 4
+  activos, o quieres revisar primero esta propuesta simplificada (COST +
+  VTI)?"
+
+**Por qué es grave (interpretación de Andrea):**
+- Rompe la confianza del usuario: la IA "promete" algo en la conversación y
+  el número real no coincide, incluso cuando la propia IA reconoce la
+  incoherencia después del hecho en vez de evitarla desde el principio.
+- Sugiere que el chat (razonamiento en lenguaje natural de Claude) y el
+  motor cuantitativo determinístico (`motor_seleccion.py`,
+  `ponderador.py`/HRP, `red_riesgo.py`) están operando como dos sistemas que
+  no se coordinan entre sí de forma confiable antes de hablarle al usuario.
+
+**Pregunta abierta de Andrea, sin resolver:**
+- "¿Cómo podemos hacer fix? ¿A quién deberíamos ajustar — a la IA o al
+  analista (motor cuantitativo)? Siento que el analista puede ser un poco
+  más ajustado y rígido por toda la matemática detrás, sin embargo me da
+  miedo que lo flexible de la IA sea muy fantasiosa y no tenga mucho rigor."
+
+**Resultado:**
+- Ninguno todavía. No se ha diagnosticado la causa raíz ni se ha tocado
+  código.
+
+**Pendiente de decisión / próximos pasos:**
+- Se lanzó en paralelo (en la misma sesión en que se reportó este problema)
+  una investigación con el agente mano-derecha sobre cómo interactúan
+  realmente el endpoint de chat del Analista y el endpoint que genera la
+  propuesta cuantitativa, para entender la causa raíz antes de proponer
+  cualquier fix.
+- Sigue sin responder la pregunta central de Andrea: si el ajuste debe ir
+  del lado del chat (IA, `adaptador_analista.py`/prompt) o del lado del
+  motor cuantitativo (`motor_seleccion.py`, `ponderador.py`, `red_riesgo.py`),
+  o si se requiere un mecanismo de coordinación entre ambos que hoy no
+  existe. Retomar este punto en cuanto la investigación de causa raíz tenga
+  resultados.
+
+---
+
+## [2026-08-11] Cierre del problema crítico — desalineación entre el chat del Analista y el motor cuantitativo
+
+**Qué se hizo:**
+- Se cerró el problema crítico abierto en la entrada anterior de este mismo
+  día: el chat del Analista (Claude) le prometía al usuario tickers/pesos en
+  lenguaje natural sin haber consultado nunca al motor cuantitativo real —
+  el número lo inventaba el modelo — y cuando la propuesta final (vía
+  `/api/generar-propuesta`) no coincidía, la IA solo podía especular por qué
+  ("probablemente porque...") porque tampoco tenía acceso a los motivos
+  reales de exclusión del motor.
+- Se diseñó en plan mode y se implementó el fix en `dashboard.py` y
+  `adaptador_analista.py`:
+  1. Nueva función `_tool_simular_propuesta(input_)` en `dashboard.py` —
+     envuelve `generar_propuesta_completa()` y devuelve un resumen ligero
+     (pesos reales, candidatos excluidos, motivos de exclusión, alfa,
+     métricas, advertencias) para que el modelo lo consulte antes de hablar
+     de cifras.
+  2. Nuevo tool schema `SIMULAR_PROPUESTA_TOOL` + dispatcher `_ejecutar_tool`.
+  3. `anthropic_chat()` reestructurado a un loop con `MAX_TOOL_ROUNDS=3` que
+     soporta tool use nativo del SDK de Anthropic (`tools=`,
+     `tool_executor=`).
+  4. `_sistema_analista()` ahora instruye explícitamente al modelo: nunca
+     decir un ticker/porcentaje concreto sin haber llamado antes a la
+     herramienta, usarla también para preguntas hipotéticas, y usar los
+     motivos reales de exclusión en vez de especular.
+  5. En `adaptador_analista.py`, `generar_propuesta_completa()` ahora también
+     devuelve `motivos_exclusion` (nueva función `_resumir_exclusiones`), que
+     rastrea por qué cada ticker candidato fue descartado en cada paso del
+     motor (purga Sortino, purga por correlación parcial, cobertura
+     sectorial) — el dato ya existía calculado internamente en
+     `res["seleccion"]`, solo faltaba exponerlo.
+- El tester encontró y el programador cerró dos huecos antes de la prueba
+  real: (a) tickers candidatos que el motor no reconoce (sin histórico) no
+  tenían entrada en `motivos_exclusion` — se agregó un fallback explícito
+  `"sin_datos"` para cualquier candidato no cubierto por los pasos 1-3; (b)
+  el mensaje de exclusión por "sector concentrado" asumía incorrectamente un
+  cupo de 1 activo por sector — se corrigió para calcular el cupo real con
+  `MAX_ACTIVOS_SECTOR_CONCENTRADO` (`motor_seleccion.py`) menos los activos
+  ya garantizados.
+- Andrea autorizó explícitamente una prueba real end-to-end con consumo real
+  de créditos de la API de Anthropic: 3 escenarios contra el portafolio real
+  de prueba.
+  1. Usuario pide portafolio moderado mencionando MSFT explícitamente →
+     Claude llamó la herramienta, el primer resultado fue muy concentrado
+     (100% GOOGL), y por iniciativa propia volvió a llamar la herramienta con
+     una lista de candidatos más amplia, obteniendo un resultado
+     diversificado real (SCHD 64.5%, WMT 17%, GOOGL 10.2%, LLY 8.2%).
+     Explicó correctamente por qué MSFT quedó fuera (Sortino de GOOGL mejor
+     dentro del sector tecnología) usando datos reales de
+     `motivos_exclusion`, sin prometer nada que no coincidiera con el
+     resultado real.
+  2. Pregunta hipotética ("¿sobreviviría NVDA en la selección?") antes de
+     pedir la propuesta final → Claude llamó la herramienta una vez, citó
+     valores reales de Sortino (0.48 META, 0.65 TSLA) y explicó la cobertura
+     sectorial que excluyó a MSFT/GOOGL/AAPL, además advirtió proactivamente
+     sobre el riesgo de concentración del resultado (100% NVDA).
+  3. Ticker inventado ("ZZZINVENTADO") → Claude reconoció por su cuenta que
+     no era un ticker real y pidió aclaración sin necesidad de invocar la
+     herramienta (comportamiento razonable, pero significa que el fallback
+     "sin_datos" no se puso a prueba en este escenario puntual — queda como
+     red de seguridad para cuando un ticker real pero no descargado
+     localmente se cuele).
+
+**Resultado:**
+- Los 3 escenarios confirman que el modelo ahora consulta al motor real
+  antes de prometer cifras concretas y explica con hechos verificables en
+  vez de especular — el bug original (promesa verbal vs. propuesta final
+  real distinta, sin explicación fundamentada) queda resuelto.
+- Archivos tocados en esta sesión: `dashboard.py`, `adaptador_analista.py`.
+  Los cambios están verificados pero AÚN NO COMMITEADOS.
+
+**Pendiente de decisión / próximos pasos:**
+- Commitear los cambios de este fix (los 2 huecos cerrados + la
+  implementación de tool calling en `dashboard.py`/`adaptador_analista.py`).
+- Sigue pendiente decidir si se hace push del commit anterior de la sesión
+  del 2026-08-11 (rediseño de tarjetas del monitor + fixes de
+  Telegram/MACD/saludo automático).
+
+---

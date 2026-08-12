@@ -103,9 +103,11 @@ export function PropuestaEditor({ propuesta, tieneInv, onAplicar, aplicando, msg
       if (d.es_nuevo) {
         setTickerStatus(`${d.nombre} encontrado ($${d.precio}). Descargando histórico...`);
         // Polling hasta que el histórico esté listo
-        const listo = await esperarTicker(tk);
-        if (!listo) {
-          setTickerStatus(`${tk} agregado, pero su histórico aún se está descargando. Las proyecciones lo incluirán luego.`);
+        const resultado = await esperarTicker(tk);
+        if (resultado === "timeout") {
+          setTickerStatus(`${tk} agregado, pero su histórico aún se está descargando. El motor lo excluirá del cálculo hasta que esté disponible.`);
+        } else if (resultado === "error") {
+          setTickerStatus(`No se pudo descargar el histórico de ${tk}. Queda en la lista, pero el motor lo excluirá del cálculo hasta que haya datos válidos.`);
         } else {
           setTickerStatus(`${d.nombre} listo y agregado.`);
         }
@@ -122,16 +124,16 @@ export function PropuestaEditor({ propuesta, tieneInv, onAplicar, aplicando, msg
     }
   }
 
-  async function esperarTicker(tk: string): Promise<boolean> {
+  async function esperarTicker(tk: string): Promise<"ok" | "error" | "timeout"> {
     for (let i = 0; i < 20; i++) {  // hasta ~40s
       await new Promise(res => setTimeout(res, 2000));
       try {
         const r = await fetch(`/api/ticker-listo/${tk}`, { credentials: "include" });
         const d = await r.json();
-        if (d.listo) return true;
+        if (d.listo) return d.exito ? "ok" : "error";
       } catch { /* sigue intentando */ }
     }
-    return false;
+    return "timeout";
   }
 
   async function recalcular() {
@@ -180,6 +182,12 @@ export function PropuestaEditor({ propuesta, tieneInv, onAplicar, aplicando, msg
       </p>
       <p style={{ color: "var(--text-3)", fontSize: 12, margin: "0 0 16px" }}>
         Edita los pesos, quita o agrega activos, y recalcula las proyecciones antes de aplicar.
+      </p>
+
+      <p style={{ color: "#ff9f0a", fontSize: 11.5, lineHeight: 1.5, margin: "0 0 16px", padding: "9px 12px", background: "rgba(255,159,10,0.08)", border: "1px solid rgba(255,159,10,0.2)", borderRadius: 8 }}>
+        Aviso: los pesos que edites aquí se calculan tal cual los dejes — no vuelven a pasar por el
+        motor de selección (Sortino, correlación, cobertura sectorial) ni por HRP. Si quitas o
+        cambias algo, la combinación ya no es necesariamente la que el motor recomendaría.
       </p>
 
       {/* Lista de activos editable */}

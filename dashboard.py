@@ -151,17 +151,108 @@ def _request_meta():
     return ip, dispositivo
 
 
-def anthropic_chat(messages, system="", max_tokens=300, temperature=0.5):
+MAX_TOOL_ROUNDS = 3
+
+
+def anthropic_chat(messages, system="", max_tokens=300, temperature=0.5, tools=None, tool_executor=None):
+    """Llama al modelo. Si `tools`+`tool_executor` se pasan, soporta un loop
+    corto de tool use: el modelo puede pedir ejecutar una tool, se le devuelve
+    el resultado, y puede seguir iterando hasta MAX_TOOL_ROUNDS antes de dar
+    su respuesta final en texto.
+
+    NOTA: `temperature` nunca se pasó a client.messages.create() en la version
+    original de esta funcion (no se sabe si fue deliberado). Se preserva ese
+    mismo comportamiento aqui: no se agrega a kwargs, para no introducir un
+    cambio de comportamiento no solicitado.
+    """
     client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
-    kwargs = {
-        "model": "claude-sonnet-4-5",
-        "max_tokens": max_tokens,
-        "messages": messages,
-    }
-    if system:
-        kwargs["system"] = system
-    resp = client.messages.create(**kwargs)
-    return resp.content[0].text
+    msgs = list(messages)
+    resp = None
+    for _ in range(MAX_TOOL_ROUNDS):
+        kwargs = {
+            "model": "claude-sonnet-4-5",
+            "max_tokens": max_tokens,
+            "messages": msgs,
+        }
+        if system:
+            kwargs["system"] = system
+        if tools:
+            kwargs["tools"] = tools
+        resp = client.messages.create(**kwargs)
+        if resp.stop_reason != "tool_use" or not tool_executor:
+            return "".join(b.text for b in resp.content if b.type == "text")
+
+        msgs.append({"role": "assistant", "content": resp.content})
+        tool_results = []
+        for block in resp.content:
+            if block.type == "tool_use":
+                resultado = tool_executor(block.name, block.input)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": json.dumps(resultado, ensure_ascii=False, default=str),
+                })
+        msgs.append({"role": "user", "content": tool_results})
+
+    # Se agotaron las rondas sin respuesta de texto final - fallback.
+    if resp is not None:
+        texto = "".join(b.text for b in resp.content if b.type == "text")
+        if texto:
+            return texto
+    return "No pude completar la consulta al motor a tiempo, ¿puedes reformular tu pregunta?"
+
+
+def _tool_simular_propuesta(input_):
+    """Ejecuta el motor cuantitativo real (adaptador_analista.generar_propuesta_completa)
+    y devuelve un resumen LIGERO pensado para que el modelo lo lea antes de
+    mencionar tickers/pesos concretos al usuario. Nunca lanza excepcion: si
+    algo falla, devuelve un dict de error legible por el modelo.
+    """
+    try:
+        from adaptador_analista import generar_propuesta_completa
+
+        resultado = generar_propuesta_completa(
+            perfil=input_.get("perfil"),
+            horizonte=input_.get("horizonte", 10),
+            inversion=input_.get("inversion"),
+            aporte_dca=input_.get("aporte_dca", 0),
+            frecuencia_meses=input_.get("frecuencia_meses", 1),
+            tickers_fijos=input_.get("tickers_candidatos"),
+        )
+
+        pesos = resultado.get("pesos") or {}
+        pesos_reales = {k: round(float(v), 3) for k, v in pesos.items()}
+
+        candidatos = input_.get("tickers_candidatos") or []
+        excluidos = [t for t in candidatos if t not in pesos_reales]
+
+        motivos_todos = resultado.get("motivos_exclusion") or {}
+        motivos_exclusion = {t: motivos_todos[t] for t in excluidos if t in motivos_todos}
+        # Candidatos excluidos que ni siquiera aparecen en motivos_todos nunca
+        # entraron al universo del motor (sin historico descargado, o ticker
+        # invalido/inventado por el usuario) -- no fueron purgados por ningun
+        # paso de seleccion, asi que el modelo no tendria ningun hecho que dar.
+        for t in excluidos:
+            if t not in motivos_exclusion:
+                motivos_exclusion[t] = (
+                    f"No hay historico de precios descargado para '{t}' todavia: nunca "
+                    f"entro al universo evaluado por el motor (no fue purgado por ningun "
+                    f"paso de seleccion, simplemente no hay datos para evaluarlo)."
+                )
+
+        return {
+            "pesos_reales": pesos_reales,
+            "tickers_candidatos_excluidos": excluidos,
+            "motivos_exclusion": motivos_exclusion,
+            "alfa": resultado.get("alfa"),
+            "metricas": resultado.get("datos", {}).get("metricas"),
+            "advertencia_cdt": resultado.get("advertencia_cdt") or None,
+            "advertencia_concentracion": resultado.get("advertencia_concentracion"),
+        }
+    except Exception as e:
+        return {
+            "error": f"No se pudo simular la propuesta con el motor real: {e}",
+        }
 
 
 def cargar_macro():
@@ -350,6 +441,48 @@ def calcular_tiempo_real(portafolio):
     }
 
 
+SIMULAR_PROPUESTA_TOOL = {
+    "name": "simular_propuesta",
+    "description": (
+        "Corre el motor cuantitativo real (purga por Sortino, correlación, "
+        "cobertura sectorial, HRP) sobre un conjunto de tickers candidatos y "
+        "devuelve la composición y pesos REALES que resultarían. Úsala SIEMPRE "
+        "antes de mencionar un ticker o porcentaje concreto al usuario — nunca "
+        "inventes cifras de memoria."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "perfil": {
+                "type": "string",
+                "enum": ["conservador", "moderado", "agresivo"],
+            },
+            "inversion": {"type": "number"},
+            "aporte_dca": {"type": "number"},
+            "frecuencia_meses": {"type": "integer"},
+            "horizonte": {"type": "integer"},
+            "tickers_candidatos": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Tickers que el usuario está considerando incluir. Si se "
+                    "omite, el motor usa su universo completo."
+                ),
+            },
+        },
+        "required": ["perfil", "inversion"],
+    },
+}
+
+
+def _ejecutar_tool(nombre, input_):
+    """Dispatch generico de tools para anthropic_chat. Hoy solo hay una tool,
+    pero se deja la forma generica por si se agregan mas despues."""
+    if nombre == "simular_propuesta":
+        return _tool_simular_propuesta(input_)
+    return {"error": f"Tool desconocida: {nombre}"}
+
+
 def _sistema_analista(portafolio, composicion, tiene_inv):
     """Construye el system prompt del analista. Único punto de verdad."""
     from recolector import ACTIVOS_POR_SECTOR
@@ -436,6 +569,17 @@ def _sistema_analista(portafolio, composicion, tiene_inv):
         f"toma la composición real del último mensaje 'Propuesta generada' del historial como base, "
         f"NUNCA inventes tickers que no estén ahí. Para agregar un nuevo activo, redistribuye los pesos "
         f"proporcionalmente y emite el JSON con la nueva lista, el optimizador refinará los pesos finales.\n\n"
+        f"HERRAMIENTA simular_propuesta — USO OBLIGATORIO: nunca menciones un ticker o un porcentaje "
+        f"final de una propuesta (en texto o en el JSON) sin haber llamado antes a la herramienta "
+        f"simular_propuesta y usar EXACTAMENTE lo que devolvió esa llamada (pesos_reales, alfa, métricas). "
+        f"No los inventes ni los redondees de memoria. Úsala también para responder preguntas hipotéticas "
+        f"del usuario durante la conversación (ej. '¿y si agrego MSFT?', '¿qué pasa si quito XLK?'), no solo "
+        f"al final. Si simular_propuesta excluyó alguno de los tickers candidatos, revisa 'motivos_exclusion' "
+        f"en su respuesta y explícaselo al usuario con ese hecho concreto, en vez de especular. "
+        f'El JSON de ejemplo embebido arriba en este prompt (con pesos como "0.265", "0.212") es SOLO un '
+        f"ejemplo de FORMATO — no son cifras reales, nunca las repitas ni las imites como si lo fueran; el "
+        f'campo "activos" que finalmente emitas debe reflejar (o ser compatible con) lo que devolvió '
+        f"simular_propuesta, no el ejemplo.\n\n"
     )
 
 
@@ -538,7 +682,12 @@ def api_analista_chat(archivo):
         sistema = _sistema_analista(portafolio, composicion, tiene_inv)
 
         resp = anthropic_chat(
-            data.get("historial", []), system=sistema, max_tokens=600, temperature=0.5
+            data.get("historial", []),
+            system=sistema,
+            max_tokens=600,
+            temperature=0.5,
+            tools=[SIMULAR_PROPUESTA_TOOL],
+            tool_executor=_ejecutar_tool,
         )
         return jsonify({"respuesta": resp})
     except Exception as e:
@@ -1166,6 +1315,12 @@ def api_verificar_ticker(ticker):
         if es_nuevo:
 
             def descargar_historico(tk):
+                listo_path = os.path.join(DATOS_DIR, f"ticker_listo_{tk}.flag")
+
+                def _marcar(estado):
+                    with open(listo_path, "w") as f:
+                        f.write(estado)
+
                 try:
                     hoy2 = datetime.now()
                     inicio = (hoy2 - timedelta(days=365 * 10)).strftime("%Y-%m-%d")
@@ -1178,6 +1333,8 @@ def api_verificar_ticker(ticker):
                         progress=False,
                     )
                     if df2.empty:
+                        print(f"❌ Descarga vacía para {tk}")
+                        _marcar("error")
                         return
                     if hasattr(df2.columns, "get_level_values"):
                         df2.columns = df2.columns.get_level_values(0)
@@ -1190,14 +1347,10 @@ def api_verificar_ticker(ticker):
                             print(f"✅ Histórico de {tk} agregado")
                     else:
                         close.to_parquet(precios_path)
-                    # Marcar como listo
-                    listo_path = os.path.join(DATOS_DIR, f"ticker_listo_{tk}.flag")
-                    open(listo_path, "w").close()
+                    _marcar("ok")
                 except Exception as e:
                     print(f"❌ Error descargando histórico de {tk}: {e}")
-                    # Marcar como fallido
-                    listo_path = os.path.join(DATOS_DIR, f"ticker_listo_{tk}.flag")
-                    open(listo_path, "w").close()
+                    _marcar("error")
 
             threading.Thread(
                 target=descargar_historico, args=(ticker,), daemon=True
@@ -1220,17 +1373,23 @@ def api_ticker_listo(ticker):
 
         cols = pd.read_parquet(precios_path).columns.tolist()
         if ticker in cols:
-            return jsonify({"listo": True})
+            return jsonify({"listo": True, "exito": True})
     # Verificar flag
     flag = os.path.join(DATOS_DIR, f"ticker_listo_{ticker}.flag")
     listo = os.path.exists(flag)
+    exito = True
     if listo:
+        try:
+            with open(flag, "r") as f:
+                exito = f.read().strip() == "ok"
+        except Exception as e:
+            print(f"Could not read flag file: {e}")
         # Limpiar flag
         try:
             os.remove(flag)
         except Exception as e:
             print(f"Could not remove flag file: {e}")
-    return jsonify({"listo": listo})
+    return jsonify({"listo": listo, "exito": exito})
 
 
 @app.route("/api/profile", methods=["GET"])

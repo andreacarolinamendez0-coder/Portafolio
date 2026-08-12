@@ -45,6 +45,7 @@ import pandas as pd
 
 import analista_motor as am
 import perfilador as pf
+from motor_seleccion import MAX_ACTIVOS_SECTOR_CONCENTRADO
 
 PERDIDA_POR_PERFIL = {
     "conservador": 0.07,
@@ -477,6 +478,83 @@ def _construir_datos_reporte(ret_mens, pesos_dict, inversion, aporte, freq,
     return datos, reporte_txt
 
 
+def _resumir_exclusiones(seleccion: dict, sector: dict) -> dict:
+    """Resume, ticker por ticker, por que un activo NO sobrevivio la seleccion.
+
+    Lee la trazabilidad que ya produce motor_seleccion.seleccionar() (pasos 1 y
+    2 ya traen el detalle exacto por activo). El paso 3 (cobertura por sector)
+    no lista perdedores explicitamente, asi que se deriva comparando los
+    sobrevivientes del paso 2 contra la seleccion final, usando el mapeo
+    sector->ganador que si trae el detalle del paso 3.
+
+    Pensado para que el chat del Analista pueda explicar exclusiones con
+    hechos del motor, en vez de especular. No modifica motor_seleccion.py.
+    """
+    motivos = {}
+
+    p1 = seleccion.get("paso1_purga_sortino") or {}
+    elim1 = p1.get("eliminados")
+    if elim1 is not None and not elim1.empty:
+        for _, row in elim1.iterrows():
+            motivos[row["activo"]] = (
+                f"Purgado por Sortino bajo (Sortino={row['sortino']}), entre el "
+                f"tramo mas debil del universo evaluado por rendimiento ajustado "
+                f"a riesgo a la baja (paso 1: purga por Sortino)."
+            )
+
+    p2 = seleccion.get("paso2_purga_parcial") or {}
+    elim2 = p2.get("eliminados")
+    if elim2 is not None and not elim2.empty:
+        for _, row in elim2.iterrows():
+            motivos[row["eliminado"]] = (
+                f"Redundante con {row['por']} (correlacion parcial={row['parcial']}): "
+                f"comparten riesgo propio no sistemico y {row['por']} tuvo mejor "
+                f"metrica ({row['metrica_conservado']} vs {row['metrica_eliminado']}) "
+                f"(paso 2: purga por correlacion parcial)."
+            )
+
+    p3 = seleccion.get("paso3_cobertura_sector")
+    sector_concentrado = bool(seleccion.get("sector_concentrado"))
+    if p3 is not None:
+        detalle = p3.get("detalle")
+        if detalle is not None and not detalle.empty:
+            ganador_por_sector = dict(zip(detalle["sector"], detalle["elegido"]))
+            sobrevivientes_paso2 = set(p2.get("sobreviven", []))
+            seleccionados = set(seleccion.get("seleccion", []))
+            # En modo "sector concentrado" (universo pedido en 1-2 sectores) el
+            # cupo real no es de 1 activo por sector: es de MAX_ACTIVOS_SECTOR_
+            # CONCENTRADO en total (1 garantizado por sector + el resto por mejor
+            # Sortino global). Ver motor_seleccion.seleccionar(), rama pocos_sectores.
+            garantizados = set(p3.get("seleccion") or [])
+            cupo_restante = max(0, MAX_ACTIVOS_SECTOR_CONCENTRADO - len(garantizados))
+            for activo in sobrevivientes_paso2 - seleccionados:
+                if activo in motivos:
+                    continue  # ya explicado por un paso anterior
+                s = sector.get(activo, "Sin clasificar")
+                ganador = ganador_por_sector.get(s)
+                if not ganador:
+                    continue
+                if sector_concentrado:
+                    motivos[activo] = (
+                        f"No entro por el cupo del universo concentrado: el universo "
+                        f"pedido cae en pocos sectores/categorias, asi que el cupo NO es "
+                        f"de 1 activo por sector sino de los {MAX_ACTIVOS_SECTOR_CONCENTRADO} "
+                        f"mejores en total ({len(garantizados)} garantizado(s) -- 1 por "
+                        f"sector -- mas {cupo_restante} cupo(s) adicional(es) por mejor "
+                        f"Sortino global). Este activo no alcanzo ese cupo (su sector "
+                        f"'{s}' ya tiene garantizado a {ganador} por mejor Sortino dentro "
+                        f"del sector) (paso 3: cobertura por sector, modo concentrado)."
+                    )
+                else:
+                    motivos[activo] = (
+                        f"No entro por cobertura sectorial: el cupo del sector "
+                        f"'{s}' ya lo ocupa {ganador} (mejor Sortino dentro del "
+                        f"sector) (paso 3: cobertura por sector)."
+                    )
+
+    return motivos
+
+
 def generar_propuesta_completa(perfil, horizonte, inversion, aporte_dca=0,
                                 frecuencia_meses=1, tickers_fijos=None):
     """TODO el pipeline para /api/generar-propuesta. Devuelve dict listo."""
@@ -510,6 +588,7 @@ def generar_propuesta_completa(perfil, horizonte, inversion, aporte_dca=0,
         "advertencia_concentracion": (
             ADVERTENCIA_CONCENTRACION_CATEGORIA if sector_concentrado else None
         ),
+        "motivos_exclusion": _resumir_exclusiones(res["seleccion"], ins["sector"]),
     }
 
 
@@ -552,7 +631,11 @@ def recalcular_con_pesos(pesos_usuario, perfil, inversion, aporte_dca=0,
 
     nota = ""
     if sin_hist:
-        nota = (f"{', '.join(sin_hist.keys())} agregado manualmente. Las proyecciones "
-                f"corresponden al resto; su histórico estará en el próximo análisis.")
+        peso_excluido = sum(sin_hist.values())
+        total_usuario = sum(pesos_usuario.values()) or 1
+        pct_redistribuido = round(peso_excluido / total_usuario * 100, 1)
+        nota = (f"{', '.join(sin_hist.keys())} sin histórico válido todavía — "
+                f"excluido(s) de este cálculo. Su {pct_redistribuido}% se redistribuyó "
+                f"proporcionalmente entre los demás activos.")
 
     return {"datos": datos, "reporte_txt": reporte_txt, "nota_nuevos": nota}
