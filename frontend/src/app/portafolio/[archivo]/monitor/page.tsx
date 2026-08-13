@@ -145,23 +145,30 @@ function TickerCard({
           <div style={{ height: "100%", width: `${Math.min(100, Math.max(0, rsi))}%`, background: rsiColor(rsi), transition: "width 300ms ease" }} />
         </div>
 
-        {/* Sugerencia: ya hay posición pero sigue monitoreado para compra */}
+        {/* Sugerencia: ya hay posición pero sigue monitoreado para compra.
+            La tarjeta ahora es más ancha (grid autofill mín. 240px) para
+            que esta nota se lea completa; el texto va en su propia línea
+            (puede ocupar 1-2 líneas con el ancho nuevo, sin recortarse) y
+            el botón queda debajo a lo ancho, siempre alineado y legible
+            sin importar cuánto texto entre. */}
         {monitoreoTicker.compra && tienePosicion && (
           <div
             onClick={(e) => e.stopPropagation()}
             style={{
-              marginTop: 10, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+              marginTop: 10,
               background: "rgba(255,159,10,0.1)", border: "1px solid rgba(255,159,10,0.28)", borderRadius: 10,
-              padding: "7px 9px", fontSize: 10.5, color: "#ff9f0a",
+              padding: "9px 10px", fontSize: 11.5, color: "#ff9f0a",
             }}
           >
-            <span>🔗 Ya tienes posición — ¿desactivar compra?</span>
+            <p style={{ margin: "0 0 8px", lineHeight: 1.45, wordBreak: "break-word" }}>
+              🔗 Ya tienes posición — ¿desactivar compra?
+            </p>
             <button
               onClick={() => onToggle("compra", false)}
               disabled={togglingKey === `compra:${ticker}`}
               style={{
-                background: "#ff9f0a", color: "#1a1200", border: "none", fontSize: 10, fontWeight: 700,
-                padding: "4px 9px", borderRadius: 980, cursor: "pointer", whiteSpace: "nowrap",
+                width: "100%", background: "#ff9f0a", color: "#1a1200", border: "none", fontSize: 11, fontWeight: 700,
+                padding: "6px 9px", borderRadius: 980, cursor: "pointer",
                 opacity: togglingKey === `compra:${ticker}` ? 0.6 : 1,
               }}
             >
@@ -578,7 +585,7 @@ export default function MonitorPage() {
 
             {Object.keys(rangos).length > 0 && (
               <>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px,1fr))", gap: 14, marginTop: 20 }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px,1fr))", gap: 14, marginTop: 20 }}>
                   {Object.entries(rangos).map(([ticker, r]) => (
                     <TickerCard
                       key={ticker}
@@ -610,7 +617,7 @@ export default function MonitorPage() {
         )
       ) : (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px,1fr))", gap: 14 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px,1fr))", gap: 14 }}>
             {Object.entries(precios).map(([ticker, p]) => {
               const obsoleto = mercadoAbierto && esObsoleto(p.timestamp);
               return (
