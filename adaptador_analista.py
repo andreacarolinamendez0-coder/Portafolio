@@ -117,7 +117,7 @@ def _ret_mensual_cop_real(
     return r_mens_cop_real.dropna()
 
 
-def _restringir_universo(retornos, sector, tickers_fijos):
+def _restringir_universo(retornos, sector, tickers_fijos, permitir_expansion_etf=True):
     """Aplica tickers_fijos al universo. Devuelve (retornos, sector,
     saltar_cobertura_sector).
 
@@ -136,6 +136,11 @@ def _restringir_universo(retornos, sector, tickers_fijos):
     El check de "todos son ETF" va DESPUES del check de <=2 categorias: si
     fuera al reves, un pedido de "solo bonos" (ya son <=1 categoria hoy)
     terminaria expandiendose innecesariamente a los ~39 ETFs conocidos.
+
+    permitir_expansion_etf: en False, el caso 3 nunca expande -- se queda con
+    los tickers pedidos tal cual. Se usa cuando esta lista tambien es
+    activos_ancla (forzar_exacto): expandir a ~39 ETFs rompería la promesa de
+    "exactamente esta lista, nada mas".
     """
     import preparador_datos as prep
 
@@ -154,7 +159,7 @@ def _restringir_universo(retornos, sector, tickers_fijos):
     if len(set(sector_efectivo.values())) <= 2:
         return retornos[cols], sector_efectivo, False
 
-    if all(t in prep.TODOS_LOS_ETFS for t in cols):
+    if permitir_expansion_etf and all(t in prep.TODOS_LOS_ETFS for t in cols):
         cols_etf = [t for t in prep.TODOS_LOS_ETFS if t in retornos.columns]
         sector_etf = {t: sector.get(t, "Sin clasificar") for t in cols_etf}
         return retornos[cols_etf], sector_etf, True
@@ -345,12 +350,21 @@ def _cargar_todo_para_motor(tickers_fijos=None, activos_ancla=None):
     retornos = universo["retornos"]
     sector = universo["sector"]
 
-    if activos_ancla:
-        saltar_cobertura_sector = False
-    else:
+    # tickers_fijos manda la restriccion de universo, INDEPENDIENTE de si hay
+    # activos_ancla -- asi las dos banderas se pueden combinar a proposito:
+    #   solo activos_ancla            -> universo completo, esos protegidos
+    #                                     (editar y dejar que el motor busque)
+    #   tickers_fijos == activos_ancla -> universo restringido a esa lista Y
+    #                                     todos protegidos dentro de ella
+    #                                     (forzar exactamente esa composicion,
+    #                                     sin que ninguna purga saque a nadie)
+    if tickers_fijos:
         retornos, sector, saltar_cobertura_sector = _restringir_universo(
-            retornos, sector, tickers_fijos
+            retornos, sector, tickers_fijos,
+            permitir_expansion_etf=not bool(activos_ancla),
         )
+    else:
+        saltar_cobertura_sector = False
 
     trm = pd.read_parquet("datos/macro/trm.parquet").sort_index()
     ret_trm = np.log(trm["TRM"] / trm["TRM"].shift(1)).dropna()
@@ -562,6 +576,13 @@ def _resumir_exclusiones(seleccion: dict, sector: dict) -> dict:
                         f"sector) (paso 3: cobertura por sector)."
                     )
 
+    # Un ancla (motor_seleccion.seleccionar_anclado) puede aparecer en los
+    # "eliminados" de un paso intermedio y ser reincorporada despues -- si
+    # termino en la seleccion final, no es una exclusion real, sin importar
+    # que un paso intermedio lo haya listado como purgado.
+    seleccionados_final = set(seleccion.get("seleccion") or [])
+    motivos = {t: m for t, m in motivos.items() if t not in seleccionados_final}
+
     return motivos
 
 
@@ -659,3 +680,177 @@ def recalcular_con_pesos(pesos_usuario, perfil, inversion, aporte_dca=0,
                 f"proporcionalmente entre los demás activos.")
 
     return {"datos": datos, "reporte_txt": reporte_txt, "nota_nuevos": nota}
+
+
+# ============================================================
+# SEGUIMIENTO — composicion real vs meta, metricas reales
+# ============================================================
+
+def metricas_reales_desde_historial(historial, inf_col_m, min_meses=6):
+    """Camino RAPIDO para metricas_reales_portafolio: retorno/volatilidad/
+    drawdown reales calculados directamente de los snapshots que scheduler.py
+    ya guarda una vez al dia en data["historial"], en vez de reconstruir el
+    historico completo de precios cada vez que alguien abre Seguimiento.
+    Mismas unidades que la reconstruccion retroactiva (retornos mensuales
+    simples en COP real) para que ambas sean comparables 1 a 1.
+
+    Requiere que cada registro tenga "macro"."trm" (sin eso no se puede
+    convertir USD->COP para ese punto); los registros sin trm se ignoran.
+    Como el historial recien empieza a llenarse desde que se reconecto el
+    scheduler, esto devuelve None (nada que hacer) hasta que se acumulen
+    min_meses de datos -- ver fallback en metricas_reales_portafolio."""
+    if not historial:
+        return None
+    try:
+        filas = [
+            (r["fecha"], r["resumen"]["total_valor"], r["macro"]["trm"])
+            for r in historial
+            if r.get("resumen") and r.get("macro") and r["macro"].get("trm") is not None
+        ]
+        if len(filas) < 2:
+            return None
+        fechas, valores, trms = zip(*filas)
+        idx = pd.to_datetime(fechas)
+        valor_usd = pd.Series(valores, index=idx, dtype=float).sort_index()
+        trm = pd.Series(trms, index=idx, dtype=float).sort_index()
+
+        # Un punto por mes: el ULTIMO snapshot disponible de cada mes
+        # (resample estandar de una serie irregular a fin de mes).
+        valor_m = valor_usd.resample("ME").last().dropna()
+        trm_m = trm.resample("ME").last().reindex(valor_m.index).ffill()
+
+        r_usd = valor_m.pct_change().dropna()
+        if len(r_usd) < min_meses:
+            return None
+        r_trm = trm_m.pct_change().reindex(r_usd.index)
+        r_cop_nom = (1 + r_usd) * (1 + r_trm) - 1
+
+        inf_m = inf_col_m.reindex(r_cop_nom.index, method="ffill")
+        r_cop_real = ((1 + r_cop_nom) / (1 + inf_m) - 1).dropna()
+        if len(r_cop_real) < min_meses:
+            return None
+
+        ret_anual = float(r_cop_real.mean() * 12)
+        vol_anual = float(r_cop_real.std() * np.sqrt(12))
+        cumprod = (r_cop_real + 1).cumprod()
+        max_dd = float((cumprod / cumprod.cummax() - 1).min())
+
+        return {
+            "retorno_anual": round(ret_anual * 100, 2),
+            "volatilidad": round(vol_anual * 100, 2),
+            "max_drawdown": round(max_dd * 100, 2),
+            "meses_considerados": len(r_cop_real),
+            "desde": fechas[0],
+            "fuente": "desde_historial",
+        }
+    except Exception as e:
+        print(f"⚠️ No se pudo calcular metricas reales desde historial: {e}")
+        return None
+
+
+def metricas_reales_portafolio(pesos_reales: dict, fecha_desde: str, historial: list = None):
+    """Metricas REALES agregadas del portafolio -- retorno anual, volatilidad,
+    max drawdown, en las MISMAS unidades que datos["metricas"] proyectado
+    (% sobre retornos mensuales simples en COP real, ver
+    _construir_datos_reporte) para que sean comparables 1 a 1.
+
+    Intenta primero metricas_reales_desde_historial (barato: lee snapshots ya
+    guardados). Si el historial todavia no acumula suficientes meses -- el
+    caso esperado mientras el scheduler recien empieza a llenarlo -- cae al
+    camino de siempre: aplica los pesos REALES actuales (calculados desde las
+    posiciones vivas) sobre el historico real de esos mismos activos, desde
+    fecha_desde (la fecha de la compra viva mas antigua), reutilizando
+    EXACTAMENTE la misma conversion (_ret_mensual_cop_real) que usa el motor
+    para la proyeccion.
+
+    Ninguno de los dos caminos es un calculo money-weighted exacto (no
+    separan el efecto de nuevos aportes a mitad de camino): es la
+    volatilidad/drawdown que esa MEZCLA de activos efectivamente tuvo en el
+    periodo, no tu retorno personal exacto peso a peso. La version
+    money-weighted precisa mes a mes queda para una sesion dedicada.
+
+    MIN_MESES: con pocos meses, anualizar (retorno*12) produce numeros
+    exagerados y enganosos (2 meses malos -> "-67% anual"). Juicio editable,
+    no estadistico: por debajo de este piso se prefiere devolver None (el
+    frontend debe mostrar "aun no hay suficiente historial") en vez de un
+    numero tecnicamente correcto pero practicamente enganoso.
+    """
+    MIN_MESES = 6
+    if not pesos_reales:
+        return None
+    try:
+        ins = _cargar_todo_para_motor()
+
+        if historial:
+            desde_historial = metricas_reales_desde_historial(historial, ins["inf_col_m"], MIN_MESES)
+            if desde_historial:
+                return desde_historial
+
+        cols = [t for t in pesos_reales if t in ins["retornos"].columns]
+        if not cols:
+            return None
+        suma = sum(pesos_reales[t] for t in cols) or 1
+        pesos = pd.Series({t: pesos_reales[t] / suma for t in cols})
+
+        retornos_periodo = ins["retornos"].loc[fecha_desde:]
+        if len(retornos_periodo) < 20:
+            return None
+
+        ret_mens = _ret_mensual_cop_real(pesos, retornos_periodo, ins["ret_trm"], ins["inf_col_m"])
+        if len(ret_mens) < MIN_MESES:
+            return None
+
+        ret_anual = float(ret_mens.mean() * 12)
+        vol_anual = float(ret_mens.std() * np.sqrt(12))
+        cumprod = (ret_mens + 1).cumprod()
+        max_dd = float((cumprod / cumprod.cummax() - 1).min())
+
+        return {
+            "retorno_anual": round(ret_anual * 100, 2),
+            "volatilidad": round(vol_anual * 100, 2),
+            "max_drawdown": round(max_dd * 100, 2),
+            "meses_considerados": len(ret_mens),
+            "desde": fecha_desde,
+            "fuente": "reconstruido_retroactivo",
+        }
+    except Exception as e:
+        print(f"⚠️ No se pudo calcular metricas reales de portafolio: {e}")
+        return None
+
+
+def metricas_historicas_por_activo(tickers: list, mar_anual: float = MAR_ANUAL):
+    """Sortino y volatilidad anualizada (USD nominal, historico completo) que
+    el motor de seleccion VIO de cada activo al construir la propuesta -- NO
+    es una proyeccion de rentabilidad. motor_seleccion.py documenta que mu es
+    casi inestimable por activo individual (solo sirve para la pregunta
+    gruesa de la purga por Sortino, nunca para una fina); por eso esta
+    funcion nunca inventa un "retorno esperado" por activo, solo expone las
+    mismas metricas de riesgo/desempeño historico que el motor ya usa.
+
+    Devuelve {ticker: {"sortino_historico", "volatilidad_historica"}}.
+    """
+    import motor_seleccion as ms
+    import preparador_datos as prep
+
+    try:
+        universo = prep.preparar_universo()
+    except Exception as e:
+        print(f"⚠️ No se pudo cargar el universo para metricas historicas por activo: {e}")
+        return {}
+
+    retornos = universo["retornos"]
+    cols = [t for t in tickers if t in retornos.columns]
+    if not cols:
+        return {}
+
+    sortino = ms.calcular_sortino(retornos[cols], mar_anual)
+    vol = retornos[cols].std() * np.sqrt(252)
+
+    out = {}
+    for t in cols:
+        s = sortino.get(t)
+        out[t] = {
+            "sortino_historico": round(float(s), 3) if pd.notna(s) else None,
+            "volatilidad_historica": round(float(vol[t]) * 100, 2),
+        }
+    return out

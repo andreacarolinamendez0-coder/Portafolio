@@ -12,13 +12,14 @@ import { LogoMark } from "@/components/ui/logo";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SectionTitle } from "@/components/ui/card";
-import { authMe, authLogout, triggerRecolector, getUltimaActualizacion, getPreciosRT, type DashboardData } from "@/lib/api";
-import { getDashboard, getTrmAnalisis } from "@/lib/api";
+import { authMe, authLogout, triggerRecolector, getUltimaActualizacion, getPreciosRT, type DashboardData, type Posicion } from "@/lib/api";
+import { getDashboard, getTrmAnalisis, getHistoricoAnalisis } from "@/lib/api";
 import { style } from "framer-motion/client";
 import { PageIntro } from "@/components/ui/page-intro";
 import {getConfig} from "@/lib/api";
 import { mostrarMonto, type Divisa } from "@/lib/divisas";
 import { AnimatedValue } from "@/components/ui/animated-value";
+import { AvisoSeguimiento } from "@/components/ui/aviso-seguimiento";
 
 // Métricas recalculadas en vivo (polling de /api/precios-rt) que sobrescriben
 // total_valor / ganancia_total / rentabilidad_total mientras hay monitoreo activo.
@@ -253,7 +254,16 @@ export default function DashboardPage() {
           </>
         )}
 
-        {tab === "historico" && <HistoricoSection historico={historico} />}
+        {tab === "historico" && (
+          <HistoricoSection
+            historico={historico}
+            archivo={archivo}
+            composicion={composicion}
+            posiciones={tiempo_real?.posiciones ?? []}
+            divisa={divisa}
+            tasas={macro ? { trm: macro.trm, tasa_eur: macro.tasa_eur } : { trm: 0, tasa_eur: 0 }}
+          />
+        )}
 
         {/* Footer */}
         <div style={{ textAlign: "center", marginTop: 32 }}>
@@ -268,6 +278,7 @@ export default function DashboardPage() {
             {updating ? "Descargando datos..." : "Actualizar datos"}
           </LiquidButton>
         </div>
+        <AvisoSeguimiento archivo={archivo} desviacion={data.desviacion_composicion} />
       </>
   );
 }
@@ -654,59 +665,287 @@ function PosicionesSection({ tr, divisa, tasas }: {
 
 // ── Historical section ───────────────────────────────────────
 
-function HistoricoSection({ historico }: { historico: DashboardData["historico"] }) {
+const RANGOS_HISTORICO = [
+  { v: 7,      l: "7D" },
+  { v: 30,     l: "30D" },
+  { v: 90,     l: "90D" },
+  { v: 365,    l: "1A" },
+  { v: "todo", l: "Todo" },
+] as const;
+type RangoHistorico = typeof RANGOS_HISTORICO[number]["v"];
+
+function HistoricoSection({ historico, archivo, composicion, posiciones, divisa, tasas }: {
+  historico:   DashboardData["historico"];
+  archivo:     string;
+  composicion: Record<string, number>;
+  posiciones:  Posicion[];
+  divisa:      Divisa;
+  tasas:       { trm: number; tasa_eur: number };
+}) {
+  const [rango, setRango] = useState<RangoHistorico>(90);
+
   if (!historico || !historico.length) return (
     <GlassPanel>
-      <p style={{ color: "var(--text-3)", textAlign: "center" }}>Aún no hay registros históricos. El sistema guardará uno automáticamente cada día.</p>
+      <p style={{ color: "var(--text-3)", textAlign: "center" }}>Aún no hay registros históricos. El sistema guarda uno automáticamente cada día.</p>
     </GlassPanel>
   );
-  const ul  = historico[historico.length - 1];
-  const pr  = historico[0];
-  const gac = ul.resumen.ganancia_total;
-  const rac = ul.resumen.rentabilidad_total;
+
+  const n = rango === "todo" ? historico.length : Math.min(rango, historico.length);
+  const filtrado = historico.slice(-n);
+  const desde = filtrado[0].fecha;
+
+  const hitos = calcularHitos(filtrado);
+  // El timeline de entradas NO se filtra por rango a proposito: es la
+  // narrativa de como se construyo el portafolio desde el inicio, no una
+  // metrica de tendencia reciente -- filtrarla escondería las entradas mas
+  // antiguas (justamente las mas relevantes para esa narrativa) apenas el
+  // usuario mira un rango corto.
+  const pendientes = Object.keys(composicion).filter(a => !posiciones.some(p => p.activo === a));
+
   return (
     <>
-      <SectionTitle>Resumen Acumulado</SectionTitle>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, marginBottom: 24 }}>
-        {[
-          { label: "Días registrados", value: historico.length, sub: `desde ${pr.fecha}` },
-          { label: "Valor actual",     value: `$${ul.resumen.total_valor.toLocaleString("es-CO", { maximumFractionDigits: 0 })}`, sub: "COP", color: "#30d158" },
-          { label: "Ganancia acumulada", value: `${gac > 0 ? "+" : ""}$${gac.toLocaleString("es-CO", { maximumFractionDigits: 0 })}`, sub: "COP real", color: gac > 0 ? "#30d158" : "#ff453a" },
-          { label: "Rentabilidad total", value: `${rac > 0 ? "+" : ""}${rac}%`, sub: "desde inicio", color: rac > 0 ? "#30d158" : "#ff453a" },
-        ].map(t => (
-          <GlowCard key={t.label} glowColor="blue" className="flex flex-col justify-between">
-            <h3 style={{ fontSize: "0.72rem", fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-3)", marginBottom: 12 }}>{t.label}</h3>
-            <div style={{ fontSize: "2rem", fontWeight: 600, letterSpacing: "-0.03em", lineHeight: 1, marginBottom: 4, color: (t as { color?: string }).color ?? "var(--text)" }}>{t.value}</div>
-            <div style={{ fontSize: "0.8rem", color: "var(--text-3)" }}>{t.sub}</div>
-          </GlowCard>
+      {/* Selector de rango — controla hitos, gráfico, timeline y tabla a la vez */}
+      <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
+        {RANGOS_HISTORICO.map(r => (
+          <button key={r.l} onClick={() => setRango(r.v)}
+            style={{ padding: "6px 14px", borderRadius: 8, fontSize: 12, cursor: "pointer", fontFamily: "inherit",
+              border: rango === r.v ? "1px solid rgba(0,113,227,0.5)" : "1px solid var(--glass-border)",
+              background: rango === r.v ? "rgba(0,113,227,0.2)" : "rgba(255,255,255,0.05)",
+              color: rango === r.v ? "#4da3ff" : "var(--text-3)", transition: "all 0.15s" }}>
+            {r.l}
+          </button>
         ))}
       </div>
-      <SectionTitle>Registro Diario</SectionTitle>
+
+      {hitos && <HitosHistoricos hitos={hitos} divisa={divisa} tasas={tasas} />}
+
+      <GraficoHistorico historico={filtrado} divisa={divisa} tasas={tasas} mejorFecha={hitos?.mejor.fecha} peorFecha={hitos?.peor.fecha} />
+
+      <AnalisisHistorico archivo={archivo} />
+
+      <TimelineEntradas posiciones={posiciones} pendientes={pendientes} divisa={divisa} tasas={tasas} />
+
+      <SectionTitle>Evolución por Snapshot</SectionTitle>
       <GlassPanel style={{ overflowX: "auto" }}>
         <table style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr>
-              {["Fecha","TRM","Valor COP","Ganancia","Rentabilidad"].map(h => (
+              {["Fecha","TRM","Valor","Ganancia","Rentabilidad"].map(h => (
                 <th key={h} style={{ fontSize: "0.7rem", fontWeight: 500, letterSpacing: "0.06em", textTransform: "uppercase", color: "#6e6e73", padding: "10px 16px", textAlign: "left", borderBottom: "1px solid rgba(255,255,255,0.08)" }}>{h}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {[...historico].reverse().map(r => {
+            {[...filtrado].reverse().map(r => {
               const g = r.resumen.ganancia_total; const rv = r.resumen.rentabilidad_total;
               const c = g > 0 ? "#30d158" : "#ff453a";
               return (
                 <tr key={r.fecha}>
                   <td style={{ padding: "14px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", fontSize: "0.875rem", color: "#a1a1a6" }}>{r.fecha}</td>
-                  <td style={{ padding: "14px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", fontSize: "0.875rem", color: "#a1a1a6" }}>${r.macro.trm.toLocaleString("es-CO", { maximumFractionDigits: 0 })}</td>
-                  <td style={{ padding: "14px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", fontSize: "0.875rem", color: "#a1a1a6" }}>${r.resumen.total_valor.toLocaleString("es-CO", { maximumFractionDigits: 0 })}</td>
-                  <td style={{ padding: "14px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", fontSize: "0.875rem", color: c, fontWeight: 500 }}>{g > 0 ? "+" : ""}${g.toLocaleString("es-CO", { maximumFractionDigits: 0 })}</td>
+                  <td style={{ padding: "14px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", fontSize: "0.875rem", color: "#a1a1a6" }}>{r.macro ? `$${r.macro.trm.toLocaleString("es-CO", { maximumFractionDigits: 0 })}` : "—"}</td>
+                  <td style={{ padding: "14px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", fontSize: "0.875rem", color: "#a1a1a6" }}>{mostrarMonto(r.resumen.total_valor, divisa, tasas)}</td>
+                  <td style={{ padding: "14px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", fontSize: "0.875rem", color: c, fontWeight: 500 }}>{g > 0 ? "+" : ""}{mostrarMonto(g, divisa, tasas)}</td>
                   <td style={{ padding: "14px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", fontSize: "0.875rem", color: c, fontWeight: 500 }}>{rv > 0 ? "+" : ""}{rv}%</td>
                 </tr>
               );
             })}
           </tbody>
         </table>
+      </GlassPanel>
+    </>
+  );
+}
+
+// ── Hitos: mejor/peor día, racha, rentabilidad acumulada del rango ──
+
+interface Hitos {
+  mejor: { fecha: string; valorUsd: number };
+  peor:  { fecha: string; valorUsd: number };
+  racha: number;
+  rentAcumuladaPct: number;
+}
+
+function calcularHitos(filtrado: DashboardData["historico"]): Hitos | null {
+  if (filtrado.length < 2) return null;
+  const deltas = filtrado.slice(1).map((r, i) => ({
+    fecha: r.fecha,
+    valorUsd: r.resumen.total_valor - filtrado[i].resumen.total_valor,
+  }));
+  const mejor = deltas.reduce((a, b) => (b.valorUsd > a.valorUsd ? b : a));
+  const peor  = deltas.reduce((a, b) => (b.valorUsd < a.valorUsd ? b : a));
+  let racha = 0;
+  for (let i = deltas.length - 1; i >= 0; i--) {
+    if (deltas[i].valorUsd > 0) racha++; else break;
+  }
+  const primero = filtrado[0].resumen.total_valor;
+  const ultimo  = filtrado[filtrado.length - 1].resumen.total_valor;
+  const rentAcumuladaPct = primero !== 0 ? ((ultimo - primero) / primero) * 100 : 0;
+  return { mejor, peor, racha, rentAcumuladaPct };
+}
+
+function HitosHistoricos({ hitos, divisa, tasas }: { hitos: Hitos; divisa: Divisa; tasas: { trm: number; tasa_eur: number } }) {
+  const cards = [
+    { label: "Mejor día", value: mostrarMonto(hitos.mejor.valorUsd, divisa, tasas), sub: hitos.mejor.fecha, color: "#30d158" },
+    { label: "Peor día",  value: mostrarMonto(hitos.peor.valorUsd, divisa, tasas),  sub: hitos.peor.fecha,  color: "#ff453a" },
+    { label: "Racha actual", value: `${hitos.racha} ${hitos.racha === 1 ? "día" : "días"}`, sub: hitos.racha > 0 ? "ganando consecutivos" : "sin racha activa", color: hitos.racha > 0 ? "#30d158" : "var(--text-3)" },
+    { label: "Rentabilidad acum.", value: `${hitos.rentAcumuladaPct > 0 ? "+" : ""}${hitos.rentAcumuladaPct.toFixed(2)}%`, sub: "en el rango seleccionado", color: hitos.rentAcumuladaPct >= 0 ? "#30d158" : "#ff453a" },
+  ];
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 16, marginBottom: 24 }}>
+      {cards.map(c => (
+        <GlowCard key={c.label} glowColor="blue" className="flex flex-col justify-between">
+          <h3 style={{ fontSize: "0.72rem", fontWeight: 500, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-3)", marginBottom: 12 }}>{c.label}</h3>
+          <div style={{ fontSize: "1.7rem", fontWeight: 600, letterSpacing: "-0.03em", lineHeight: 1, marginBottom: 4, color: c.color }}>{c.value}</div>
+          <div style={{ fontSize: "0.8rem", color: "var(--text-3)" }}>{c.sub}</div>
+        </GlowCard>
+      ))}
+    </div>
+  );
+}
+
+// ── Gráfico: invertido vs valor real, con marcadores en mejor/peor día ──
+
+function GraficoHistorico({ historico, divisa, tasas, mejorFecha, peorFecha }: {
+  historico: DashboardData["historico"];
+  divisa: Divisa;
+  tasas: { trm: number; tasa_eur: number };
+  mejorFecha?: string;
+  peorFecha?: string;
+}) {
+  const factor = divisa === "COP" ? tasas.trm : divisa === "EUR" ? tasas.tasa_eur : 1;
+  const data = historico.map(r => ({
+    fecha: r.fecha,
+    real: r.resumen.total_valor * factor,
+    invertido: r.resumen.total_invertido * factor,
+    esMejor: r.fecha === mejorFecha,
+    esPeor: r.fecha === peorFecha,
+  }));
+
+  const fmtFecha = (f: string) => new Date(f).toLocaleDateString("es-CO", { day: "2-digit", month: "short" });
+  const fmtMonto = (v: number) => mostrarMonto(v / factor, divisa, tasas);
+
+  return (
+    <GlassPanel>
+      <p style={{ color: "var(--text)", fontSize: 14, fontWeight: 600, margin: "0 0 12px" }}>Valor del portafolio en el tiempo</p>
+      <div style={{ display: "flex", gap: 14, marginBottom: 10, fontSize: 11, color: "var(--text-3)" }}>
+        <span style={{ display: "flex", alignItems: "center", gap: 5 }}><i style={{ width: 8, height: 8, borderRadius: "50%", background: "#30d158", display: "inline-block" }} />Valor real</span>
+        <span style={{ display: "flex", alignItems: "center", gap: 5 }}><i style={{ width: 8, height: 8, borderRadius: "50%", background: "#6e6e73", display: "inline-block" }} />Invertido</span>
+      </div>
+      <div style={{ width: "100%", height: 240 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <AreaChart data={data} margin={{ top: 8, right: 12, left: 8, bottom: 4 }}>
+            <defs>
+              <linearGradient id="historicoGradient" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor="#30d158" stopOpacity={0.28} />
+                <stop offset="100%" stopColor="#30d158" stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid stroke="rgba(255,255,255,0.05)" vertical={false} />
+            <XAxis dataKey="fecha" tickFormatter={fmtFecha} tick={{ fontSize: 11, fill: "var(--text-3)" }} stroke="rgba(255,255,255,0.1)" minTickGap={40} />
+            <YAxis tickFormatter={(v) => fmtMonto(v)} tick={{ fontSize: 11, fill: "var(--text-3)" }} stroke="rgba(255,255,255,0.1)" width={80} />
+            <Tooltip
+              contentStyle={{ background: "rgba(12,12,12,0.97)", border: "1px solid var(--glass-border)", borderRadius: 10, fontSize: 12 }}
+              labelStyle={{ color: "var(--text)", marginBottom: 4 }}
+              labelFormatter={(f) => fmtFecha(f as string)}
+              formatter={(value, name) => [fmtMonto(Number(value)), name === "real" ? "Valor real" : "Invertido"]}
+            />
+            <Area type="monotone" dataKey="invertido" stroke="#6e6e73" strokeWidth={1.5} strokeDasharray="4 3" fill="none" dot={false} />
+            <Area type="monotone" dataKey="real" stroke="#30d158" strokeWidth={2} fill="url(#historicoGradient)"
+              dot={(props: { cx?: number; cy?: number; payload?: { esMejor?: boolean; esPeor?: boolean } }) => {
+                const { cx, cy, payload } = props;
+                if (!payload?.esMejor && !payload?.esPeor) return <g key={`dot-${cx}-${cy}`} />;
+                return <circle key={`dot-${cx}-${cy}`} cx={cx} cy={cy} r={4.5} fill={payload.esMejor ? "#30d158" : "#ff453a"} stroke="#0a0a0b" strokeWidth={1.5} />;
+              }}
+            />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+    </GlassPanel>
+  );
+}
+
+// ── Análisis IA del histórico (mismo patrón que AnalisisTRM, cache diario por portafolio) ──
+
+function AnalisisHistorico({ archivo }: { archivo: string }) {
+  const [analisis, setAnalisis] = useState<string | null>(null);
+  const [cargando, setCargando] = useState(true);
+
+  useEffect(() => {
+    getHistoricoAnalisis(archivo)
+      .then(d => setAnalisis(d.analisis || ""))
+      .catch(() => setAnalisis(""))
+      .finally(() => setCargando(false));
+  }, [archivo]);
+
+  if (!cargando && !analisis) return null;
+
+  return (
+    <GlassPanel>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+        <LogoMark size={20} />
+        <span style={{ fontSize: "0.68rem", letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-3)" }}>Análisis de Atom — Histórico</span>
+      </div>
+      {cargando ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#0071e3", animation: "pulse-hist 1.2s infinite" }} />
+          <p style={{ fontSize: "0.82rem", color: "var(--text-3)", margin: 0 }}>Analizando tu trayectoria…</p>
+          <style>{`@keyframes pulse-hist { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }`}</style>
+        </div>
+      ) : (
+        <p style={{ fontSize: "0.82rem", color: "var(--text-2)", lineHeight: 1.65, margin: 0, whiteSpace: "pre-line" }}>{analisis}</p>
+      )}
+    </GlassPanel>
+  );
+}
+
+// ── Historial de entradas: línea de tiempo cronológica ──
+
+function TimelineEntradas({ posiciones, pendientes, divisa, tasas }: {
+  posiciones: Posicion[];
+  pendientes: string[];
+  divisa: Divisa;
+  tasas: { trm: number; tasa_eur: number };
+}) {
+  const ordenadas = [...posiciones].sort((a, b) => a.fecha_inicio.localeCompare(b.fecha_inicio));
+  if (!ordenadas.length && !pendientes.length) return null;
+
+  return (
+    <>
+      <SectionTitle>Historial de Entradas</SectionTitle>
+      <GlassPanel style={{ padding: "4px 20px" }}>
+        {ordenadas.map(p => {
+          const ganando = p.rentabilidad >= 0;
+          return (
+            <div key={p.activo} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+              <TickerLogo ticker={p.activo} size={34} />
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>{p.activo}</div>
+                <div style={{ fontSize: 11.5, color: "var(--text-3)" }}>Entró el {p.fecha_inicio} · {mostrarMonto(p.invertido / p.fracciones, divisa, tasas)} promedio</div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: ganando ? "#30d158" : "#ff453a" }}>{p.rentabilidad > 0 ? "+" : ""}{p.rentabilidad}%</div>
+                <div style={{ fontSize: 11, color: "var(--text-3)" }}>desde entrada</div>
+              </div>
+              <span style={{
+                background: ganando ? "rgba(48,209,88,0.12)" : "rgba(255,69,58,0.12)",
+                color: ganando ? "#30d158" : "#ff453a",
+                border: `1px solid ${ganando ? "rgba(48,209,88,0.2)" : "rgba(255,69,58,0.2)"}`,
+                borderRadius: 980, padding: "3px 10px", fontSize: "0.7rem", fontWeight: 500,
+              }}>{ganando ? "GANANDO" : "PERDIENDO"}</span>
+            </div>
+          );
+        })}
+        {pendientes.map(a => (
+          <div key={a} style={{ display: "flex", alignItems: "center", gap: 14, padding: "14px 0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+            <TickerLogo ticker={a} size={34} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>{a}</div>
+              <div style={{ fontSize: 11.5, color: "var(--text-3)" }}>Parte de la meta — aún no ejecutado</div>
+            </div>
+            <div style={{ textAlign: "right", fontSize: 13, color: "var(--text-3)" }}>—</div>
+            <span style={{ background: "rgba(255,214,10,0.12)", color: "#ffd60a", border: "1px solid rgba(255,214,10,0.2)", borderRadius: 980, padding: "3px 10px", fontSize: "0.7rem", fontWeight: 500 }}>PENDIENTE</span>
+          </div>
+        ))}
       </GlassPanel>
     </>
   );

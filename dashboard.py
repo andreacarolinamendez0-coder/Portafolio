@@ -39,6 +39,7 @@ from gestor_portafolio import (
     guardar_venta,
     editar_venta,
     eliminar_venta,
+    guardar_analisis_historico,
     registrar_usuario,
     login_usuario,
     registrar_actividad,
@@ -62,6 +63,17 @@ from gestor_portafolio import (
 # composicion o interpolan tickers en texto/URLs (auditoria: validacion
 # inconsistente entre endpoints).
 PATRON_TICKER = re.compile(r"[A-Z]{1,6}(-USD)?")
+
+# Umbrales de desviacion de composicion (Seguimiento) -- JUICIO editable, no
+# estadistico, mismo estilo que perfilador.TOPES_POR_PLAZO. Un activo
+# individual desviado mas de UMBRAL_DESVIACION_ACTIVO puntos porcentuales de
+# su meta se marca; UMBRAL_DESVIACION_TOTAL es la suma de |desviaciones|/2
+# (metrica estandar de tracking-error). UMBRAL_PROGRESO_MINIMO evita marcar
+# desviacion mientras el portafolio todavia se esta construyendo (pocos
+# tickers meta comprados aun) -- ahi la señal es ruido, no rebalanceo.
+UMBRAL_DESVIACION_ACTIVO = 5.0
+UMBRAL_DESVIACION_TOTAL = 10.0
+UMBRAL_PROGRESO_MINIMO = 90
 
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 import secrets, hashlib
@@ -88,7 +100,15 @@ def arrancar_monitor():
     registrar_webhook_telegram()
 
 
+def arrancar_scheduler():
+    time.sleep(15)
+    from scheduler import iniciar_scheduler
+
+    iniciar_scheduler()
+
+
 threading.Thread(target=arrancar_monitor, daemon=True).start()
+threading.Thread(target=arrancar_scheduler, daemon=True).start()
 
 app = Flask(__name__)
 # Ruta base absoluta para que funcione en Railway y en local
@@ -212,13 +232,23 @@ def _tool_simular_propuesta(input_):
         from adaptador_analista import generar_propuesta_completa
 
         activos_ancla = input_.get("activos_ancla")
+        forzar_exacto = bool(input_.get("forzar_exacto")) and bool(activos_ancla)
+        # forzar_exacto: restringe el universo a EXACTAMENTE activos_ancla (nada
+        # de busqueda adicional), y esos mismos tickers quedan ademas protegidos
+        # de las purgas dentro de ese universo chico -- ver el comentario en
+        # adaptador_analista._cargar_todo_para_motor sobre como se combinan
+        # tickers_fijos y activos_ancla.
+        tickers_fijos = (
+            activos_ancla if forzar_exacto
+            else (input_.get("tickers_candidatos") if not activos_ancla else None)
+        )
         resultado = generar_propuesta_completa(
             perfil=input_.get("perfil"),
             horizonte=input_.get("horizonte", 10),
             inversion=input_.get("inversion"),
             aporte_dca=input_.get("aporte_dca", 0),
             frecuencia_meses=input_.get("frecuencia_meses", 1),
-            tickers_fijos=input_.get("tickers_candidatos") if not activos_ancla else None,
+            tickers_fijos=tickers_fijos,
             activos_ancla=activos_ancla,
         )
 
@@ -226,16 +256,33 @@ def _tool_simular_propuesta(input_):
         pesos_reales = {k: round(float(v), 3) for k, v in pesos.items()}
 
         candidatos = input_.get("tickers_candidatos") or []
-        excluidos = [t for t in candidatos if t not in pesos_reales]
+        ancla_set = set(activos_ancla or [])
+        # activos_ancla tambien puede faltar del resultado si nunca tuvo
+        # historico descargado (motor_seleccion.seleccionar_anclado filtra el
+        # ancla contra retornos.columns antes de protegerla) -- sin esto, un
+        # ticker que se prometio "nunca se purga" desaparecia mudo, sin
+        # ninguna explicacion, justo el caso que forzar_exacto no deberia
+        # permitir.
+        excluidos = [t for t in list(candidatos) + list(ancla_set) if t not in pesos_reales]
+        excluidos = list(dict.fromkeys(excluidos))  # sin duplicados, mismo orden
 
         motivos_todos = resultado.get("motivos_exclusion") or {}
         motivos_exclusion = {t: motivos_todos[t] for t in excluidos if t in motivos_todos}
-        # Candidatos excluidos que ni siquiera aparecen en motivos_todos nunca
-        # entraron al universo del motor (sin historico descargado, o ticker
-        # invalido/inventado por el usuario) -- no fueron purgados por ningun
-        # paso de seleccion, asi que el modelo no tendria ningun hecho que dar.
+        # Excluidos que ni siquiera aparecen en motivos_todos nunca entraron
+        # al universo del motor (sin historico descargado, o ticker
+        # invalido/inventado) -- no fueron purgados por ningun paso de
+        # seleccion, asi que el modelo no tendria ningun hecho que dar.
         for t in excluidos:
-            if t not in motivos_exclusion:
+            if t in motivos_exclusion:
+                continue
+            if t in ancla_set:
+                motivos_exclusion[t] = (
+                    f"'{t}' no tiene histórico de precios descargado todavía, así que nunca "
+                    f"entró al universo evaluado por el motor -- no se pudo incluir en la "
+                    f"simulación pese a haberlo pedido como ancla. Necesita descargarse primero "
+                    f"(agregarlo manualmente desde la propuesta) antes de poder forzarlo."
+                )
+            else:
                 motivos_exclusion[t] = (
                     f"No hay historico de precios descargado para '{t}' todavia: nunca "
                     f"entro al universo evaluado por el motor (no fue purgado por ningun "
@@ -417,6 +464,7 @@ def calcular_tiempo_real(portafolio):
             {
                 "activo": tk,
                 "fracciones": round(frac_viva, 4),
+                "fecha_inicio": d["fecha_inicio"],
                 "precio_hoy": round(p, 2),
                 "valor_hoy": round(val, 2),
                 "invertido": round(inv, 2),
@@ -441,6 +489,113 @@ def calcular_tiempo_real(portafolio):
         "fx_cop_total": round(total_fx, 0) if hay_efecto else None,
         "inflacion_cop_total": round(total_infl, 0) if hay_efecto else None,
     }
+
+
+def calcular_composicion_real(tiempo_real):
+    """{ticker: peso} a partir de valor_hoy/total_valor -- la composicion
+    REAL actual, derivada de calcular_tiempo_real(). Distinta de
+    portafolio["composicion"], que es la META (la que dejo la ultima
+    propuesta aplicada)."""
+    if not tiempo_real or not tiempo_real.get("total_valor"):
+        return {}
+    total = tiempo_real["total_valor"]
+    if total <= 0:
+        return {}
+    return {p["activo"]: round(p["valor_hoy"] / total, 4) for p in tiempo_real["posiciones"]}
+
+
+def calcular_desviacion_composicion(portafolio, tiempo_real):
+    """Compara composicion real vs meta. Devuelve {"aplica": False} mientras
+    el portafolio todavia se esta construyendo (progreso de entrada por
+    debajo de UMBRAL_PROGRESO_MINIMO) -- comparar peso real vs meta no tiene
+    sentido todavia si la mayoria de los tickers meta ni siquiera se han
+    comprado. Progreso intersectado contra la meta VIGENTE (un ticker
+    comprado que ya no esta en la meta no cuenta como progreso) -- misma
+    formula que usa /api/seguimiento para su "Progreso de entradas"."""
+    composicion = portafolio.get("composicion") or {}
+    aportes = portafolio.get("aportes") or []
+    entrados = set(a["activo"] for a in aportes)
+    total_meta = len(composicion)
+    progreso_pct = (len(entrados & set(composicion)) / total_meta * 100) if total_meta else 0
+
+    if not composicion or progreso_pct < UMBRAL_PROGRESO_MINIMO:
+        return {"aplica": False, "progreso_pct": round(progreso_pct, 1)}
+
+    pesos_reales = calcular_composicion_real(tiempo_real)
+    if not pesos_reales:
+        return {"aplica": False, "progreso_pct": round(progreso_pct, 1)}
+
+    tickers = set(pesos_reales) | set(composicion)
+    desviaciones = {
+        t: round((pesos_reales.get(t, 0) - composicion.get(t, 0)) * 100, 1)
+        for t in tickers
+    }
+    desviacion_total = round(sum(abs(v) for v in desviaciones.values()) / 2, 1)
+    activos_desviados = {t: v for t, v in desviaciones.items() if abs(v) >= UMBRAL_DESVIACION_ACTIVO}
+
+    return {
+        "aplica": True,
+        "progreso_pct": round(progreso_pct, 1),
+        "necesita_rebalanceo": bool(activos_desviados) or desviacion_total >= UMBRAL_DESVIACION_TOTAL,
+        "desviacion_total_pp": desviacion_total,
+        "activos_desviados": activos_desviados,
+    }
+
+
+def calcular_metricas_reales_por_activo(portafolio, tiempo_real):
+    """Fila por activo: peso meta/real, rentabilidad real (ya calculada por
+    calcular_tiempo_real), volatilidad y drawdown REALES desde la fecha de
+    compra (sobre precios reales, USD), y 'lo que vio el motor' (Sortino
+    historico + volatilidad historica que motor_seleccion.py uso al
+    seleccionar/ponderar el activo) -- ver adaptador_analista.
+    metricas_historicas_por_activo para por que NUNCA se inventa una
+    rentabilidad proyectada por activo individual."""
+    if not tiempo_real or not tiempo_real.get("posiciones"):
+        return []
+
+    import numpy as np
+    import preparador_datos as prep
+    from adaptador_analista import metricas_historicas_por_activo
+
+    composicion = portafolio.get("composicion") or {}
+    total = tiempo_real.get("total_valor") or 0
+
+    try:
+        precios = prep.cargar_precios()
+    except Exception as e:
+        print(f"⚠️ No se pudo cargar precios para metricas reales por activo: {e}")
+        precios = None
+
+    tickers = [p["activo"] for p in tiempo_real["posiciones"]]
+    motor = metricas_historicas_por_activo(tickers)
+
+    filas = []
+    for pos in tiempo_real["posiciones"]:
+        tk = pos["activo"]
+        vol_real = dd_real = None
+        if precios is not None and tk in precios.columns:
+            try:
+                serie = precios[tk].loc[pos["fecha_inicio"]:].dropna()
+                if len(serie) >= 2:
+                    dd_real = round(float((serie / serie.cummax() - 1).min()) * 100, 2)
+                if len(serie) >= 5:
+                    ret = np.log(serie / serie.shift(1)).dropna()
+                    if len(ret) >= 2:
+                        vol_real = round(float(ret.std() * np.sqrt(252)) * 100, 2)
+            except Exception as e:
+                print(f"⚠️ No se pudo calcular vol/drawdown real de {tk}: {e}")
+
+        filas.append({
+            "activo": tk,
+            "peso_meta": composicion.get(tk),
+            "peso_real": round(pos["valor_hoy"] / total, 4) if total > 0 else None,
+            "rentabilidad_real": pos["rentabilidad"],
+            "volatilidad_real": vol_real,
+            "drawdown_real": dd_real,
+            "sortino_historico_motor": motor.get(tk, {}).get("sortino_historico"),
+            "volatilidad_historica_motor": motor.get(tk, {}).get("volatilidad_historica"),
+        })
+    return filas
 
 
 SIMULAR_PROPUESTA_TOOL = {
@@ -483,6 +638,21 @@ SIMULAR_PROPUESTA_TOOL = {
                     "esto en una propuesta nueva."
                 ),
             },
+            "forzar_exacto": {
+                "type": "boolean",
+                "description": (
+                    "true SOLO cuando el usuario, pese a una advertencia tuya, insiste "
+                    "en ver las proyecciones de una lista específica y cerrada de "
+                    "tickers (ej. dijiste que el motor sugiere 10 activos nuevos y el "
+                    "usuario pide ver solo 4 en concreto + los que ya tiene). Con "
+                    "true, usa 'activos_ancla' con ESA lista completa (los que ya "
+                    "tiene + los nuevos que pidió) — el motor NO busca ni agrega nada "
+                    "más allá de esos tickers, y ninguno de ellos se purga: la "
+                    "simulación refleja EXACTAMENTE lo que el usuario pidió, para que "
+                    "lo vea y decida con datos reales en vez de quedarse solo con tu "
+                    "advertencia."
+                ),
+            },
         },
         "required": ["perfil", "inversion"],
     },
@@ -497,9 +667,32 @@ def _ejecutar_tool(nombre, input_):
     return {"error": f"Tool desconocida: {nombre}"}
 
 
-def _sistema_analista(portafolio, composicion, tiene_inv):
-    """Construye el system prompt del analista. Único punto de verdad."""
+def _sistema_analista(portafolio, composicion, tiene_inv, motivo=None):
+    """Construye el system prompt del analista. Único punto de verdad.
+
+    motivo: opcional (ej. "rebalanceo") cuando el usuario llega desde otra
+    parte de la app con un contexto especifico -- ver AvisoSeguimiento en el
+    frontend. Se RECALCULA aqui mismo con datos reales, nunca se confia en
+    lo que mande el cliente."""
     from recolector import ACTIVOS_POR_SECTOR
+
+    motivo_txt = ""
+    if motivo == "rebalanceo":
+        tiempo_real = calcular_tiempo_real(portafolio)
+        desviacion = calcular_desviacion_composicion(portafolio, tiempo_real)
+        if desviacion.get("aplica") and desviacion.get("activos_desviados"):
+            detalle = ", ".join(
+                f"{t} ({'+' if v > 0 else ''}{v}pp vs meta)"
+                for t, v in desviacion["activos_desviados"].items()
+            )
+            motivo_txt = (
+                f"CONTEXTO DE ENTRADA: el usuario llega a esta conversación desde Seguimiento, "
+                f"que detectó que la composición real de su portafolio se desvió de la meta "
+                f"(desviación total: {desviacion['desviacion_total_pp']} puntos porcentuales). "
+                f"Activos desviados: {detalle}. Reconoce esto DIRECTAMENTE en tu primer mensaje "
+                f"(qué se desvió y por qué podría importar), no le preguntes qué quiere lograr "
+                f"como si fuera una conversación nueva sin motivo.\n\n"
+            )
 
     composicion_actual_txt = ""
     if composicion:
@@ -540,6 +733,7 @@ def _sistema_analista(portafolio, composicion, tiene_inv):
     sectores_disponibles = ", ".join(sorted(ACTIVOS_POR_SECTOR.keys()))
 
     return (
+        f"{motivo_txt}"
         f"Eres un analista financiero senior especializado en portafolios de renta variable americana "
         f"para inversionistas colombianos. Tu cliente es {portafolio['propietario']}.\n\n"
         f"PORTAFOLIO:\n"
@@ -551,7 +745,10 @@ def _sistema_analista(portafolio, composicion, tiene_inv):
         f"{composicion_actual_txt}\n\n"
         f"TU ESTILO:\n"
         f"- Una pregunta a la vez. Nunca varias en un mismo mensaje.\n"
-        f"- Tienes criterio: si algo no conviene al cliente, lo dices con datos antes de ejecutar.\n"
+        f"- Tienes criterio: si algo no conviene al cliente, lo dices con datos antes de ejecutar. Pero "
+        f"la advertencia INFORMA, no bloquea: si el usuario insiste después de escucharla, ofrécele "
+        f"modelar exactamente lo que pide (con forzar_exacto, ver HERRAMIENTA simular_propuesta) para "
+        f"que decida viendo las proyecciones reales, no dejes la conversación trabada en el desacuerdo.\n"
         f"- Nunca pides información que ya tienes arriba.\n\n"
         f"Tu universo base son grandes empresas (líderes por sector) en: {sectores_disponibles}, "
         f"más ETFs sectoriales/temáticos y un puñado de criptomonedas principales. "
@@ -607,6 +804,13 @@ def _sistema_analista(portafolio, composicion, tiene_inv):
         f"Recuerda: 'activos_ancla' es SOLO para editar un portafolio existente sobre el universo completo "
         f"(el usuario confirmó mantener esos tickers); 'tickers_candidatos' restringe el universo a un tema "
         f"o categoría concreta para una propuesta nueva. No los mezcles ni confundas su propósito.\n"
+        f"SI EL USUARIO INSISTE PESE A TU ADVERTENCIA: cuando ya le explicaste un riesgo (ej. el motor "
+        f"sugiere sumar 10 activos nuevos y el usuario pide ver solo 4 específicos + los que ya tiene) y "
+        f"aun así quiere ver esa composición concreta, NO le niegues la simulación ni insistas en la "
+        f"advertencia — llama simular_propuesta con 'activos_ancla' = esa lista completa (actuales + "
+        f"nuevos que pidió) y 'forzar_exacto'=true, para que el motor no busque nada de más y ninguno de "
+        f"esos tickers se purgue: la respuesta refleja EXACTAMENTE lo que pidió, con datos reales, para "
+        f"que decida él. Aplica lo mismo al emitir el JSON final si confirma que quiere aplicarla así.\n"
         f'El JSON de ejemplo embebido arriba en este prompt (con pesos como "0.265", "0.212") es SOLO un '
         f"ejemplo de FORMATO — no son cifras reales, nunca las repitas ni las imites como si lo fueran; el "
         f'campo "activos" que finalmente emitas debe reflejar (o ser compatible con) lo que devolvió '
@@ -693,6 +897,75 @@ def generar_analisis_trm(trm_hist):
         return ''
 
 
+def generar_analisis_historico(historial, portafolio):
+    """Genera el texto de análisis IA sobre la TRAYECTORIA del portafolio
+    (tendencia, no foto del día de hoy). Mismo patrón que generar_analisis_trm,
+    sin la parte de noticias (no aplica a un portafolio individual)."""
+    if not historial or len(historial) < 2:
+        return ''
+    try:
+        valores    = [r['resumen']['total_valor'] for r in historial]
+        invertido  = [r['resumen']['total_invertido'] for r in historial]
+        fechas     = [r['fecha'] for r in historial]
+
+        valor_hoy    = valores[-1]
+        valor_inicio = valores[0]
+        n7  = min(7, len(valores))
+        n30 = min(30, len(valores))
+        valor_7d  = valores[-n7]
+        valor_30d = valores[-n30]
+
+        cambio_7d  = ((valor_hoy - valor_7d) / valor_7d * 100) if valor_7d else 0
+        cambio_30d = ((valor_hoy - valor_30d) / valor_30d * 100) if valor_30d else 0
+
+        # Día a día (entre registros consecutivos guardados, puede haber huecos
+        # si el scheduler no alcanzó a correr) para mejor/peor día y racha.
+        deltas = [valores[i] - valores[i - 1] for i in range(1, len(valores))]
+        mejor_i = max(range(len(deltas)), key=lambda i: deltas[i])
+        peor_i  = min(range(len(deltas)), key=lambda i: deltas[i])
+        mejor_dia, mejor_valor = fechas[mejor_i + 1], deltas[mejor_i]
+        peor_dia, peor_valor   = fechas[peor_i + 1], deltas[peor_i]
+
+        racha = 0
+        for d in reversed(deltas):
+            if d > 0:
+                racha += 1
+            else:
+                break
+
+        rentabilidad_hoy = historial[-1]['resumen']['rentabilidad_total']
+        perfil = portafolio.get('perfil', 'moderado')
+        nombre = portafolio.get('nombre', 'el portafolio')
+
+        return anthropic_chat(
+            [{'role': 'user', 'content':
+              f'Eres analista de inversiones. Tienes el histórico real de valor de un portafolio '
+              f'("{nombre}", perfil {perfil}) desde que se empezó a registrar.\n\n'
+              f'DATOS:\n'
+              f'- Días registrados: {len(historial)} (desde {fechas[0]})\n'
+              f'- Invertido actual: ${invertido[-1]:,.0f} USD\n'
+              f'- Valor real hoy: ${valor_hoy:,.0f} USD\n'
+              f'- Rentabilidad total: {rentabilidad_hoy:+.2f}%\n'
+              f'- Cambio en los últimos {n7} registros: {cambio_7d:+.2f}%\n'
+              f'- Cambio en los últimos {n30} registros: {cambio_30d:+.2f}%\n'
+              f'- Mejor día: {mejor_dia} ({mejor_valor:+,.0f} USD)\n'
+              f'- Peor día: {peor_dia} ({peor_valor:+,.0f} USD)\n'
+              f'- Racha actual: {racha} días consecutivos ganando\n\n'
+              f'Escribe exactamente 3 oraciones, en este orden:\n'
+              f'1. TENDENCIA: cómo se ha movido el valor real en el período registrado.\n'
+              f'2. CONSISTENCIA: qué dice la racha y el mejor/peor día sobre qué tan volátil ha sido el camino.\n'
+              f'3. LECTURA: qué tan alineado está esto con lo esperable para un perfil {perfil} (sin prometer nada a futuro).\n\n'
+              f'Reglas: usa los números exactos. Sin frases genéricas. Sin asteriscos. Español directo.'}],
+            system=(
+                'Eres un analista de portafolios senior. Interpretas la trayectoria real de un portafolio '
+                'con honestidad, sin exagerar buenos resultados ni alarmar por variaciones normales del '
+                'mercado. Nunca prometes rendimientos futuros.'),
+            max_tokens=350, temperature=0.2)
+    except Exception as e:
+        print(f"Error análisis histórico: {e}")
+        return ''
+
+
 # ============================================================
 # HELPERS
 # ============================================================
@@ -709,8 +982,9 @@ def api_analista_chat(archivo):
         portafolio = leer_portafolio(archivo)
         composicion = portafolio.get("composicion", {})
         tiene_inv = len(portafolio.get("aportes", [])) > 0
+        motivo = data.get("motivo")
 
-        sistema = _sistema_analista(portafolio, composicion, tiene_inv)
+        sistema = _sistema_analista(portafolio, composicion, tiene_inv, motivo=motivo)
 
         resp = anthropic_chat(
             data.get("historial", []),
@@ -780,12 +1054,25 @@ def api_generar_propuesta(archivo):
                          '(ej. "Biotecnología" en vez de "IBB"). Pídele tickers concretos.',
             })
 
-        # --- Activos ancla (edicion de un portafolio existente, universo
-        # completo, esos tickers protegidos de las purgas) ---
+        # --- Activos ancla (edicion de un portafolio existente) ---
         raw_ancla = data.get("activos_ancla") or []
         activos_ancla = (
             [t for t in raw_ancla if isinstance(t, str) and PATRON_TICKER.fullmatch(t)]
             or None
+        )
+        # forzar_exacto=true: el usuario insistio en ver EXACTAMENTE esa lista
+        # pese a una advertencia -- se restringe el universo a activos_ancla
+        # (nadie mas compite) y ademas quedan protegidos de las purgas dentro
+        # de ese universo chico, asi que ninguno de los tickers pedidos se
+        # cae. Sin forzar_exacto, activos_ancla solo ancla sobre el universo
+        # COMPLETO (el motor puede sumar mas alla de lo pedido).
+        forzar_exacto = bool(data.get("forzar_exacto")) and bool(activos_ancla)
+        tickers_fijos = (
+            activos_ancla if forzar_exacto
+            else (
+                list(activos_propuestos.keys())
+                if (activos_propuestos and not activos_ancla) else None
+            )
         )
 
         # --- MOTOR NUEVO: hace todo (seleccion, pesos, perfil, proyecciones) ---
@@ -795,10 +1082,7 @@ def api_generar_propuesta(archivo):
             inversion=inversion,
             aporte_dca=aporte_dca,
             frecuencia_meses=freq,
-            tickers_fijos=(
-                list(activos_propuestos.keys())
-                if (activos_propuestos and not activos_ancla) else None
-            ),
+            tickers_fijos=tickers_fijos,
             activos_ancla=activos_ancla,
         )
 
@@ -978,6 +1262,22 @@ def api_recalcular_proyecciones(archivo):
         })
 
 
+def _calcular_proyeccion_para_guardar(pesos, perfil, inv, aporte, freq, horizonte):
+    """Recalcula datos (metricas/proyecciones) sobre los pesos FINALES que se
+    van a aplicar -- no se confia en ningun 'datos' que mande el cliente, que
+    podria estar desactualizado si el usuario edito pesos despues de generar
+    la propuesta original. Reutiliza recalcular_con_pesos (el mismo motor de
+    /api/recalcular-proyecciones), nunca lanza excepcion hacia arriba."""
+    try:
+        from adaptador_analista import recalcular_con_pesos
+
+        resultado = recalcular_con_pesos(pesos, perfil, inv, aporte, freq, horizonte)
+        return resultado.get("datos")
+    except Exception as e:
+        print(f"⚠️ No se pudo calcular la proyección a guardar junto con la composición: {e}")
+        return None
+
+
 @app.route("/api/aplicar-propuesta/<archivo>", methods=["POST"])
 def api_aplicar_propuesta(archivo):
     if verificar_acceso(archivo):
@@ -990,6 +1290,7 @@ def api_aplicar_propuesta(archivo):
         inv = data.get("inversion", 1000000)
         aporte = data.get("aporte_dca", 0)
         freq = data.get("frecuencia_meses", 1)
+        horizonte = data.get("horizonte", 10)
         p = leer_portafolio(archivo)
         username = session.get("username")
 
@@ -1010,7 +1311,8 @@ def api_aplicar_propuesta(archivo):
                     "error": "Los pesos deben sumar 100% (±1%) antes de aplicar la propuesta.",
                 }), 400
 
-            guardar_composicion(archivo, pesos)
+            proyeccion = _calcular_proyeccion_para_guardar(pesos, perfil, inv, aporte, freq, horizonte)
+            guardar_composicion(archivo, pesos, proyeccion=proyeccion)
             # Resetear monitor automáticamente al cambiar composición
             ruta_monitor = os.path.join(DATOS_DIR, "portafolios", f"monitor_{archivo}")
             if os.path.exists(ruta_monitor):
@@ -1062,7 +1364,8 @@ def api_aplicar_propuesta(archivo):
                     {"ok": False, "error": "No se pudo crear el portafolio."}
                 )
             nm = os.path.basename(na)
-            guardar_composicion(nm, pesos)
+            proyeccion = _calcular_proyeccion_para_guardar(pesos, perfil, inv, aporte, freq, horizonte)
+            guardar_composicion(nm, pesos, proyeccion=proyeccion)
             ip, dispositivo = _request_meta()
             registrar_actividad(
                  "portafolio_nuevo",
@@ -2097,6 +2400,7 @@ def api_dashboard(archivo):
         'saldo_usd':   saldo_disponible(portafolio),
         'macro':       macro_json,
         'historico': portafolio.get('historial',[]),
+        'desviacion_composicion': calcular_desviacion_composicion(portafolio, tiempo_real),
     })
 
 @app.route('/api/auth/logout', methods=['POST'])
@@ -2280,7 +2584,13 @@ def api_seguimiento(archivo):
     entrados = list(set(a["activo"] for a in aportes))
     pendientes = [a for a in composicion if a not in entrados]
     total_a = len(composicion)
-    total_e = len(entrados)
+    # Progreso intersectado contra la meta VIGENTE (misma formula que
+    # calcular_desviacion_composicion) -- un ticker comprado que ya no esta
+    # en la meta no cuenta como progreso. "entrados" en si (lista completa,
+    # sin intersectar) se deja intacta abajo porque alimenta el selector de
+    # "vender/agregar mas" del formulario, que si debe listar TODO lo que el
+    # usuario posee, este o no en la meta actual.
+    total_e = len(set(entrados) & set(composicion))
     pct = int(total_e / total_a * 100) if total_a > 0 else 0
 
     pendientes_data = [
@@ -2291,6 +2601,55 @@ def api_seguimiento(archivo):
         }
         for a in pendientes
     ]
+
+    # --- Comparacion proyectado vs real (composicion + metricas) ---
+    tiempo_real = calcular_tiempo_real(portafolio)
+    pesos_reales = calcular_composicion_real(tiempo_real)
+    por_activo = calcular_metricas_reales_por_activo(portafolio, tiempo_real)
+    desviacion = calcular_desviacion_composicion(portafolio, tiempo_real)
+
+    proyeccion_guardada = portafolio.get("proyeccion_al_aplicar") or {}
+    if proyeccion_guardada.get("metricas"):
+        proyectado = {
+            **proyeccion_guardada["metricas"],
+            "fuente": "guardado_al_aplicar",
+            "fecha": proyeccion_guardada.get("fecha"),
+        }
+    elif composicion:
+        # Ningun snapshot guardado todavia para este portafolio (no se ha
+        # aplicado nada desde que existe esta funcion) -- se recalcula al
+        # vuelo sobre la composicion meta vigente, marcado como tal para que
+        # el frontend sea honesto sobre que esta mostrando.
+        proyectado_calc = _calcular_proyeccion_para_guardar(
+            composicion, portafolio.get("perfil", "moderado"),
+            portafolio.get("inversion_inicial", 1000000),
+            portafolio.get("aporte_dca", 0),
+            portafolio.get("frecuencia_meses", 1),
+            portafolio.get("horizonte", 10),
+        )
+        proyectado = (
+            {**proyectado_calc["metricas"], "fuente": "recalculado_hoy"}
+            if proyectado_calc and proyectado_calc.get("metricas") else None
+        )
+    else:
+        proyectado = None
+
+    real_portafolio = None
+    if pesos_reales and tiempo_real:
+        from adaptador_analista import metricas_reales_portafolio
+        fecha_min = min((p["fecha_inicio"] for p in tiempo_real["posiciones"]), default=None)
+        if fecha_min:
+            real_portafolio = metricas_reales_portafolio(
+                pesos_reales, fecha_min, historial=portafolio.get("historial", [])
+            )
+
+    comparacion = {
+        "composicion_meta": composicion,
+        "composicion_real": pesos_reales,
+        "por_activo": por_activo,
+        "portafolio": {"proyectado": proyectado, "real": real_portafolio},
+        "desviacion_composicion": desviacion,
+    }
 
     return jsonify(
         {
@@ -2304,6 +2663,7 @@ def api_seguimiento(archivo):
             "aportes": aportes,
             "ventas": portafolio.get("ventas", []),
             "realizado": realizado_por_ticker(portafolio),
+            "comparacion": comparacion,
         }
     )
 
@@ -2520,6 +2880,29 @@ def api_trm_analisis():
         print(f"Error guardando cache TRM: {e}")
 
     return jsonify({'analisis': analisis, 'fecha': hoy, 'cacheado': False})
+
+
+@app.route('/api/historico-analisis/<archivo>')
+def api_historico_analisis(archivo):
+    username = session.get('username')
+    if not username:
+        return jsonify({'error': 'No autorizado'}), 401
+
+    portafolio = leer_portafolio(archivo)
+    if not portafolio or portafolio.get('owner') != username:
+        return jsonify({'error': 'No encontrado'}), 404
+
+    hoy = datetime.now().strftime("%Y-%m-%d")
+    cache = portafolio.get('analisis_historico') or {}
+    if cache.get('fecha') == hoy and cache.get('texto'):
+        return jsonify({'analisis': cache['texto'], 'fecha': hoy, 'cacheado': True})
+
+    analisis = generar_analisis_historico(portafolio.get('historial', []), portafolio)
+    if analisis:
+        guardar_analisis_historico(archivo, analisis, hoy)
+
+    return jsonify({'analisis': analisis, 'fecha': hoy, 'cacheado': False})
+
 
 @app.route('/api/portafolios/<archivo>/activar', methods=['POST'])
 def api_activar_portafolio_json(archivo):

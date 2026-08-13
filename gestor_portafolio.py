@@ -225,7 +225,12 @@ def activar_portafolio(nombre_archivo):
 # ============================================================
 
 
-def guardar_composicion(nombre_archivo, pesos_dict):
+def guardar_composicion(nombre_archivo, pesos_dict, proyeccion=None):
+    """proyeccion: opcional, snapshot de datos["metricas"]/datos["proyecciones"]
+    (adaptador_analista._construir_datos_reporte) al momento de aplicar. Se
+    guarda tal cual bajo "proyeccion_al_aplicar" -- es el unico punto de
+    referencia "proyectado" que persiste hoy en el portafolio; antes de este
+    cambio se descartaba siempre despues de mostrarse una vez."""
     ruta = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}"
     if not os.path.exists(ruta):
         print(f"❌ No existe el portafolio {nombre_archivo}")
@@ -234,6 +239,12 @@ def guardar_composicion(nombre_archivo, pesos_dict):
         data = _leer(ruta)
         data["composicion"] = pesos_dict
         data["fecha_ultima_actualizacion"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        if proyeccion is not None:
+            data["proyeccion_al_aplicar"] = {
+                "fecha": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "metricas": proyeccion.get("metricas"),
+                "proyecciones": proyeccion.get("proyecciones"),
+            }
         _escribir(ruta, data)
     print(f"✅ Composición guardada en '{data['nombre']}'.")
 
@@ -519,14 +530,31 @@ def eliminar_venta(nombre_archivo, venta_id):
 
 
 def guardar_registro_diario(nombre_archivo, registro):
+    """Agrega un snapshot diario a data["historial"], deduplicado por
+    registro["fecha"] (si no viene, cae a datetime.now() del servidor).
+    La llama scheduler.py una vez al dia por portafolio -- dedup por fecha
+    la hace segura de invocar mas de una vez sin duplicar filas."""
     ruta = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}"
-    data = _leer(ruta)
-    hoy = datetime.now().strftime("%Y-%m-%d")
-    if hoy in [r["fecha"] for r in data.get("historial", [])]:
-        return False
-    data["historial"].append(registro)
-    _escribir(ruta, data)
-    return True
+    with _LOCK:
+        data = _leer(ruta)
+        historial = data.setdefault("historial", [])
+        fecha = registro.get("fecha") or datetime.now().strftime("%Y-%m-%d")
+        if fecha in [r["fecha"] for r in historial]:
+            return False
+        historial.append(registro)
+        _escribir(ruta, data)
+        return True
+
+
+def guardar_analisis_historico(nombre_archivo, texto, fecha):
+    """Cachea el analisis de Atom sobre el historico DENTRO del portafolio
+    (a diferencia del analisis de TRM, que es global a la app, este es
+    especifico de cada portafolio)."""
+    ruta = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}"
+    with _LOCK:
+        data = _leer(ruta)
+        data["analisis_historico"] = {"fecha": fecha, "texto": texto}
+        _escribir(ruta, data)
 
 
 # ============================================================

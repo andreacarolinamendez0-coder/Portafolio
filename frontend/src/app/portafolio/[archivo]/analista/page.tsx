@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState, useRef } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { getDashboard, type DashboardData } from "@/lib/api";
 import { GlassBackground } from "@/components/ui/glass-background";
@@ -15,6 +15,7 @@ interface Msg { role: "user" | "assistant"; content: string }
 export default function AnalistaPage() {
   const params  = useParams();
   const router  = useRouter();
+  const searchParams = useSearchParams();
   const archivo = params.archivo as string;
 
   const [data, setData]       = useState<DashboardData | null>(null);
@@ -28,31 +29,41 @@ export default function AnalistaPage() {
   const [msgEstado, setMsgEstado] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const [destinoSeguimiento, setDestinoSeguimiento] = useState<string | null>(null);
+  // "rebalanceo" cuando se llega desde el aviso flotante de Seguimiento --
+  // se reenvía en cada llamada para que el Analista siempre tenga el
+  // contexto real (recalculado server-side, nunca confía en lo que mande
+  // el cliente). Ver dashboard.py:_sistema_analista.
+  const [motivo] = useState<string | null>(searchParams.get("motivo"));
 
   useEffect(() => {
     getDashboard(archivo)
       .then(d => {
         setData(d);
-        setMsgs([{ role: "assistant", content: `Hola ${d.portafolio?.nombre ? "" : ""}👋 Soy tu analista. Te ayudo a construir una propuesta de inversión personalizada o a ajustar tu portafolio. Para empezar, cuéntame: ¿qué te gustaría lograr con esta inversión?` }]);
+        if (motivo === "rebalanceo") {
+          const primero: Msg = { role: "user", content: "Vengo desde Seguimiento: mi portafolio se desvió de la meta." };
+          setMsgs([primero]);
+          enviarHistorial([primero]);
+        } else {
+          setMsgs([{ role: "assistant", content: `Hola ${d.portafolio?.nombre ? "" : ""}👋 Soy tu analista. Te ayudo a construir una propuesta de inversión personalizada o a ajustar tu portafolio. Para empezar, cuéntame: ¿qué te gustaría lograr con esta inversión?` }]);
+        }
       })
       .catch(() => router.push("/login"))
       .finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [archivo, router]);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, propuesta]);
 
-  async function enviar() {
-    const texto = input.trim();
-    if (!texto || enviando) return;
-    setInput("");
-    const nuevos: Msg[] = [...msgs, { role: "user", content: texto }];
-    setMsgs(nuevos);
+  async function enviarHistorial(nuevos: Msg[]) {
     setEnviando(true);
     try {
       const r = await fetch(`/api/analista-chat/${archivo}`, {
         method: "POST", credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ historial: nuevos.map(m => ({ role: m.role, content: m.content })) }),
+        body: JSON.stringify({
+          historial: nuevos.map(m => ({ role: m.role, content: m.content })),
+          ...(motivo ? { motivo } : {}),
+        }),
       });
       const d = await r.json();
       const resp: string = d.respuesta ?? "Sin respuesta";
@@ -70,6 +81,15 @@ export default function AnalistaPage() {
     } finally {
       setEnviando(false);
     }
+  }
+
+  async function enviar() {
+    const texto = input.trim();
+    if (!texto || enviando) return;
+    setInput("");
+    const nuevos: Msg[] = [...msgs, { role: "user", content: texto }];
+    setMsgs(nuevos);
+    await enviarHistorial(nuevos);
   }
 
   async function generarPropuesta(json: Record<string, unknown>) {

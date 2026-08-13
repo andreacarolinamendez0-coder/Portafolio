@@ -100,6 +100,7 @@ export const desactivarPortafolio = (archivo: string) =>
 export interface Posicion {
   activo:        string;
   fracciones:    number;
+  fecha_inicio:  string;
   precio_hoy:    number;
   valor_hoy:     number;
   invertido:     number;
@@ -138,6 +139,14 @@ export interface HistoricoEntry {
   resumen: { total_valor: number; total_invertido: number; ganancia_total: number; rentabilidad_total: number };
 }
 
+export interface DesviacionComposicion {
+  aplica:              boolean;
+  progreso_pct:        number;
+  necesita_rebalanceo?: boolean;
+  desviacion_total_pp?: number;
+  activos_desviados?:  Record<string, number>;
+}
+
 export interface DashboardData {
   portafolio:  { nombre: string; propietario: string; perfil: string; fecha_inicio: string; monitoreo_activo: boolean };
   composicion: Record<string, number>;
@@ -145,6 +154,7 @@ export interface DashboardData {
   saldo_usd:   number;
   historico:   HistoricoEntry[];
   macro:       Macro | null;
+  desviacion_composicion: DesviacionComposicion | null;
 }
 
 export const getDashboard = (archivo: string) =>
@@ -152,6 +162,9 @@ export const getDashboard = (archivo: string) =>
 
 export const getTrmAnalisis = () =>
   apiFetch<{ analisis: string; fecha: string; cacheado?: boolean }>("/api/trm-analisis");
+
+export const getHistoricoAnalisis = (archivo: string) =>
+  apiFetch<{ analisis: string; fecha: string; cacheado?: boolean }>(`/api/historico-analisis/${archivo}`);
 
 // ── Profile ─────────────────────────────────────────────────
 
@@ -277,6 +290,39 @@ export interface Aporte {
   comision?:  number;   // USD; sale del saldo, no entra al costo/valor
 }
 
+export interface MetricaPortafolio {
+  retorno_anual: number;
+  volatilidad:   number;
+  max_drawdown:  number;
+  sharpe?:       number;
+  fuente?:       "guardado_al_aplicar" | "recalculado_hoy";
+  fecha?:        string;
+  meses_considerados?: number;
+  desde?:        string;
+}
+
+export interface MetricaActivo {
+  activo:                       string;
+  peso_meta:                    number | null;
+  peso_real:                    number | null;
+  rentabilidad_real:            number | null;
+  volatilidad_real:             number | null;
+  drawdown_real:                number | null;
+  sortino_historico_motor:      number | null;
+  volatilidad_historica_motor:  number | null;
+}
+
+export interface ComparacionSeguimiento {
+  composicion_meta: Record<string, number>;
+  composicion_real: Record<string, number>;
+  por_activo:        MetricaActivo[];
+  portafolio: {
+    proyectado: MetricaPortafolio | null;
+    real:       MetricaPortafolio | null;
+  };
+  desviacion_composicion: DesviacionComposicion | null;
+}
+
 export interface SeguimientoData {
   nombre:      string;
   composicion: Record<string, number>;
@@ -288,6 +334,7 @@ export interface SeguimientoData {
   saldo_usd:   number;
   ventas:      Venta[];
   realizado:   { por_ticker: Record<string, number>; total: number };
+  comparacion: ComparacionSeguimiento;
 }
 
 export const getSeguimiento = (archivo: string) =>

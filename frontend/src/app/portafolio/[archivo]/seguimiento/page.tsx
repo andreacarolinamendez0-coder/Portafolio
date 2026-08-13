@@ -8,6 +8,9 @@ import { GlassPanel } from "@/components/ui/glass-panel";
 import { GlowPanel } from "@/components/ui/glow-panel";
 import { LiquidButton } from "@/components/ui/liquid-glass-button";
 import { PageIntro } from "@/components/ui/page-intro";
+import { AvisoSeguimiento } from "@/components/ui/aviso-seguimiento";
+import { ComposicionComparada } from "@/components/ui/composicion-comparada";
+import { TablaFinancieraActivos } from "@/components/ui/tabla-financiera-activos";
 
 type Mov =
   | (SeguimientoData["aportes"][number] & { _tipo: "compra" })
@@ -226,6 +229,21 @@ export default function SeguimientoPage() {
               </div>
               <div style={{ marginTop: 8, fontSize: "0.8rem", color: "#6e6e73" }}>{data.progreso.pct}% completado</div>
             </GlassPanel>
+
+            {/* Composicion proyectada vs real + tabla financiera por activo */}
+            {data.comparacion.por_activo.length > 0 && (
+              <>
+                <ComposicionComparada
+                  composicionMeta={data.comparacion.composicion_meta}
+                  composicionReal={data.comparacion.composicion_real}
+                />
+                <TablaFinancieraActivos
+                  porActivo={data.comparacion.por_activo}
+                  proyectado={data.comparacion.portafolio.proyectado}
+                  real={data.comparacion.portafolio.real}
+                />
+              </>
+            )}
 
             {/* Pendientes */}
             {data.pendientes.length > 0 && (
@@ -471,6 +489,9 @@ export default function SeguimientoPage() {
               </GlassPanel>
             )}
           </>
+        )}
+        {data && (
+          <AvisoSeguimiento archivo={archivo} desviacion={data.comparacion?.desviacion_composicion} />
         )}
     </>
   );
