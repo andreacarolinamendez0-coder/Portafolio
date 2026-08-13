@@ -40,6 +40,7 @@ from gestor_portafolio import (
     editar_venta,
     eliminar_venta,
     guardar_analisis_historico,
+    set_monitoreo,
     registrar_usuario,
     login_usuario,
     registrar_actividad,
@@ -1845,7 +1846,15 @@ def api_precios_rt(archivo):
         # No llama a Finnhub directamente — el monitor ya lo hizo
         ruta = os.path.join(DATOS_DIR, "portafolios", f"monitor_{archivo}")
         if not os.path.exists(ruta):
-            return jsonify({"ok": False, "error": "Sin datos aún"})
+            portafolio_sin_datos = leer_portafolio(archivo) or {}
+            return jsonify({
+                "ok": False, "error": "Sin datos aún",
+                "composicion": portafolio_sin_datos.get('composicion', {}),
+                "tickers_con_posicion": sorted(set(
+                    a['activo'] for a in portafolio_sin_datos.get('aportes', [])
+                )),
+                "monitoreo": portafolio_sin_datos.get('monitoreo', {}).get('activos', {}),
+            })
 
         with open(ruta, "r", encoding="utf-8") as f:
             estado = json.load(f)
@@ -1875,8 +1884,17 @@ def api_precios_rt(archivo):
                 "puede_vigilar": r.get("puede_vigilar", False),
                 "mercado_rt": mercado_rt,
                 "timestamp": r.get("timestamp", ""),
+                # ── Venta (nuevo) ──
+                "banda_sup": r.get("banda_sup"),
+                "rango_vender": r.get("rango_vender"),
+                "puede_vender": r.get("puede_vender", False),
+                "costo_promedio": r.get("costo_promedio"),
+                "ganancia_pct": r.get("ganancia_pct"),
+                "senal_venta": r.get("senal_venta", "NEUTRAL"),
+                "monitorea_compra": r.get("monitorea_compra", False),
+                "monitorea_venta": r.get("monitorea_venta", False),
             }
-        
+
         # Si no hay precios en vivo (mercado cerrado), exponer los rangos calculados
         rangos_data = {}
         ruta_rangos = os.path.join(DATOS_DIR, "portafolios", f"rangos_{archivo}")
@@ -1887,6 +1905,17 @@ def api_precios_rt(archivo):
             except Exception:
                 pass
 
+        # Composicion/aportes/monitoreo -- el frontend arma con esto la
+        # sugerencia "ya compraste, ¿desactivar compra?" y los chips de
+        # activación por activo, sin pedir un endpoint aparte (ya se hace
+        # polling a este cada 4s).
+        portafolio_completo = leer_portafolio(archivo) or {}
+        composicion = portafolio_completo.get('composicion', {})
+        tickers_con_posicion = sorted(set(
+            a['activo'] for a in portafolio_completo.get('aportes', [])
+        ))
+        monitoreo = portafolio_completo.get('monitoreo', {}).get('activos', {})
+
         return jsonify({
             'ok':              True,
             'precios':         precios,
@@ -1895,6 +1924,9 @@ def api_precios_rt(archivo):
             'rangos':          rangos_data.get('rangos', {}),
             'rangos_fecha':    rangos_data.get('fecha', ''),
             'macd_sin_confirmacion_total': estado.get('macd_sin_confirmacion_total', 0),
+            'composicion':          composicion,
+            'tickers_con_posicion': tickers_con_posicion,
+            'monitoreo':            monitoreo,
         })
 
     except Exception as e:
@@ -2909,28 +2941,18 @@ def api_activar_portafolio_json(archivo):
     if verificar_acceso(archivo):
         return jsonify({'ok': False, 'error': 'No autorizado'}), 401
     try:
-        ruta = os.path.join(DATOS_DIR, 'portafolios', archivo)
-        with _LOCK:
-            with open(ruta, 'r', encoding='utf-8') as f:
-                d = json.load(f)
+        # "Activar" desde Config equivale al toggle maestro de Monitor:
+        # compra=True para toda la composición, venta=True para lo que ya
+        # tiene posición. Sin exclusividad -- varios portafolios pueden
+        # estar monitoreados a la vez (decisión de esta ampliación).
+        portafolio = leer_portafolio(archivo)
+        composicion = portafolio.get('composicion', {})
+        tickers_con_posicion = set(a['activo'] for a in portafolio.get('aportes', []))
 
-            d['monitoreo_activo'] = True
+        set_monitoreo(archivo, list(composicion.keys()), 'compra', True)
+        set_monitoreo(archivo, [t for t in composicion if t in tickers_con_posicion], 'venta', True)
 
-            # Exclusividad: solo un portafolio activo a la vez (igual que api_toggle_monitor)
-            username = session.get('username', '')
-            for p in listar_portafolios_de_usuario(username):
-                if p['archivo'] != archivo:
-                    otra = os.path.join(DATOS_DIR, 'portafolios', p["archivo"])
-                    try:
-                        with open(otra, 'r', encoding='utf-8') as f2:
-                            o = json.load(f2)
-                        if o.get('monitoreo_activo'):
-                            o['monitoreo_activo'] = False
-                            _escribir(otra, o)
-                    except Exception:
-                        pass
-
-            _escribir(ruta, d)
+        d = leer_portafolio(archivo)
 
         # Primer ciclo SIN hilo — corre ya y muestra errores
         try:
@@ -2958,15 +2980,55 @@ def api_desactivar_portafolio_json(archivo):
     if verificar_acceso(archivo):
         return jsonify({'ok': False, 'error': 'No autorizado'}), 401
     try:
-        ruta = os.path.join(DATOS_DIR, 'portafolios', archivo)
-        with _LOCK:
-            with open(ruta, 'r', encoding='utf-8') as f:
-                d = json.load(f)
-            d['monitoreo_activo'] = False
-            _escribir(ruta, d)
+        portafolio = leer_portafolio(archivo)
+        composicion = portafolio.get('composicion', {})
+        set_monitoreo(archivo, list(composicion.keys()), 'compra', False)
+        set_monitoreo(archivo, list(composicion.keys()), 'venta', False)
         return jsonify({'ok': True, 'activo': False})
     except Exception as e:
         return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@app.route('/api/monitor/<archivo>/toggle', methods=['POST'])
+def api_monitor_toggle(archivo):
+    """Activa/desactiva monitoreo de compra o venta, a nivel de portafolio
+    completo (ambito='portafolio') o de un activo puntual (ambito='activo').
+    No excluyente: un activo puede tener compra Y venta en True a la vez."""
+    if verificar_acceso(archivo):
+        return jsonify({'error': 'No autorizado'}), 401
+
+    data = request.get_json(silent=True) or {}
+    tipo = data.get('tipo')
+    valor = bool(data.get('valor'))
+    activo = data.get('activo')
+    ambito = data.get('ambito') or ('activo' if activo else 'portafolio')
+
+    if tipo not in ('compra', 'venta'):
+        return jsonify({'error': "tipo debe ser 'compra' o 'venta'"}), 400
+
+    portafolio = leer_portafolio(archivo)
+    if not portafolio:
+        return jsonify({'error': 'No encontrado'}), 404
+    composicion = portafolio.get('composicion', {})
+    tickers_con_posicion = set(a['activo'] for a in portafolio.get('aportes', []))
+
+    if ambito == 'activo':
+        if not activo or activo not in composicion:
+            return jsonify({'error': 'Ese activo no es parte de la composición'}), 404
+        if tipo == 'venta' and valor and activo not in tickers_con_posicion:
+            return jsonify({'error': 'No se puede monitorear venta de un activo sin posición'}), 400
+        tickers_objetivo = [activo]
+    else:
+        if tipo == 'compra':
+            tickers_objetivo = list(composicion.keys())
+        else:
+            # Acción masiva de venta: se filtra en silencio a los tickers
+            # con posición -- no es un error pedir "venta para todos" desde
+            # el toggle maestro aunque algunos no tengan posición todavía.
+            tickers_objetivo = [t for t in composicion if t in tickers_con_posicion]
+
+    monitoreo = set_monitoreo(archivo, tickers_objetivo, tipo, valor)
+    return jsonify({'ok': True, 'monitoreo': monitoreo})
 
 @app.route("/api/admin/usuarios", methods=["GET"])
 def api_admin_listar_usuarios():

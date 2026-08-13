@@ -3,13 +3,17 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { authMe, authLogout, getPreciosRT, type PrecioRT, type RangoTicker } from "@/lib/api";
+import { authMe, authLogout, getPreciosRT, toggleMonitoreo, ApiError, type PrecioRT, type RangoTicker, type MonitoreoMap } from "@/lib/api";
 import { GlassPanel } from "@/components/ui/glass-panel";
 import { LiquidButton } from "@/components/ui/liquid-glass-button";
 import { PageIntro } from "@/components/ui/page-intro";
 import { GlowCard } from "@/components/ui/spotlight-card";
 import { AnimatedValue } from "@/components/ui/animated-value";
+import { Switch } from "@/components/ui/switch";
 import { justificacionActivo, resumenPortafolio } from "@/lib/monitor-texto";
+
+const COLOR_COMPRA = "#0071e3";
+const COLOR_VENTA = "#ff9f0a";
 
 // Lee el precio cacheado del backend. El server refresca Finnhub ~cada 9s;
 // el frontend consulta más seguido para que el display se sienta vivo.
@@ -47,6 +51,7 @@ function senalDe(data: PrecioRT | RangoTicker): string {
 // ── Card de ticker (grid) ────────────────────────────────────
 function TickerCard({
   ticker, data, live, seleccionado, obsoleto, flash, onClick,
+  monitoreoTicker, tienePosicion, togglingKey, onToggle,
 }: {
   ticker: string;
   data: PrecioRT | RangoTicker;
@@ -55,6 +60,10 @@ function TickerCard({
   obsoleto: boolean;
   flash?: "up" | "down";
   onClick: () => void;
+  monitoreoTicker: { compra: boolean; venta: boolean };
+  tienePosicion: boolean;
+  togglingKey: string | null;
+  onToggle: (tipo: "compra" | "venta", valor: boolean) => void;
 }) {
   const senal = senalDe(data);
   // GlowCard no tiene forma de quedar "sin glow": glowColor tiene default
@@ -84,7 +93,7 @@ function TickerCard({
       }}
     >
       <Contenedor {...propsContenedor}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
           <strong style={{ color: "#f5f5f7", fontSize: "0.95rem" }}>
             {ticker}
             {obsoleto && <span title="Dato desactualizado" style={{ marginLeft: 6, fontSize: 11, color: "#ffd60a" }}>⚠</span>}
@@ -95,6 +104,21 @@ function TickerCard({
           }}>
             {senal}
           </span>
+        </div>
+
+        {/* Chips de monitoreo compra/venta — independientes, no excluyentes */}
+        <div style={{ display: "flex", gap: 5, marginBottom: 10 }}>
+          <Chip
+            label="↑ Compra" activo={monitoreoTicker.compra} color={COLOR_COMPRA}
+            disabled={togglingKey === `compra:${ticker}`}
+            onClick={() => onToggle("compra", !monitoreoTicker.compra)}
+          />
+          <Chip
+            label="↓ Venta" activo={monitoreoTicker.venta} color={COLOR_VENTA}
+            disabled={!tienePosicion || togglingKey === `venta:${ticker}`}
+            title={!tienePosicion ? "Solo se puede monitorear venta de activos que ya compraste" : undefined}
+            onClick={() => onToggle("venta", !monitoreoTicker.venta)}
+          />
         </div>
 
         {p && (
@@ -120,13 +144,73 @@ function TickerCard({
         <div style={{ height: 4, borderRadius: 2, background: "rgba(255,255,255,0.08)", overflow: "hidden" }}>
           <div style={{ height: "100%", width: `${Math.min(100, Math.max(0, rsi))}%`, background: rsiColor(rsi), transition: "width 300ms ease" }} />
         </div>
+
+        {/* Sugerencia: ya hay posición pero sigue monitoreado para compra */}
+        {monitoreoTicker.compra && tienePosicion && (
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              marginTop: 10, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8,
+              background: "rgba(255,159,10,0.1)", border: "1px solid rgba(255,159,10,0.28)", borderRadius: 10,
+              padding: "7px 9px", fontSize: 10.5, color: "#ff9f0a",
+            }}
+          >
+            <span>🔗 Ya tienes posición — ¿desactivar compra?</span>
+            <button
+              onClick={() => onToggle("compra", false)}
+              disabled={togglingKey === `compra:${ticker}`}
+              style={{
+                background: "#ff9f0a", color: "#1a1200", border: "none", fontSize: 10, fontWeight: 700,
+                padding: "4px 9px", borderRadius: 980, cursor: "pointer", whiteSpace: "nowrap",
+                opacity: togglingKey === `compra:${ticker}` ? 0.6 : 1,
+              }}
+            >
+              Aplicar
+            </button>
+          </div>
+        )}
       </Contenedor>
     </div>
   );
 }
 
+// ── Chip compra/venta (independientes, no excluyentes) ───────
+function Chip({ label, activo, color, disabled, title, onClick }: {
+  label: string; activo: boolean; color: string; disabled?: boolean; title?: string; onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      disabled={disabled}
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
+      style={{
+        fontSize: 10, fontWeight: 700, padding: "4px 8px", borderRadius: 980,
+        border: `1px solid ${activo ? `${color}66` : "var(--glass-border)"}`,
+        background: activo ? `${color}22` : "rgba(255,255,255,0.04)",
+        color: activo ? color : "var(--text-3)",
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.5 : 1,
+        letterSpacing: "0.02em",
+      }}
+    >
+      {label}
+    </button>
+  );
+}
+
 // ── Panel de detalle de un ticker seleccionado ───────────────
-function DetallePanel({ ticker, data, live }: { ticker: string; data: PrecioRT | RangoTicker; live: boolean }) {
+function DetallePanel({
+  ticker, data, live, monitoreoTicker, tienePosicion, togglingKey, onToggle,
+}: {
+  ticker: string;
+  data: PrecioRT | RangoTicker;
+  live: boolean;
+  monitoreoTicker: { compra: boolean; venta: boolean };
+  tienePosicion: boolean;
+  togglingKey: string | null;
+  onToggle: (tipo: "compra" | "venta", valor: boolean) => void;
+}) {
   const p = live ? (data as PrecioRT) : null;
   const metricas = [
     { label: "RSI", value: data.rsi != null ? data.rsi.toFixed(1) : "—" },
@@ -134,6 +218,9 @@ function DetallePanel({ ticker, data, live }: { ticker: string; data: PrecioRT |
     { label: "Bollinger", value: data.banda_inf ? `$${data.banda_inf.toFixed(2)}` : "—" },
     { label: "Volumen", value: data.vol_ratio ? `${data.vol_ratio.toFixed(1)}x` : "—" },
   ];
+  if (p && p.ganancia_pct != null) {
+    metricas.push({ label: "Ganancia real", value: `${p.ganancia_pct > 0 ? "+" : ""}${p.ganancia_pct.toFixed(1)}%` });
+  }
 
   return (
     <GlassPanel style={{ marginTop: 20 }}>
@@ -150,7 +237,33 @@ function DetallePanel({ ticker, data, live }: { ticker: string; data: PrecioRT |
         <span style={{ fontSize: 12, fontWeight: 600, color: senalColor(senalDe(data)) }}>{senalDe(data)}</span>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16, marginBottom: 18 }}>
+      {/* Monitoreo de este activo — compra y venta independientes */}
+      <div style={{ background: "var(--glass)", border: "1px solid var(--glass-border)", borderRadius: 12, padding: "12px 14px", marginBottom: 16 }}>
+        <p style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--text-3)", margin: "0 0 10px" }}>Monitoreo de este activo</p>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0" }}>
+          <span style={{ fontSize: 12.5, color: "var(--text-2)", display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ color: COLOR_COMPRA }}>↑</span> Monitorear compra
+          </span>
+          <Switch on={monitoreoTicker.compra} color={COLOR_COMPRA} disabled={togglingKey === `compra:${ticker}`} onChange={(v) => onToggle("compra", v)} />
+        </div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 0", borderTop: "1px solid var(--glass-border)" }}>
+          <span style={{ fontSize: 12.5, color: "var(--text-2)", display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ color: COLOR_VENTA }}>↓</span> Monitorear venta
+          </span>
+          <Switch
+            on={monitoreoTicker.venta} color={COLOR_VENTA}
+            disabled={!tienePosicion || togglingKey === `venta:${ticker}`}
+            title={!tienePosicion ? "Solo se puede monitorear venta de activos que ya compraste" : undefined}
+            onChange={(v) => onToggle("venta", v)}
+          />
+        </div>
+        <p style={{ fontSize: 11, color: "var(--text-3)", margin: "10px 0 0", lineHeight: 1.5 }}>
+          Ambas opciones son independientes — puedes monitorear compra y venta del mismo activo a la vez, por ejemplo si planeas aumentar tu posición y también evaluar salida parcial.
+          {!tienePosicion && " Venta solo se puede activar una vez tengas una posición registrada en Seguimiento."}
+        </p>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: `repeat(${metricas.length}, 1fr)`, gap: 16, marginBottom: 18 }}>
         {metricas.map(m => (
           <div key={m.label}>
             <p style={{ fontSize: 11, color: "#6e6e73", textTransform: "uppercase", letterSpacing: "0.06em", margin: "0 0 4px" }}>{m.label}</p>
@@ -182,6 +295,13 @@ export default function MonitorPage() {
   const [selected, setSelected] = useState("");
   const [progress, setProgress] = useState(0);
 
+  // ── Monitoreo granular (compra/venta, por activo) ──────────
+  const [composicion, setComposicion] = useState<Record<string, number>>({});
+  const [tickersConPosicion, setTickersConPosicion] = useState<string[]>([]);
+  const [monitoreo, setMonitoreo] = useState<MonitoreoMap>({});
+  const [togglingKey, setTogglingKey] = useState<string | null>(null);
+  const [toggleError, setToggleError] = useState("");
+
   const prevPrecios = useRef<Record<string, number>>({});
   const flashTimer  = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastLoadRef = useRef<number>(Date.now());
@@ -211,6 +331,9 @@ export default function MonitorPage() {
         setMA(data.mercado_abierto);
         setUU(data.ultimo_update);
         setMSC(data.macd_sin_confirmacion_total ?? 0);
+        setComposicion(data.composicion ?? {});
+        setTickersConPosicion(data.tickers_con_posicion ?? []);
+        setMonitoreo(data.monitoreo ?? {});
         setEstado("");
         setErrorMsg("");
         lastLoadRef.current = Date.now();
@@ -222,9 +345,15 @@ export default function MonitorPage() {
         }
       } else {
         // El backend respondió pero sin datos utilizables — distinguir
-        // "monitor nunca inicializado" de un error real de backend.
+        // "monitor nunca inicializado" de un error real de backend. La
+        // composición/monitoreo puede venir igual (portafolio nunca
+        // activado todavía, pero ya tiene meta) para poder togglear desde
+        // aquí sin esperar al primer ciclo del monitor.
         setPrecios({});
         setRangos({});
+        setComposicion(data.composicion ?? {});
+        setTickersConPosicion(data.tickers_con_posicion ?? []);
+        setMonitoreo(data.monitoreo ?? {});
         if (data.error === "Sin datos aún") {
           setEstado("sin_inicializar");
         } else {
@@ -239,6 +368,23 @@ export default function MonitorPage() {
       if (!redirigiendo) setLoading(false);
     }
   }, [archivo, router]);
+
+  const aplicarToggle = useCallback(async (tipo: "compra" | "venta", valor: boolean, activo?: string) => {
+    const key = `${tipo}:${activo ?? "portafolio"}`;
+    setTogglingKey(key);
+    setToggleError("");
+    try {
+      const body = activo
+        ? { ambito: "activo" as const, activo, tipo, valor }
+        : { ambito: "portafolio" as const, tipo, valor };
+      const res = await toggleMonitoreo(archivo, body);
+      if (res.monitoreo) setMonitoreo(res.monitoreo);
+    } catch (e) {
+      setToggleError(e instanceof ApiError ? e.message : "No se pudo actualizar el monitoreo.");
+    } finally {
+      setTogglingKey(null);
+    }
+  }, [archivo]);
 
   useEffect(() => {
     load();
@@ -264,6 +410,11 @@ export default function MonitorPage() {
   const tickersActuales = Object.keys(itemsActuales);
   const tickerSeleccionado = (selected && tickersActuales.includes(selected)) ? selected : tickersActuales[0];
   const dataSeleccionada = tickerSeleccionado ? itemsActuales[tickerSeleccionado] : null;
+
+  const flagsDe = (t: string) => monitoreo[t] ?? { compra: false, venta: false };
+  const tickersComposicion = Object.keys(composicion);
+  const conteoCompra = tickersComposicion.filter(t => flagsDe(t).compra).length;
+  const conteoVenta = tickersConPosicion.filter(t => flagsDe(t).venta).length;
 
   return (
     <>
@@ -293,6 +444,45 @@ export default function MonitorPage() {
         {ultimoUpdate && <span style={{ fontSize: 12, color: "#6e6e73" }}>Actualizado: {ultimoUpdate}</span>}
         <button onClick={async () => { await authLogout(); router.push("/login"); }} style={{ marginLeft: "auto", background: "none", border: "none", color: "#6e6e73", fontSize: 12, cursor: "pointer" }}>Salir</button>
       </div>
+
+      {/* Panel maestro — activar/desactivar compra y venta para todo el portafolio de un golpe */}
+      {tickersComposicion.length > 0 && (
+        <GlassPanel style={{ marginBottom: 16 }}>
+          <p style={{ fontSize: 10.5, textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--text-3)", margin: "0 0 12px" }}>Monitoreo del portafolio</p>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+            <div style={{ flex: 1, minWidth: 200, display: "flex", alignItems: "center", justifyContent: "space-between", border: "1px solid var(--glass-border)", borderRadius: 12, padding: "11px 14px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ width: 28, height: 28, borderRadius: 9, background: `${COLOR_COMPRA}22`, color: COLOR_COMPRA, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, flexShrink: 0 }}>↑</span>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>Monitoreo de compra</div>
+                  <div style={{ fontSize: 11, color: "var(--text-3)" }}>Activo en {conteoCompra} de {tickersComposicion.length} activos</div>
+                </div>
+              </div>
+              <Switch
+                on={conteoCompra > 0} color={COLOR_COMPRA}
+                disabled={togglingKey === "compra:portafolio"}
+                onChange={(v) => aplicarToggle("compra", v)}
+              />
+            </div>
+            <div style={{ flex: 1, minWidth: 200, display: "flex", alignItems: "center", justifyContent: "space-between", border: "1px solid var(--glass-border)", borderRadius: 12, padding: "11px 14px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ width: 28, height: 28, borderRadius: 9, background: `${COLOR_VENTA}22`, color: COLOR_VENTA, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, flexShrink: 0 }}>↓</span>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text)" }}>Monitoreo de venta</div>
+                  <div style={{ fontSize: 11, color: "var(--text-3)" }}>Activo en {conteoVenta} de {tickersConPosicion.length} activos con posición</div>
+                </div>
+              </div>
+              <Switch
+                on={conteoVenta > 0} color={COLOR_VENTA}
+                disabled={togglingKey === "venta:portafolio" || tickersConPosicion.length === 0}
+                title={tickersConPosicion.length === 0 ? "Todavía no tienes ninguna posición comprada" : undefined}
+                onChange={(v) => aplicarToggle("venta", v)}
+              />
+            </div>
+          </div>
+          {toggleError && <p style={{ fontSize: 12, color: "#ff453a", margin: "10px 0 0" }}>{toggleError}</p>}
+        </GlassPanel>
+      )}
 
       {hayPrecios && (
         <GlassPanel style={{ marginBottom: 24 }}>
@@ -398,11 +588,21 @@ export default function MonitorPage() {
                       seleccionado={ticker === tickerSeleccionado}
                       obsoleto={false}
                       onClick={() => setSelected(ticker)}
+                      monitoreoTicker={flagsDe(ticker)}
+                      tienePosicion={tickersConPosicion.includes(ticker)}
+                      togglingKey={togglingKey}
+                      onToggle={(tipo, valor) => aplicarToggle(tipo, valor, ticker)}
                     />
                   ))}
                 </div>
                 {dataSeleccionada && tickerSeleccionado && (
-                  <DetallePanel ticker={tickerSeleccionado} data={dataSeleccionada} live={false} />
+                  <DetallePanel
+                    ticker={tickerSeleccionado} data={dataSeleccionada} live={false}
+                    monitoreoTicker={flagsDe(tickerSeleccionado)}
+                    tienePosicion={tickersConPosicion.includes(tickerSeleccionado)}
+                    togglingKey={togglingKey}
+                    onToggle={(tipo, valor) => aplicarToggle(tipo, valor, tickerSeleccionado)}
+                  />
                 )}
               </>
             )}
@@ -423,12 +623,22 @@ export default function MonitorPage() {
                   obsoleto={obsoleto}
                   flash={flash[ticker]}
                   onClick={() => setSelected(ticker)}
+                  monitoreoTicker={flagsDe(ticker)}
+                  tienePosicion={tickersConPosicion.includes(ticker)}
+                  togglingKey={togglingKey}
+                  onToggle={(tipo, valor) => aplicarToggle(tipo, valor, ticker)}
                 />
               );
             })}
           </div>
           {dataSeleccionada && tickerSeleccionado && (
-            <DetallePanel ticker={tickerSeleccionado} data={dataSeleccionada} live={true} />
+            <DetallePanel
+              ticker={tickerSeleccionado} data={dataSeleccionada} live={true}
+              monitoreoTicker={flagsDe(tickerSeleccionado)}
+              tienePosicion={tickersConPosicion.includes(tickerSeleccionado)}
+              togglingKey={togglingKey}
+              onToggle={(tipo, valor) => aplicarToggle(tipo, valor, tickerSeleccionado)}
+            />
           )}
         </>
       )}

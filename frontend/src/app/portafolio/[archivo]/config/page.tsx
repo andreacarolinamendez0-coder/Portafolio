@@ -63,16 +63,6 @@ export default function ConfigPage() {
     }
   }
 
-  async function desactivar() {
-    try {
-      await activarPortafolio(archivo);
-      setActivo(true);
-      setMsg({ text: "Portafolio activado para monitoreo", ok: true });
-    } catch (e: unknown) {
-      setMsg({ text: e instanceof Error ? e.message : "Error", ok: false });
-    }
-  }
-
   async function eliminar() {
     const { portafolios } = await getPortafolios();
     if (portafolios.length === 1) { setDialogoUltimo(true); return; }   // único → diálogo de Atom

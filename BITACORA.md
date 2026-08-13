@@ -1125,3 +1125,134 @@ mí — queda para que Andrea lo revise.
   ese enfoque en vez de la reconstrucción retroactiva usada hoy.
 
 ---
+
+## [2026-08-13] Monitor: señal de venta + activación granular de compra/venta por activo
+
+**Contexto:** Punto 3 de la hoja de ruta del día. Auditoría previa (agente
+`auditor`) confirmó que `monitor.py` solo calculaba rangos de ENTRADA
+(compra); cero código de venta. El toggle de monitoreo era un solo booleano
+por portafolio (`monitoreo_activo`), todo-o-nada, con exclusividad forzada
+(solo un portafolio por usuario podía estar activo a la vez). `monitor.py`
+nunca leía `aportes` — no sabía qué ya estaba comprado.
+
+**Decisiones tomadas con Andrea:**
+1. Exclusividad eliminada por completo — varios portafolios pueden estar
+   monitoreados a la vez.
+2. Si un activo monitoreado para compra ya se compró: se sugiere
+   desactivar, no se fuerza. El usuario decide.
+3. Venta solo se puede activar para activos con posición viva (aparecen en
+   `aportes`).
+4. Señal de venta: técnica simétrica a la de compra (RSI alto, banda
+   superior de Bollinger, MACD perdiendo impulso, volumen) PERO solo se
+   marca/alerta si ya hay ganancia real positiva desde el costo promedio de
+   compra — evita sugerir vender en pérdida por una lectura técnica de
+   corto plazo.
+
+**Modelo de datos nuevo:** `data["monitoreo"]["activos"][ticker] =
+{"compra": bool, "venta": bool}` — única fuente de verdad, no excluyente
+(un activo puede tener ambas en `true`). El campo legado `monitoreo_activo`
+se conserva pero pasa a ser **derivado** (`any` compra/venta en `true`),
+recalculado en cada escritura — a propósito, para no repetir la
+duplicación de estado que ya existía entre `activo` y `monitoreo_activo`
+(dos booleanos sueltos que podían desincronizarse, detectada en la
+auditoría).
+
+**Backend:**
+- `gestor_portafolio.py`: nueva `set_monitoreo(nombre_archivo, tickers,
+  tipo, valor)` — única función que escribe el mapa, recalcula el gate
+  legado.
+- `dashboard.py`: nuevo `POST /api/monitor/<archivo>/toggle` (ámbito
+  portafolio o activo puntual, valida que venta solo se active con
+  posición viva → 400 si no); `api_activar_portafolio_json` /
+  `api_desactivar_portafolio_json` ya no tienen el bloque de exclusividad
+  forzada y ahora pasan por `set_monitoreo` (activar = compra en toda la
+  composición + venta en lo que ya tiene posición; desactivar = ambas en
+  `false` para todo); `/api/precios-rt/<archivo>` extendido con
+  `composicion`, `tickers_con_posicion`, `monitoreo` (mismo polling de 4s
+  que ya hacía el frontend, sin endpoint nuevo para esto).
+- `monitor.py` (con autorización explícita de Andrea para tocarlo,
+  auditado primero, nunca ejecutado directamente — solo funciones
+  puntuales en pruebas aisladas):
+  - `_macd_bollinger` ahora también devuelve banda **superior** de
+    Bollinger (antes solo existía la inferior).
+  - Nueva `_costo_promedio(aportes, ticker)` — réplica local y pequeña del
+    mismo cálculo que ya hace `dashboard.py:calcular_tiempo_real`, sin
+    importar `dashboard` desde el daemon de producción.
+  - `precalcular_rangos`: además del score de compra ya existente, calcula
+    ahora un score de venta simétrico (RSI alto, tendencia extendida,
+    volumen) y el costo promedio real por ticker.
+  - `vigilar_precios`: nueva rama de señal de venta (`VENDER` solo con
+    ganancia real > 0, `VIGILAR_VENTA` si el técnico dispara pero sin
+    ganancia todavía) — colocada ANTES del bloque de alertas de compra
+    (que ya usa varios `continue` propios) para que esos `continue` nunca
+    salten la lógica de venta sin querer; la venta no usa `continue` en
+    ningún punto, solo ifs anidados. Throttling de lotes de alerta
+    duplicado en paralelo (`lotes_alerta_venta`) en vez de generalizar la
+    estructura existente, para no arriesgar la lógica de compra ya
+    afinada. Mensajes de Telegram de venta nuevos, sin teclado de
+    decisión todavía (aceptar/posponer) — simplificación explícita,
+    fuera de alcance hoy.
+  - Migración retrocompatible: si un portafolio nunca pasó por el toggle
+    nuevo (`"monitoreo"` ausente del JSON), se preserva el comportamiento
+    legado — compra=true para toda la composición, venta=false para
+    todos. Sin esto, portafolios ya activados antes de este cambio
+    habrían dejado de monitorear compra silenciosamente.
+
+**Frontend:**
+- Nuevo `components/ui/switch.tsx` — no existía ningún componente Switch
+  en el design system.
+- `monitor/page.tsx` rediseñado siguiendo el mockup de Andrea, adaptado a
+  los tokens ya establecidos (`GlassPanel`, colores del proyecto en vez de
+  los hex sueltos del mockup): panel maestro con 2 switches + conteo
+  derivado "Activo en X de Y activos"; chips independientes compra/venta
+  por tarjeta; caja de sugerencia condicional ("ya tienes posición —
+  ¿desactivar compra?") cuando aplica; panel de detalle con los mismos 2
+  switches + nota explícita de independencia + métrica de ganancia real
+  cuando hay venta monitoreada.
+- `config/page.tsx`: se eliminó `desactivar()`, función muerta detectada
+  en la auditoría (copy-paste que llamaba mal a `activarPortafolio`, nunca
+  conectada a ningún botón).
+- `api.ts`: tipos `MonitoreoActivo`/`MonitoreoMap`, `toggleMonitoreo()`,
+  `PrecioRT`/`RangoTicker` extendidos con los campos de venta.
+
+**Verificado:**
+- `py_compile` en los 5 archivos backend tocados.
+- Pruebas aisladas sin correr `monitor.py` completo (regla del proyecto):
+  `_macd_bollinger` (bandas simétricas), `_costo_promedio` (con y sin
+  posición), `set_monitoreo` (compra/venta independientes, no excluyentes,
+  gate legado derivado en ambas direcciones) sobre un portafolio
+  desechable creado y borrado por el propio script. `vigilar_precios`
+  probado con `monitor.telegram` monkeypatcheado a un stub que solo
+  captura mensajes — nunca tocó la red real ni Telegram real — confirmando
+  3 escenarios: alerta de venta se dispara tras 3 polls con ganancia
+  positiva; con ganancia negativa marca `VIGILAR_VENTA` sin alertar
+  (regla "combinar ambos" respetada); dedup/dispatch correctos.
+- Endpoints nuevos probados con `test_client()` sobre `andrea.json` (el
+  único portafolio real con aportes) — backup exacto del archivo antes de
+  la prueba, restaurado byte a byte al final, confirmado por diff visual
+  del JSON. Confirmado: toggle por activo, error 400 al intentar venta sin
+  posición, toggle masivo respeta el filtro de posición para venta, campos
+  nuevos presentes en `/api/precios-rt`, bloque de exclusividad
+  efectivamente ausente del código fuente.
+- `tsc --noEmit` limpio. Playwright sin errores de consola: estado
+  inicial con chips/sugerencias mixtas, detalle de un activo con
+  ganancia real, aplicar sugerencia actualiza las 3 superficies (panel
+  maestro, chip de la tarjeta, switch del detalle) en sincronía.
+
+**Resultado:** cerrado y verificado. Archivos backend tocados:
+`monitor.py`, `dashboard.py`, `gestor_portafolio.py`. Frontend:
+`components/ui/switch.tsx`, `app/portafolio/[archivo]/monitor/page.tsx`,
+`app/portafolio/[archivo]/config/page.tsx`, `lib/api.ts`. Ningún cambio
+commiteado por mí.
+
+**Pendiente de decisión / próximos pasos:**
+- Teclado de decisión de Telegram para venta (aceptar/posponer/sigue
+  informando) con el mismo pulido que ya tiene compra — hoy la alerta se
+  manda sin botones.
+- Limpiar la duplicación preexistente `activo` vs `monitoreo_activo`
+  (ajena a esta tarea, se documentó pero no se tocó).
+- El riesgo operacional ya documentado en la entrada anterior (hilo del
+  monitor se arma 15s después de cualquier `import dashboard`, sin guard
+  de entorno) sigue sin resolverse.
+
+---

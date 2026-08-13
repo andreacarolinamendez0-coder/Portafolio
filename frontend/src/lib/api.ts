@@ -199,6 +199,15 @@ export interface PrecioRT {
   puede_vigilar:  boolean;
   mercado_rt:     boolean;
   timestamp:      string;
+  // ── Venta (nuevo) ──
+  banda_sup?:        number | null;
+  rango_vender?:      number | null;
+  puede_vender?:      boolean;
+  costo_promedio?:    number | null;
+  ganancia_pct?:      number | null;
+  senal_venta?:       string;
+  monitorea_compra?:  boolean;
+  monitorea_venta?:   boolean;
 }
 
 // Rango de entrada/vigilancia precalculado para el día — lo que el backend
@@ -218,7 +227,21 @@ export interface RangoTicker {
   rango_vigilar:  number | null;
   puede_entrar:   boolean;
   puede_vigilar:  boolean;
+  // ── Venta (nuevo) ──
+  banda_sup?:         number | null;
+  score_venta_base?:  number;
+  rango_vender?:      number | null;
+  puede_vender?:      boolean;
+  costo_promedio?:    number | null;
 }
+
+// Activación granular de monitoreo por activo -- compra y venta son
+// independientes, un activo puede tener ambas en true a la vez.
+export interface MonitoreoActivo {
+  compra: boolean;
+  venta:  boolean;
+}
+export type MonitoreoMap = Record<string, MonitoreoActivo>;
 
 export const getPreciosRT = (archivo: string) =>
   apiFetch<{
@@ -233,7 +256,21 @@ export const getPreciosRT = (archivo: string) =>
     // monitor.py, vigilar_precios() y dashboard.py /api/precios-rt.
     macd_sin_confirmacion_total?: number;
     error?:          string;
+    composicion?:          Record<string, number>;
+    tickers_con_posicion?: string[];
+    monitoreo?:            MonitoreoMap;
   }>(`/api/precios-rt/${archivo}`);
+
+// ambito="activo" requiere `activo`; ambito="portafolio" aplica a toda la
+// composición (compra) o solo a los tickers con posición viva (venta).
+export const toggleMonitoreo = (
+  archivo: string,
+  body: { ambito: "portafolio" | "activo"; activo?: string; tipo: "compra" | "venta"; valor: boolean }
+) =>
+  apiFetch<{ ok?: boolean; monitoreo?: MonitoreoMap; error?: string }>(`/api/monitor/${archivo}/toggle`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
 
 export const triggerRecolector = () =>
   apiFetch<{ ok: boolean }>("/api/recolector", { method: "POST" });

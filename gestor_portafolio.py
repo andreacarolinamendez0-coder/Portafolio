@@ -221,6 +221,37 @@ def activar_portafolio(nombre_archivo):
 
 
 # ============================================================
+# MONITOREO GRANULAR (compra/venta, por activo)
+# ============================================================
+
+
+def set_monitoreo(nombre_archivo, tickers, tipo, valor):
+    """Unica funcion que escribe data["monitoreo"]["activos"] -- fuente de
+    verdad del monitoreo granular por activo (compra/venta independientes,
+    no excluyentes). Setea monitoreo.activos[t][tipo]=valor para cada t en
+    tickers (crea la entrada si no existe) y recalcula monitoreo_activo, el
+    gate legado que sigue usando monitor.py:leer_portafolios_activos() para
+    decidir que portafolios ni mirar -- se deriva SIEMPRE de este mapa, para
+    no repetir la duplicacion de estado que ya existe entre "activo" y
+    "monitoreo_activo" (dos booleanos sueltos que pueden desincronizarse).
+
+    tipo: "compra" | "venta". Devuelve el mapa "monitoreo" actualizado."""
+    ruta = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}"
+    with _LOCK:
+        data = _leer(ruta)
+        mon = data.setdefault("monitoreo", {"activos": {}})
+        activos_map = mon.setdefault("activos", {})
+        for t in tickers:
+            entry = activos_map.setdefault(t, {"compra": False, "venta": False})
+            entry[tipo] = valor
+        data["monitoreo_activo"] = any(
+            e.get("compra") or e.get("venta") for e in activos_map.values()
+        )
+        _escribir(ruta, data)
+        return data["monitoreo"]
+
+
+# ============================================================
 # GUARDAR COMPOSICIÓN
 # ============================================================
 

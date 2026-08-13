@@ -41,6 +41,7 @@ FINNHUB_KEY = os.environ.get("FINNHUB_API_KEY", "")
 
 UMBRAL_ENTRADA = 6.5
 UMBRAL_VIGILAR = 4.5
+UMBRAL_VENTA = 6.5  # simetrico a UMBRAL_ENTRADA, para el score de venta
 DIAS_SIN_SENAL_MAX = 5
 K_BOLLINGER = (
     2.0  # ancho de la banda inferior (σ). Subir = triggers más profundos/raros
@@ -258,6 +259,42 @@ def _mensaje_alerta_agrupada(alertas):
     )
 
 
+def _mensaje_alerta_venta_individual(a):
+    """Texto de la alerta VENDER para un solo ticker. Solo se dispara cuando
+    ya hay ganancia real positiva (ver vigilar_precios) -- por eso el
+    mensaje siempre puede mostrar la ganancia con confianza."""
+    msg = (
+        f"🔴 <b>POSIBLE VENTA — {a['ticker']}</b>\n\n"
+        f"💵 Precio: <b>${a['precio']:,.2f} USD</b> ({a['cambio']:+.2f}% hoy)\n"
+        f"🎯 Cruzó la banda superior Bollinger (&gt; ${a['rango_vender']:,.2f})\n"
+        f"💰 Ganancia actual: <b>{a['ganancia_pct']:+.1f}%</b> "
+        f"(costo promedio ${a['costo_promedio']:,.2f})\n"
+        f"📊 RSI: {a['rsi']}\n\n"
+        f"<i>Sugerencia informativa según indicadores técnicos — no es una "
+        f"orden de actuar ya. Vende cuando te parezca el mejor momento.</i>"
+    )
+    if a["origen_lote"] == "sigue":
+        msg += "\n\n<i>(Actualización — pediste seguir informado)</i>"
+    return msg
+
+
+def _mensaje_alerta_venta_agrupada(alertas):
+    """Texto del mensaje cuando 2+ tickers cruzan su rango de venta en el
+    mismo ciclo. Mismo tono que la alerta individual."""
+    lineas = "\n".join(
+        f"• <b>{a['ticker']}</b> — ${a['precio']:,.2f} ({a['cambio']:+.2f}% hoy) · "
+        f"Ganancia {a['ganancia_pct']:+.1f}% · RSI {a['rsi']}"
+        for a in alertas
+    )
+    return (
+        f"🎯 <b>{len(alertas)} activos cruzaron su rango de venta</b>\n\n"
+        f"{lineas}\n\n"
+        f"<i>Son sugerencias informativas según indicadores técnicos — no "
+        f"son órdenes de actuar ya. Vende cada uno cuando te parezca el "
+        f"mejor momento.</i>"
+    )
+
+
 # ─────────────────────────────────────────────────────────────
 # COINGECKO — PRECIO EN TIEMPO REAL
 # ─────────────────────────────────────────────────────────────
@@ -362,22 +399,39 @@ def yfinance_historico(ticker, dias=90):
 
 
 def _macd_bollinger(close, k=K_BOLLINGER):
-    """Banda inferior de Bollinger y dirección del histograma MACD.
+    """Bandas de Bollinger (inferior y superior) y dirección del histograma MACD.
 
-    Devuelve (banda_inferior, histograma_actual, histograma_subiendo).
+    Devuelve (banda_inferior, banda_superior, histograma_actual, histograma_subiendo).
     - banda_inferior = MA20 - k·σ20  → trigger de entrada adaptado a la
       volatilidad de cada activo (BTC no dispara con 2%, AAPL sí).
+    - banda_superior = MA20 + k·σ20  → trigger de venta, misma lógica
+      simétrica (se agrega para el monitoreo de venta -- antes solo existía
+      la banda inferior porque no había nada que la necesitara).
     - histograma_subiendo = el momentum ya está girando al alza (MACD hist
-      del último día > el del día anterior). Confirmación anti-cuchillo.
+      del último día > el del día anterior). Confirmación anti-cuchillo
+      (para venta se usa el mismo valor, pero se interpreta al revés:
+      NO subiendo = perdiendo impulso, señal a favor de vender).
     """
     ma20 = close.rolling(20).mean().iloc[-1]
     std20 = close.rolling(20).std().iloc[-1]
     banda_inf = float(ma20 - k * std20)
+    banda_sup = float(ma20 + k * std20)
     ema12 = close.ewm(span=12, adjust=False).mean()
     ema26 = close.ewm(span=26, adjust=False).mean()
     macd_line = ema12 - ema26
     hist = macd_line - macd_line.ewm(span=9, adjust=False).mean()
-    return banda_inf, float(hist.iloc[-1]), bool(hist.iloc[-1] > hist.iloc[-2])
+    return banda_inf, banda_sup, float(hist.iloc[-1]), bool(hist.iloc[-1] > hist.iloc[-2])
+
+
+def _costo_promedio(aportes, ticker):
+    """Precio promedio de compra (USD) de un ticker, a partir de los aportes
+    reales del usuario. Replica pequeña y local del mismo cálculo que ya hace
+    dashboard.py:calcular_tiempo_real (avg_usd = invertido/fracciones) -- no
+    se importa dashboard.py desde monitor.py para no acoplar el daemon de
+    producción a ese módulo. None si el ticker no tiene fracciones vivas."""
+    total_usd = sum(a["monto_usd"] for a in aportes if a.get("activo") == ticker)
+    total_frac = sum(a["fracciones"] for a in aportes if a.get("activo") == ticker)
+    return (total_usd / total_frac) if total_frac else None
 
 
 # ─────────────────────────────────────────────────────────────
@@ -396,7 +450,15 @@ def precalcular_rangos(archivo, portafolio):
     Solo el precio cambia durante el mercado.
     """
     composicion = portafolio.get("composicion", {})
-    tickers = list(composicion.keys())
+    aportes = portafolio.get("aportes", [])
+    monitoreo_map = portafolio.get("monitoreo", {}).get("activos", {})
+    # Union con tickers monitoreados para venta que ya no estan en la
+    # composicion vigente (se rebalanceo la meta pero el usuario sigue
+    # teniendo la posicion y quiere seguir vigilando la salida).
+    tickers_venta_extra = [
+        t for t, m in monitoreo_map.items() if m.get("venta") and t not in composicion
+    ]
+    tickers = list(composicion.keys()) + tickers_venta_extra
     if not tickers:
         return None
 
@@ -472,8 +534,31 @@ def precalcular_rangos(archivo, portafolio):
                 score_base += 0.5
             score_base = round(score_base, 1)
 
-            # ── Bollinger inferior + confirmación MACD ─────────
-            banda_inf, macd_hist, hist_subiendo = _macd_bollinger(close)
+            # ── Score de venta — simetrico al de compra: RSI ALTO,
+            # tendencia extendida al alza, mismo bono de volumen. Se
+            # calcula siempre (barato, mismos datos ya descargados) aunque
+            # solo se usa mas abajo si el ticker tiene costo_promedio (ya
+            # comprado) -- monitorear "mejor momento para vender" algo que
+            # no se tiene no aplica.
+            score_venta_base = 0.0
+            if rsi > 70:
+                score_venta_base += 3.0
+            elif rsi > 60:
+                score_venta_base += 2.0
+            elif rsi > 55:
+                score_venta_base += 1.0
+            if tend > 10:
+                score_venta_base += 2.0
+            elif tend > 5:
+                score_venta_base += 1.5
+            elif tend > 0:
+                score_venta_base += 0.5
+            if vol_r > 1.5:
+                score_venta_base += 0.5
+            score_venta_base = round(score_venta_base, 1)
+
+            # ── Bollinger (inferior y superior) + confirmación MACD ────
+            banda_inf, banda_sup, macd_hist, hist_subiendo = _macd_bollinger(close)
 
             # ── Rangos de precio ───────────────────────────────
             # ENTRAR exige score suficiente. El momentum MACD (hist_subiendo)
@@ -489,10 +574,20 @@ def precalcular_rangos(archivo, portafolio):
             rango_entrar = round(banda_inf, 2) if puede_entrar else None
             rango_vigilar = round(ma50, 2) if puede_vigilar else None
 
+            # ── Rango de VENTA ──────────────────────────────────
+            # score_para_vender: igual que compra, +0.5 cuando el momentum
+            # esta PERDIENDO impulso (hist NO subiendo) -- confirmacion
+            # simetrica a la de compra (alli +0.5 cuando SI esta subiendo).
+            score_para_vender = score_venta_base + (0.0 if hist_subiendo else 0.5)
+            puede_vender_tecnico = (score_para_vender + 2.0) >= UMBRAL_VENTA
+            rango_vender = round(banda_sup, 2) if puede_vender_tecnico else None
+            costo_promedio = _costo_promedio(aportes, ticker)
+
             rangos_hoy[ticker] = {
                 "ma20": round(ma20, 2),
                 "ma50": round(ma50, 2),
                 "banda_inf": round(banda_inf, 2),
+                "banda_sup": round(banda_sup, 2),
                 "rsi": rsi,
                 "tendencia": tend,
                 "vol_ratio": vol_r,
@@ -503,6 +598,10 @@ def precalcular_rangos(archivo, portafolio):
                 "rango_vigilar": rango_vigilar,
                 "puede_entrar": puede_entrar,
                 "puede_vigilar": puede_vigilar,
+                "score_venta_base": score_venta_base,
+                "rango_vender": rango_vender,
+                "puede_vender": puede_vender_tecnico,
+                "costo_promedio": round(costo_promedio, 2) if costo_promedio else None,
             }
 
             # Log claro en Railway
@@ -566,6 +665,13 @@ def vigilar_precios(archivo, portafolio, rangos_del_dia, precios_cache=None):
         chat_id = chat_id_de(portafolio)
         hoy_str = hora_colombia().strftime("%Y-%m-%d")
 
+        # Activacion granular por activo (compra/venta independientes). Si
+        # el portafolio nunca paso por el toggle nuevo ("monitoreo" ausente
+        # del JSON), se preserva el comportamiento legado: compra=True para
+        # todos (todo-o-nada de antes), venta=False para todos (no existia).
+        monitoreo_map = portafolio.get("monitoreo", {}).get("activos", {})
+        monitoreo_migrado = "monitoreo" in portafolio
+
         if "resultados_rt" not in estado:
             estado["resultados_rt"] = {}
 
@@ -589,6 +695,11 @@ def vigilar_precios(archivo, portafolio, rangos_del_dia, precios_cache=None):
         # Re-preguntas ("¿sigo informando?") de lotes que se agotaron este
         # ciclo — se mandan individualmente al final, una por ticker.
         reprompts_pendientes = []
+        # Mismo mecanismo, estructura paralela para venta (throttling
+        # independiente del de compra -- un ticker puede estar en lote de
+        # compra Y de venta a la vez, no deben pisarse).
+        alertas_venta_pendientes = []
+        reprompts_venta_pendientes = []
 
         for ticker, rango in rangos_del_dia["rangos"].items():
 
@@ -600,6 +711,10 @@ def vigilar_precios(archivo, portafolio, rangos_del_dia, precios_cache=None):
 
             precio = float(quote["c"])
             cambio = float(quote.get("dp", 0))
+
+            flags_ticker = monitoreo_map.get(ticker, {})
+            quiere_compra = flags_ticker.get("compra", False) if monitoreo_migrado else True
+            quiere_venta = flags_ticker.get("venta", False) if monitoreo_migrado else False
 
             # ── Mínimo intradía + rebote ──────────────────────────
             # Mientras haga nuevos mínimos, NO alertamos (aún está cayendo).
@@ -683,9 +798,81 @@ def vigilar_precios(archivo, portafolio, rangos_del_dia, precios_cache=None):
                 "timestamp": hora_colombia().strftime("%Y-%m-%d %H:%M:%S"),
             }
 
+            # ── Señal y alerta de VENTA ────────────────────────────
+            # Va ANTES del bloque de compra (que usa varios "continue" de
+            # sí mismo) para que esos "continue" nunca salten esta lógica
+            # sin querer -- este bloque no usa "continue" en ningún punto,
+            # solo ifs anidados, precisamente para no acoplarse al control
+            # de flujo del bloque de compra ni al revés.
+            rango_vender = rango.get("rango_vender")
+            costo_promedio = rango.get("costo_promedio")
+            ganancia_pct = None
+            if costo_promedio:
+                ganancia_pct = round((precio - costo_promedio) / costo_promedio * 100, 2)
+
+            if rango_vender and costo_promedio and precio > rango_vender:
+                senal_venta = "VENDER" if (ganancia_pct is not None and ganancia_pct > 0) else "VIGILAR_VENTA"
+            else:
+                senal_venta = "NEUTRAL"
+
+            clave_persist_venta = f"persist_vender_{ticker}"
+            if senal_venta == "VENDER":
+                estado[clave_persist_venta] = estado.get(clave_persist_venta, 0) + 1
+            else:
+                estado[clave_persist_venta] = 0
+
+            estado["resultados_rt"][ticker].update({
+                "banda_sup": rango.get("banda_sup"),
+                "rango_vender": rango_vender,
+                "puede_vender": rango.get("puede_vender", False),
+                "costo_promedio": costo_promedio,
+                "ganancia_pct": ganancia_pct,
+                "senal_venta": senal_venta,
+                "monitorea_compra": quiere_compra,
+                "monitorea_venta": quiere_venta,
+            })
+
+            if (
+                senal_venta == "VENDER"
+                and quiere_venta
+                and chat_id
+                and estado.get(clave_persist_venta, 0) >= PERSIST_POLLS
+            ):
+                dec_venta = decision_usuario(estado, f"venta_{ticker}")
+                if dec_venta not in ("no_vendo", "vendido"):
+                    lote_v = estado.setdefault("lotes_alerta_venta", {}).setdefault(
+                        ticker,
+                        {"enviadas": 0, "ultima_alerta_ts": None, "origen": "original", "prompt_pendiente": False},
+                    )
+                    if not lote_v["prompt_pendiente"]:
+                        intervalo_min_v = (
+                            INTERVALO_LOTE_SIGUE_MIN if lote_v["origen"] == "sigue" else INTERVALO_LOTE_ORIGINAL_MIN
+                        )
+                        puede_alertar_v = True
+                        if lote_v["ultima_alerta_ts"] is not None:
+                            transcurrido_v = hora_colombia() - datetime.fromisoformat(lote_v["ultima_alerta_ts"])
+                            puede_alertar_v = transcurrido_v.total_seconds() >= intervalo_min_v * 60
+                        if puede_alertar_v:
+                            alertas_venta_pendientes.append({
+                                "ticker": ticker,
+                                "precio": precio,
+                                "cambio": cambio,
+                                "rango_vender": rango_vender,
+                                "ganancia_pct": ganancia_pct,
+                                "costo_promedio": costo_promedio,
+                                "rsi": rango["rsi"],
+                                "origen_lote": lote_v["origen"],
+                            })
+                            lote_v["enviadas"] += 1
+                            lote_v["ultima_alerta_ts"] = hora_colombia().isoformat()
+                            if lote_v["enviadas"] >= TAMANO_LOTE_ALERTA:
+                                reprompts_venta_pendientes.append(ticker)
+                                lote_v["prompt_pendiente"] = True
+
             # ── Alertas — solo si la señal es ENTRAR ──────────────
             if (
                 senal_actual == "ENTRAR"
+                and quiere_compra
                 and chat_id
                 and estado.get(clave_persist, 0) >= PERSIST_POLLS
                 and rebote >= REBOTE_MIN
@@ -785,6 +972,30 @@ def vigilar_precios(archivo, portafolio, rangos_del_dia, precios_cache=None):
                 reply_markup=teclado_decision(ticker_rp),
             )
             print(f"  🔁 Re-pregunta enviada para {ticker_rp} tras {TAMANO_LOTE_ALERTA} avisos")
+
+        # ── Despachar alertas de VENTA acumuladas este ciclo ────────
+        # Mismo patrón de agrupación que compra. Sin teclado de decisión
+        # todavía (aceptar/posponer venta) -- fuera de alcance de esta
+        # iteración, ver plan; se envía la alerta igual, solo sin botones.
+        if alertas_venta_pendientes:
+            if len(alertas_venta_pendientes) == 1:
+                a = alertas_venta_pendientes[0]
+                msg = _mensaje_alerta_venta_individual(a)
+                telegram(chat_id, msg)
+                print(f"  🔴 ALERTA VENTA: {a['ticker']} @ ${a['precio']} ganancia {a['ganancia_pct']}%")
+            else:
+                tickers_txt_v = ", ".join(a["ticker"] for a in alertas_venta_pendientes)
+                msg = _mensaje_alerta_venta_agrupada(alertas_venta_pendientes)
+                telegram(chat_id, msg)
+                print(f"  🔴 ALERTA VENTA AGRUPADA ({len(alertas_venta_pendientes)}): {tickers_txt_v}")
+
+        for ticker_rp in reprompts_venta_pendientes:
+            telegram(
+                chat_id,
+                f"🔁 <b>{ticker_rp}</b> sigue en rango de venta — van "
+                f"{TAMANO_LOTE_ALERTA} avisos.\n¿Sigo informando?",
+            )
+            print(f"  🔁 Re-pregunta de venta enviada para {ticker_rp}")
 
         # Actualizar contadores de días sin señal
         hay_entradas = any(
