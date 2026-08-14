@@ -256,12 +256,23 @@ def set_monitoreo(nombre_archivo, tickers, tipo, valor):
 # ============================================================
 
 
-def guardar_composicion(nombre_archivo, pesos_dict, proyeccion=None):
+def guardar_composicion(nombre_archivo, pesos_dict, proyeccion=None, activos_fuera_meta=None):
     """proyeccion: opcional, snapshot de datos["metricas"]/datos["proyecciones"]
     (adaptador_analista._construir_datos_reporte) al momento de aplicar. Se
-    guarda tal cual bajo "proyeccion_al_aplicar" -- es el unico punto de
-    referencia "proyectado" que persiste hoy en el portafolio; antes de este
-    cambio se descartaba siempre despues de mostrarse una vez."""
+    guarda tal cual bajo "proyeccion_al_aplicar" -- es la proyeccion CONGELADA,
+    punto de referencia fijo para auditar que tan bien predijo el modelo (ver
+    proyeccion "viva", que se recalcula bajo demanda en dashboard.py y nunca
+    se guarda aqui).
+
+    activos_fuera_meta: opcional, dict {ticker: {"fecha_salida", "peso_anterior"}}
+    -- activos que salieron de la composicion pero el usuario sigue sosteniendo
+    en la practica (el llamador, dashboard.py:api_aplicar_propuesta, decide
+    cuales aplican). Si se pasa, REEMPLAZA el mapa completo (el llamador ya
+    resuelve altas/bajas antes de llamar). Si es None, no se toca.
+
+    Cada llamada agrega un snapshot append-only a "historico_composiciones"
+    -- nunca se edita, solo crece -- para poder reconstruir cuando cada activo
+    cambio de estado."""
     ruta = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}"
     if not os.path.exists(ruta):
         print(f"❌ No existe el portafolio {nombre_archivo}")
@@ -270,6 +281,12 @@ def guardar_composicion(nombre_archivo, pesos_dict, proyeccion=None):
         data = _leer(ruta)
         data["composicion"] = pesos_dict
         data["fecha_ultima_actualizacion"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+        if activos_fuera_meta is not None:
+            data["activos_fuera_meta"] = activos_fuera_meta
+        data.setdefault("historico_composiciones", []).append({
+            "fecha": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "composicion": pesos_dict,
+        })
         if proyeccion is not None:
             data["proyeccion_al_aplicar"] = {
                 "fecha": datetime.now().strftime("%Y-%m-%d %H:%M"),

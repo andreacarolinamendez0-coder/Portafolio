@@ -239,8 +239,8 @@ export default function SeguimientoPage() {
                 />
                 <TablaFinancieraActivos
                   porActivo={data.comparacion.por_activo}
-                  proyectado={data.comparacion.portafolio.proyectado}
-                  real={data.comparacion.portafolio.real}
+                  objetivo={data.comparacion.objetivo}
+                  actual={data.comparacion.actual}
                 />
               </>
             )}
@@ -424,7 +424,10 @@ export default function SeguimientoPage() {
                                 <td style={s.td}>{m._tipo}</td>
                                 <td style={s.td}>
                                   <select value={eActivo} onChange={e => setEActivo(e.target.value)} style={sEdit}>
-                                    {Object.keys(data.composicion).map(c => <option key={c} value={c}>{c}</option>)}
+                                    {/* data.entrados (lo que realmente se tiene/tuvo), no data.composicion
+                                        (la meta vigente) -- bug 4: si la meta cambio despues de registrar
+                                        este movimiento, el ticker real podia faltar en el desplegable. */}
+                                    {data.entrados.map(c => <option key={c} value={c}>{c}</option>)}
                                   </select>
                                 </td>
                                 <td style={s.td}><input className="no-spin" type="number" step="0.0001" value={eFracc} onChange={e => setEFracc(e.target.value)} style={sEdit} /></td>

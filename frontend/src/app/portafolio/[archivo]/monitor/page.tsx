@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { authMe, authLogout, getPreciosRT, toggleMonitoreo, ApiError, type PrecioRT, type RangoTicker, type MonitoreoMap } from "@/lib/api";
+import { authMe, authLogout, getPreciosRT, toggleMonitoreo, ApiError, type PrecioRT, type RangoTicker, type MonitoreoMap, type ActivosFueraMetaMap } from "@/lib/api";
 import { GlassPanel } from "@/components/ui/glass-panel";
 import { LiquidButton } from "@/components/ui/liquid-glass-button";
 import { PageIntro } from "@/components/ui/page-intro";
@@ -206,6 +206,53 @@ function Chip({ label, activo, color, disabled, title, onClick }: {
   );
 }
 
+// ── Card "pendiente" para un activo fuera de meta recien togglado ──
+// Un activo "fuera de meta con posicion" (salio de la composicion vigente
+// pero el usuario la sigue teniendo, ver api_aplicar_propuesta/dashboard.py)
+// solo entra al universo que vigila monitor.py DESPUES de que el usuario
+// activa su toggle -- pero para poder activar ese primer toggle hace falta
+// una tarjeta donde togglearlo, y todavia no hay rangos/precios calculados
+// (arranque: monitor.py no lo vigilaba antes de este toggle). Esta tarjeta
+// minima resuelve ese arranque: solo ticker + chips + nota, sin precio/RSI.
+function TickerPendienteCard({
+  ticker, monitoreoTicker, tienePosicion, togglingKey, onToggle,
+}: {
+  ticker: string;
+  monitoreoTicker: { compra: boolean; venta: boolean };
+  tienePosicion: boolean;
+  togglingKey: string | null;
+  onToggle: (tipo: "compra" | "venta", valor: boolean) => void;
+}) {
+  return (
+    <GlassPanel style={{ borderRadius: 16, padding: "16px 18px", marginBottom: 0 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <strong style={{ color: "#f5f5f7", fontSize: "0.95rem" }}>{ticker}</strong>
+        <span style={{ fontSize: 9.5, fontWeight: 700, color: "var(--text-3)", background: "rgba(255,255,255,0.06)", padding: "2px 8px", borderRadius: 980, letterSpacing: "0.02em" }}>
+          FUERA DE META
+        </span>
+      </div>
+      <div style={{ display: "flex", gap: 5, marginBottom: 10 }}>
+        <Chip
+          label="↑ Compra" activo={monitoreoTicker.compra} color={COLOR_COMPRA}
+          disabled={togglingKey === `compra:${ticker}`}
+          onClick={() => onToggle("compra", !monitoreoTicker.compra)}
+        />
+        <Chip
+          label="↓ Venta" activo={monitoreoTicker.venta} color={COLOR_VENTA}
+          disabled={!tienePosicion || togglingKey === `venta:${ticker}`}
+          title={!tienePosicion ? "Solo se puede monitorear venta de activos que ya compraste" : undefined}
+          onClick={() => onToggle("venta", !monitoreoTicker.venta)}
+        />
+      </div>
+      <p style={{ fontSize: 11, color: "var(--text-3)", margin: 0, lineHeight: 1.5 }}>
+        {monitoreoTicker.compra || monitoreoTicker.venta
+          ? "Activa el toggle — el próximo ciclo del monitor calcula sus rangos y precio."
+          : "Salió de tu meta, pero sigues teniendo la posición. Actívalo aquí si quieres seguir vigilándolo."}
+      </p>
+    </GlassPanel>
+  );
+}
+
 // ── Panel de detalle de un ticker seleccionado ───────────────
 function DetallePanel({
   ticker, data, live, monitoreoTicker, tienePosicion, togglingKey, onToggle,
@@ -306,6 +353,7 @@ export default function MonitorPage() {
   const [composicion, setComposicion] = useState<Record<string, number>>({});
   const [tickersConPosicion, setTickersConPosicion] = useState<string[]>([]);
   const [monitoreo, setMonitoreo] = useState<MonitoreoMap>({});
+  const [activosFueraMeta, setActivosFueraMeta] = useState<ActivosFueraMetaMap>({});
   const [togglingKey, setTogglingKey] = useState<string | null>(null);
   const [toggleError, setToggleError] = useState("");
 
@@ -341,6 +389,7 @@ export default function MonitorPage() {
         setComposicion(data.composicion ?? {});
         setTickersConPosicion(data.tickers_con_posicion ?? []);
         setMonitoreo(data.monitoreo ?? {});
+        setActivosFueraMeta(data.activos_fuera_meta ?? {});
         setEstado("");
         setErrorMsg("");
         lastLoadRef.current = Date.now();
@@ -361,6 +410,7 @@ export default function MonitorPage() {
         setComposicion(data.composicion ?? {});
         setTickersConPosicion(data.tickers_con_posicion ?? []);
         setMonitoreo(data.monitoreo ?? {});
+        setActivosFueraMeta(data.activos_fuera_meta ?? {});
         if (data.error === "Sin datos aún") {
           setEstado("sin_inicializar");
         } else {
@@ -422,6 +472,10 @@ export default function MonitorPage() {
   const tickersComposicion = Object.keys(composicion);
   const conteoCompra = tickersComposicion.filter(t => flagsDe(t).compra).length;
   const conteoVenta = tickersConPosicion.filter(t => flagsDe(t).venta).length;
+  // Fuera de meta que todavia no aparecen en rangos/precios -- monitor.py
+  // solo los calcula DESPUES de que el usuario activa su toggle, asi que
+  // necesitan una tarjeta minima donde activarlo por primera vez.
+  const tickersFueraMetaPendientes = Object.keys(activosFueraMeta).filter(t => !(t in itemsActuales));
 
   return (
     <>
@@ -583,7 +637,7 @@ export default function MonitorPage() {
               )}
             </GlassPanel>
 
-            {Object.keys(rangos).length > 0 && (
+            {(Object.keys(rangos).length > 0 || tickersFueraMetaPendientes.length > 0) && (
               <>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(240px,1fr))", gap: 14, marginTop: 20 }}>
                   {Object.entries(rangos).map(([ticker, r]) => (
@@ -595,6 +649,16 @@ export default function MonitorPage() {
                       seleccionado={ticker === tickerSeleccionado}
                       obsoleto={false}
                       onClick={() => setSelected(ticker)}
+                      monitoreoTicker={flagsDe(ticker)}
+                      tienePosicion={tickersConPosicion.includes(ticker)}
+                      togglingKey={togglingKey}
+                      onToggle={(tipo, valor) => aplicarToggle(tipo, valor, ticker)}
+                    />
+                  ))}
+                  {tickersFueraMetaPendientes.map(ticker => (
+                    <TickerPendienteCard
+                      key={ticker}
+                      ticker={ticker}
                       monitoreoTicker={flagsDe(ticker)}
                       tienePosicion={tickersConPosicion.includes(ticker)}
                       togglingKey={togglingKey}
@@ -637,6 +701,16 @@ export default function MonitorPage() {
                 />
               );
             })}
+            {tickersFueraMetaPendientes.map(ticker => (
+              <TickerPendienteCard
+                key={ticker}
+                ticker={ticker}
+                monitoreoTicker={flagsDe(ticker)}
+                tienePosicion={tickersConPosicion.includes(ticker)}
+                togglingKey={togglingKey}
+                onToggle={(tipo, valor) => aplicarToggle(tipo, valor, ticker)}
+              />
+            ))}
           </div>
           {dataSeleccionada && tickerSeleccionado && (
             <DetallePanel

@@ -703,23 +703,36 @@ def metricas_reales_desde_historial(historial, inf_col_m, min_meses=6):
         return None
     try:
         filas = [
-            (r["fecha"], r["resumen"]["total_valor"], r["macro"]["trm"])
+            (r["fecha"], r["resumen"]["total_valor"],
+             float(r["resumen"].get("total_invertido") or 0), r["macro"]["trm"])
             for r in historial
             if r.get("resumen") and r.get("macro") and r["macro"].get("trm") is not None
         ]
         if len(filas) < 2:
             return None
-        fechas, valores, trms = zip(*filas)
+        fechas, valores, invertido, trms = zip(*filas)
         idx = pd.to_datetime(fechas)
         valor_usd = pd.Series(valores, index=idx, dtype=float).sort_index()
+        invertido_usd = pd.Series(invertido, index=idx, dtype=float).sort_index()
         trm = pd.Series(trms, index=idx, dtype=float).sort_index()
 
         # Un punto por mes: el ULTIMO snapshot disponible de cada mes
         # (resample estandar de una serie irregular a fin de mes).
         valor_m = valor_usd.resample("ME").last().dropna()
+        invertido_m = invertido_usd.resample("ME").last().reindex(valor_m.index).ffill()
         trm_m = trm.resample("ME").last().reindex(valor_m.index).ffill()
 
-        r_usd = valor_m.pct_change().dropna()
+        # Metodo de Dietz simplificado: el retorno del mes NO debe incluir el
+        # efecto de dinero nuevo aportado ese mes -- bug de auditoria: un
+        # usuario aportando $50/mes en un mercado 100% plano mostraba "+311%
+        # de retorno anual" solo por seguir invirtiendo, porque pct_change()
+        # sobre total_valor no distingue "subio por el mercado" de "subio
+        # porque metiste mas plata". flujo_neto_mes = cuanto crecio el costo
+        # base (total_invertido) ese mes -- ya viene en cada snapshot, no
+        # hace falta guardar nada nuevo.
+        flujo_neto = invertido_m.diff().fillna(0.0)
+        valor_inicio = valor_m.shift(1)
+        r_usd = ((valor_m - valor_inicio - flujo_neto) / valor_inicio).dropna()
         if len(r_usd) < min_meses:
             return None
         r_trm = trm_m.pct_change().reindex(r_usd.index)

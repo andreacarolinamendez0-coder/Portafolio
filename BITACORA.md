@@ -1255,4 +1255,173 @@ commiteado por mí.
   monitor se arma 15s después de cualquier `import dashboard`, sin guard
   de entorno) sigue sin resolverse.
 
+**Agenda para la próxima sesión (dictada por Andrea al cierre del
+2026-08-13):**
+1. Mejorar a Atom (el asistente/chatbot).
+2. Sacar la demo del proyecto completo (punto 4 de la hoja de ruta,
+   pendiente desde antes).
+3. Revisar Seguimiento — Andrea reportó que "hubo un error" pero no dio el
+   detalle todavía. Pendiente pedirle que lo describa al retomar (qué vio,
+   en qué pantalla/acción, mensaje si hubo alguno) antes de auditar.
+
+---
+
+## [2026-08-14] Seguimiento: auditoría de 5 bugs + Portafolio Meta vs Actual + Proyección Congelada vs Viva
+
+**Qué se hizo:**
+- Retomando el punto 3 pendiente de la sesión anterior ("hubo un error" en
+  Seguimiento, sin detalle todavía), se hizo una auditoría profunda con el
+  agente `mano-derecha` (solo lectura, corriendo las funciones reales contra
+  `andrea.json`/`mi_primer_portafolio.json`, no solo lectura de código) que
+  encontró **4 bugs concretos**. Andrea pidió específicamente si alguno hacía
+  fallar el registro de un movimiento — se encontró un **5º bug** que sí:
+  registrar una compra de un ticker que salió de la meta vigente fallaba con
+  "Ese activo no pertenece a este portafolio", aunque el propio formulario
+  lo ofrecía como opción ("agregar más").
+- Andrea entregó un spec completo para resolver el problema de fondo detrás
+  de 2 de esos bugs: hoy un activo removido de la meta se vuelve invisible
+  para el sistema aunque el usuario lo siga teniendo, y la proyección se
+  calcula una sola vez y queda fija, mezclando "qué tan bien predijo el
+  modelo" con "qué tan bien le va al usuario hoy". Se diseñó y aprobó un
+  plan (modo plan, con exploración previa del código real) para resolver
+  ambos problemas de raíz + los 5 bugs en la misma sesión. Andrea además
+  pidió, como cambio adicional aprobado a mitad del plan, rediseñar
+  visualmente Seguimiento siguiendo un mockup HTML que proveyó (donuts +
+  selector de paneles "dot tabs").
+
+**Los 5 bugs (diagnóstico completo, con reproducción real):**
+1. **Costo base diluido al vender todo un ticker y recomprarlo** —
+   `calcular_tiempo_real` sumaba TODOS los aportes históricos sin restar el
+   costo de lotes ya vendidos. Probado: costo real $300 se reportaba como
+   $133.33 (rentabilidad 1259% en vez de la real).
+2. **`metricas_reales_desde_historial` confundía aportes nuevos con
+   rendimiento** — un mercado 100% plano con $50/mes de aportes nuevos
+   mostraba "+311% de retorno anual". Bug dormido hoy (requiere 6 meses de
+   historial acumulado por `scheduler.py`), pero bomba de tiempo.
+3. **`fecha_inicio` de una posición no era la fecha de compra más antigua**
+   sino la del primer aporte en orden de inserción — se rompía con compras
+   registradas fuera de orden cronológico (backfill).
+4. **El selector de "editar movimiento" no incluía tickers fuera de la
+   meta vigente** — usaba `composicion` (meta) en vez de `entrados` (lo que
+   realmente se tiene), a diferencia del formulario de "nuevo movimiento"
+   que sí lo hacía bien.
+5. **Bloqueaba el registro de una compra** de un ticker que salió de la
+   meta — `_armar_aporte_desde_form` validaba solo contra `composicion`.
+
+**Diseño del modelo nuevo (Portafolio Meta vs Actual, Proyección Congelada
+vs Viva):**
+- Nuevo campo `activos_fuera_meta` en el JSON de portafolio (dict
+  `{ticker: {fecha_salida, peso_anterior}}`) — se puebla en
+  `api_aplicar_propuesta` (rama `reemplazar`) SOLO cuando el usuario aplica
+  (=acepta) una propuesta que remueve un ticker con posición viva, nunca
+  por un recálculo automático. Nuevo `historico_composiciones` (append-only)
+  para reconstruir cuándo cada activo cambió de estado.
+- El estado de un ticker (`en_meta` / `fuera_meta_con_posicion`) se
+  **deriva**, no se guarda aparte — evita repetir la duplicación
+  preexistente `activo` vs `monitoreo_activo` ya documentada en la bitácora.
+- Proyección **congelada** = `proyeccion_al_aplicar` (ya existía, sin
+  cambios de mecánica). Proyección **viva** = el mismo motor
+  (`_calcular_proyeccion_para_guardar`), recalculada bajo demanda cada vez
+  que se abre Seguimiento, ahora corriendo siempre en paralelo (antes solo
+  era un fallback cuando no había congelada).
+- `monitor.py` extendido para vigilar (compra y/o venta) activos fuera de
+  meta si el usuario los togglea manualmente — reutiliza el sistema de
+  toggles por activo construido el 2026-08-13, sin infraestructura nueva.
+
+**Backend (diff exacto):**
+- `gestor_portafolio.py`: `guardar_composicion(...)` gana los parámetros
+  `activos_fuera_meta` y escribe `historico_composiciones` (append-only) en
+  cada llamada.
+- `dashboard.py`:
+  - `api_aplicar_propuesta` (rama `reemplazar`): nuevo bloque que calcula
+    qué tickers salen de la meta con posición viva (`fracciones_disponibles`)
+    y arma `activos_fuera_meta` antes de llamar `guardar_composicion`.
+  - Nueva función `_pool_posicion_viva(aportes, ventas, ticker)`: procesa
+    aportes+ventas en orden cronológico con un pool de costo que se reduce
+    proporcionalmente en cada venta — reemplaza la lógica vieja de
+    `calcular_tiempo_real` (fix bugs 1 y 3) y de `_armar_venta_desde_form`
+    (mismo bug en el cálculo de `costo_base_cop`, con soporte para excluir
+    la venta que se está editando vía `excluir_venta_id`).
+  - `_armar_aporte_desde_form(data, composicion, activos_fuera_meta=None)`:
+    valida contra la unión de ambos en vez de solo `composicion` (fix bug 5).
+  - `calcular_metricas_reales_por_activo`: cada fila gana el campo `estado`.
+  - `api_seguimiento`: reestructurado — `comparacion` gana `objetivo`
+    (panel solo-meta: congelada + viva + real, renormalizados a los
+    tickers en meta) y `actual` (panel todo-incluido: viva + real sobre
+    pesos reales), en vez del `portafolio.proyectado/real` único de antes.
+  - `/api/monitor/<archivo>/toggle`: la validación de `ambito="activo"`
+    ahora acepta también tickers en `activos_fuera_meta`.
+  - `GET /api/precios-rt/<archivo>`: expone `activos_fuera_meta` (en los
+    dos puntos de retorno, con y sin `monitor_<archivo>.json`).
+- `adaptador_analista.py`: `metricas_reales_desde_historial` corregida con
+  el método de Dietz simplificado — resta el flujo neto de aportes nuevos
+  (`delta` de `total_invertido`, ya guardado en cada snapshot) antes de
+  calcular el retorno mensual (fix bug 2).
+- `monitor.py`: `precalcular_rangos` extiende su universo de tickers con
+  los de `activos_fuera_meta` que tengan `monitoreo.activos[t]` con compra
+  o venta activada.
+
+**Frontend:**
+- `composicion-comparada.tsx` reescrito — dos donuts SVG dinámicos (Meta /
+  Real) generados en JS a partir de los pesos reales (no hardcodeados) +
+  leyenda con delta por ticker, paleta categórica fija de 8 colores.
+- `tabla-financiera-activos.tsx` reescrito — selector "dot tabs" con 2
+  paneles (Portafolio objetivo / Portafolio real), cada uno con sus 2
+  `group-card` (Meta·viva y Real) + tabla por activo (columnas distintas
+  por panel, `status-pill` EN META/FUERA DE META en el panel real). La
+  proyección congelada se conserva como línea discreta bajo el group-card
+  de Meta, sin agregar una tercera tarjeta al layout del mockup.
+- `seguimiento/page.tsx`: fix del selector de edición (bug 4, ahora usa
+  `data.entrados`), props actualizadas a `objetivo`/`actual`.
+- `monitor/page.tsx`: nuevo componente `TickerPendienteCard` — resuelve el
+  problema de arranque de que un ticker fuera de meta recién marcado no
+  tiene rangos/precios todavía (`monitor.py` solo los calcula DESPUÉS del
+  primer toggle), mostrando una tarjeta mínima (ticker + chips + nota) para
+  poder activarlo por primera vez.
+- `lib/api.ts`: tipos nuevos (`EstadoActivo`, `PanelComparacion`,
+  `ActivosFueraMetaMap`), `ComparacionSeguimiento`/`getPreciosRT`
+  actualizados.
+
+**Verificación:**
+- `python -m py_compile` en los 4 archivos backend tocados.
+- `_pool_posicion_viva` probado con datos sintéticos: venta total +
+  recompra da el costo real ($300, no $133); aportes fuera de orden dan la
+  fecha mínima real; venta parcial reduce el costo proporcionalmente.
+- `metricas_reales_desde_historial` corregida probada con 2 escenarios:
+  mercado plano + aportes mensuales da ~0% nominal (antes 311%, el -5/-6%
+  restante es erosión legítima por inflación COP real); mercado subiendo
+  sin aportes nuevos sigue detectando el retorno real (54%) — el fix no
+  aplana retornos legítimos.
+- Prueba de extremo a extremo sobre una COPIA TEMPORAL de `andrea.json`
+  (nunca se tocó el archivo real): simular que un ticker con posición sale
+  de la meta lo mueve correctamente a `activos_fuera_meta` y hace crecer
+  `historico_composiciones`; confirmado que una compra nueva de ese ticker
+  ya se acepta (antes fallaba, bug 5); un ticker que nunca existió en el
+  portafolio se sigue rechazando correctamente.
+- `tsc --noEmit` limpio. Playwright sin errores de consola: Seguimiento con
+  los 2 paneles (objetivo/real) mostrando datos distintos según el panel
+  activo, tabla filtrada correctamente por panel, badge de estado en el
+  panel real; Monitor con la tarjeta pendiente de un activo fuera de meta
+  en sus 2 estados (sin togglear / venta activada), conteos del panel
+  maestro reflejando correctamente los tickers fuera de meta.
+
+**Resultado:** cerrado y verificado. Archivos backend tocados:
+`dashboard.py`, `gestor_portafolio.py`, `adaptador_analista.py`,
+`monitor.py`. Frontend: `components/ui/composicion-comparada.tsx`,
+`components/ui/tabla-financiera-activos.tsx`,
+`app/portafolio/[archivo]/seguimiento/page.tsx`,
+`app/portafolio/[archivo]/monitor/page.tsx`, `lib/api.ts`. Ningún cambio
+commiteado por mí.
+
+**Pendiente de decisión / próximos pasos:**
+- La app real de Andrea (`andrea.json`) hoy no tiene ninguna venta
+  registrada, así que el bug 1 (costo diluido) nunca se manifestó en
+  producción — el fix es preventivo, no una corrección de datos ya
+  corrompidos.
+- El bug 2 (Dietz) sigue dormido hasta que `historial` acumule 6 meses de
+  datos vía `scheduler.py` — vale la pena revisar los números reales de
+  `metricas_reales_desde_historial` cuando eso ocurra.
+- Limpiar la duplicación preexistente `activo` vs `monitoreo_activo` sigue
+  sin tocarse (ajena a esta tarea, documentada desde el 2026-08-13).
+
 ---

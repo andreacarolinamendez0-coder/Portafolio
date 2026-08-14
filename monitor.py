@@ -452,13 +452,17 @@ def precalcular_rangos(archivo, portafolio):
     composicion = portafolio.get("composicion", {})
     aportes = portafolio.get("aportes", [])
     monitoreo_map = portafolio.get("monitoreo", {}).get("activos", {})
-    # Union con tickers monitoreados para venta que ya no estan en la
-    # composicion vigente (se rebalanceo la meta pero el usuario sigue
-    # teniendo la posicion y quiere seguir vigilando la salida).
-    tickers_venta_extra = [
-        t for t, m in monitoreo_map.items() if m.get("venta") and t not in composicion
+    activos_fuera_meta = portafolio.get("activos_fuera_meta", {})
+    # Union con tickers "fuera de meta con posicion" (el usuario acepto una
+    # propuesta que los removio de la meta pero los sigue teniendo, ver
+    # api_aplicar_propuesta/dashboard.py) que el usuario togglea manualmente
+    # para seguir vigilando compra y/o venta -- se rebalanceo la meta pero el
+    # usuario quiere seguir vigilando esa posicion.
+    tickers_fuera_meta_extra = [
+        t for t in activos_fuera_meta
+        if monitoreo_map.get(t, {}).get("compra") or monitoreo_map.get(t, {}).get("venta")
     ]
-    tickers = list(composicion.keys()) + tickers_venta_extra
+    tickers = list(composicion.keys()) + tickers_fuera_meta_extra
     if not tickers:
         return None
 

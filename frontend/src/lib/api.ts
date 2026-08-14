@@ -243,6 +243,14 @@ export interface MonitoreoActivo {
 }
 export type MonitoreoMap = Record<string, MonitoreoActivo>;
 
+// Ticker que salió de la composición vigente pero el usuario aceptó seguir
+// sosteniendo (ver api_aplicar_propuesta) -- puede seguir togglando compra/venta.
+export interface ActivoFueraMeta {
+  fecha_salida:  string;
+  peso_anterior: number;
+}
+export type ActivosFueraMetaMap = Record<string, ActivoFueraMeta>;
+
 export const getPreciosRT = (archivo: string) =>
   apiFetch<{
     ok:              boolean;
@@ -259,6 +267,7 @@ export const getPreciosRT = (archivo: string) =>
     composicion?:          Record<string, number>;
     tickers_con_posicion?: string[];
     monitoreo?:            MonitoreoMap;
+    activos_fuera_meta?:   ActivosFueraMetaMap;
   }>(`/api/precios-rt/${archivo}`);
 
 // ambito="activo" requiere `activo`; ambito="portafolio" aplica a toda la
@@ -327,19 +336,25 @@ export interface Aporte {
   comision?:  number;   // USD; sale del saldo, no entra al costo/valor
 }
 
+// "congelada": snapshot fijo del momento en que se aplicó la composición
+// vigente -- nunca se recalcula, sirve para auditar qué tan bien predijo el
+// modelo. "viva": mismo motor, recalculada bajo demanda cada vez que se abre
+// Seguimiento (ver plan Seguimiento 2026-08-14).
 export interface MetricaPortafolio {
   retorno_anual: number;
   volatilidad:   number;
   max_drawdown:  number;
   sharpe?:       number;
-  fuente?:       "guardado_al_aplicar" | "recalculado_hoy";
-  fecha?:        string;
+  fecha?:        string;   // solo en congelada: cuándo se congeló
   meses_considerados?: number;
   desde?:        string;
 }
 
+export type EstadoActivo = "en_meta" | "fuera_meta_con_posicion";
+
 export interface MetricaActivo {
   activo:                       string;
+  estado:                       EstadoActivo;
   peso_meta:                    number | null;
   peso_real:                    number | null;
   rentabilidad_real:            number | null;
@@ -349,15 +364,21 @@ export interface MetricaActivo {
   volatilidad_historica_motor:  number | null;
 }
 
+// Un panel de comparación proyectado-vs-real, para un universo de activos
+// dado (objetivo = solo meta vigente; actual = todo lo que se sostiene hoy).
+export interface PanelComparacion {
+  proyeccion_congelada?: MetricaPortafolio | null;  // solo en "objetivo"
+  proyeccion_viva:       MetricaPortafolio | null;
+  real:                  MetricaPortafolio | null;
+}
+
 export interface ComparacionSeguimiento {
   composicion_meta: Record<string, number>;
   composicion_real: Record<string, number>;
   por_activo:        MetricaActivo[];
-  portafolio: {
-    proyectado: MetricaPortafolio | null;
-    real:       MetricaPortafolio | null;
-  };
   desviacion_composicion: DesviacionComposicion | null;
+  objetivo: PanelComparacion;  // panel "Portafolio objetivo" -- solo en meta
+  actual:   PanelComparacion;  // panel "Portafolio real" -- todo lo sostenido
 }
 
 export interface SeguimientoData {

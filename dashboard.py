@@ -410,6 +410,56 @@ def precio_actual_usd(ticker):
         return None
 
 
+def _pool_posicion_viva(aportes, ventas, ticker):
+    """Recorre aportes+ventas de un ticker en orden CRONOLOGICO manteniendo un
+    pool de (fracciones, costo_usd, costo_cop, comision_cop) que se reduce
+    PROPORCIONALMENTE en cada venta (al costo promedio del momento, no solo
+    resta fracciones). Sin esto, vender el 100% de un ticker y volver a
+    comprarlo "diluye" el costo base con el precio del lote viejo ya vendido
+    (bug de auditoria: costo real $300 se reportaba como $133, rentabilidad
+    1259% en vez de la real). fecha_inicio queda como la fecha del lote
+    actualmente abierto (se resetea si el pool llega a cero) en vez de "el
+    primer aporte en orden de insercion" -- corrige tambien el caso de
+    aportes registrados fuera de orden cronologico (backfill de compras
+    viejas), que antes daban una fecha_inicio incorrecta."""
+    eventos = sorted(
+        [
+            {
+                "tipo": "compra", "fecha": a["fecha"], "frac": float(a["fracciones"]),
+                "usd": float(a["monto_usd"]), "cop": float(a["monto_cop"]),
+                "comision_cop": float(a.get("comision", 0)) * float(a.get("trm_dia", 0)),
+            }
+            for a in aportes if a.get("activo") == ticker
+        ]
+        + [
+            {"tipo": "venta", "fecha": v["fecha"], "frac": float(v.get("fracciones", 0))}
+            for v in ventas if v.get("activo") == ticker
+        ],
+        key=lambda e: e["fecha"],
+    )
+    frac = usd = cop = comision_cop = 0.0
+    fecha_inicio = None
+    for e in eventos:
+        if e["tipo"] == "compra":
+            if frac <= 1e-9:
+                fecha_inicio = e["fecha"]  # nuevo lote (o el primero)
+            frac += e["frac"]
+            usd += e["usd"]
+            cop += e["cop"]
+            comision_cop += e["comision_cop"]
+        else:
+            if frac > 1e-9:
+                frac_vendida = min(e["frac"], frac)
+                proporcion = frac_vendida / frac
+                usd -= usd * proporcion
+                cop -= cop * proporcion
+                comision_cop -= comision_cop * proporcion
+                frac -= frac_vendida
+            if frac <= 1e-9:
+                frac = usd = cop = comision_cop = 0.0
+    return {"frac": frac, "usd": usd, "cop": cop, "comision_cop": comision_cop, "fecha_inicio": fecha_inicio}
+
+
 def calcular_tiempo_real(portafolio):
     if not portafolio or not portafolio.get("aportes"):
         return None
@@ -421,33 +471,24 @@ def calcular_tiempo_real(portafolio):
     except Exception:
         trm_hoy = None
 
+    ventas = portafolio.get("ventas", [])
+    tickers = sorted(set(a["activo"] for a in portafolio["aportes"]))
     pos_raw = {}
-    for a in portafolio["aportes"]:
-        tk = a["activo"]
-        if tk not in pos_raw:
-            pos_raw[tk] = {"frac": 0.0, "usd": 0.0, "cop": 0.0, "fecha_inicio": a["fecha"]}
-        pos_raw[tk]["frac"] += a["fracciones"]
-        pos_raw[tk]["usd"] += a["monto_usd"]
-        pos_raw[tk]["cop"] += a["monto_cop"]
-    # Ventas netean solo fracciones; el costo base vivo sale por promedio.
-    vendido = {}
-    for v in portafolio.get("ventas", []):
-        tk = v.get("activo")
-        vendido[tk] = vendido.get(tk, 0.0) + float(v.get("fracciones", 0))
+    for tk in tickers:
+        pool = _pool_posicion_viva(portafolio["aportes"], ventas, tk)
+        if pool["frac"] > 1e-9:
+            pos_raw[tk] = pool
 
     resultados = []
     total_inv = total_val = 0.0
     total_fx = total_infl = 0.0
     hay_efecto = trm_hoy is not None
     for tk, d in pos_raw.items():
-        frac_viva = d["frac"] - vendido.get(tk, 0.0)
-        if frac_viva <= 1e-9:  # posición cerrada (vendida completa)
-            continue
+        frac_viva = d["frac"]  # ya neteado de ventas por _pool_posicion_viva
         p = precio_actual_usd(tk)
         if p is None:
             continue
-        avg_usd = d["usd"] / d["frac"] if d["frac"] else 0.0
-        inv = avg_usd * frac_viva          # invertido USD (costo base vivo)
+        inv = d["usd"]                     # invertido USD (costo base vivo, ya neteado)
         val = frac_viva * p                # valor USD hoy
         gan = val - inv                    # ganancia USD (P&L de posición)
 
@@ -573,6 +614,15 @@ def calcular_metricas_reales_por_activo(portafolio, tiempo_real):
     filas = []
     for pos in tiempo_real["posiciones"]:
         tk = pos["activo"]
+        # Estado derivado (nunca se guarda aparte): en_meta si sigue en la
+        # composicion vigente; fuera_meta_con_posicion en cualquier otro caso
+        # -- por definicion, si tiene posicion viva (tiempo_real["posiciones"]
+        # ya solo trae vivas) y no esta en la meta, esta "fuera de meta con
+        # posicion", sin importar si quedo formalmente registrado en
+        # activos_fuera_meta (portafolios de antes de este cambio pueden
+        # tener el caso sin ese registro -- se cae al mismo estado igual,
+        # no se pierde el activo). "cerrado" nunca aparece aqui.
+        estado = "en_meta" if tk in composicion else "fuera_meta_con_posicion"
         vol_real = dd_real = None
         if precios is not None and tk in precios.columns:
             try:
@@ -588,6 +638,7 @@ def calcular_metricas_reales_por_activo(portafolio, tiempo_real):
 
         filas.append({
             "activo": tk,
+            "estado": estado,
             "peso_meta": composicion.get(tk),
             "peso_real": round(pos["valor_hoy"] / total, 4) if total > 0 else None,
             "rentabilidad_real": pos["rentabilidad"],
@@ -1313,7 +1364,25 @@ def api_aplicar_propuesta(archivo):
                 }), 400
 
             proyeccion = _calcular_proyeccion_para_guardar(pesos, perfil, inv, aporte, freq, horizonte)
-            guardar_composicion(archivo, pesos, proyeccion=proyeccion)
+
+            # Activos que salen de la meta pero el usuario sigue sosteniendo en
+            # la practica -> pasan a "fuera de meta con posicion", no desaparecen.
+            # Solo ocurre aqui (el usuario ACEPTO/aplico la propuesta) -- nunca
+            # por un recalculo automatico de pesos.
+            composicion_vieja = p.get("composicion", {})
+            fuera_meta_nuevo = dict(p.get("activos_fuera_meta", {}))
+            hoy_fm = datetime.now().strftime("%Y-%m-%d")
+            for t in set(composicion_vieja) - set(pesos):
+                if fracciones_disponibles(p, t) > 1e-9:
+                    fuera_meta_nuevo[t] = {
+                        "fecha_salida": hoy_fm,
+                        "peso_anterior": composicion_vieja[t],
+                    }
+            for t in list(fuera_meta_nuevo):
+                if t in pesos:  # reingreso a la meta -> ya no aplica
+                    del fuera_meta_nuevo[t]
+
+            guardar_composicion(archivo, pesos, proyeccion=proyeccion, activos_fuera_meta=fuera_meta_nuevo)
             # Resetear monitor automáticamente al cambiar composición
             ruta_monitor = os.path.join(DATOS_DIR, "portafolios", f"monitor_{archivo}")
             if os.path.exists(ruta_monitor):
@@ -1854,6 +1923,7 @@ def api_precios_rt(archivo):
                     a['activo'] for a in portafolio_sin_datos.get('aportes', [])
                 )),
                 "monitoreo": portafolio_sin_datos.get('monitoreo', {}).get('activos', {}),
+                "activos_fuera_meta": portafolio_sin_datos.get('activos_fuera_meta', {}),
             })
 
         with open(ruta, "r", encoding="utf-8") as f:
@@ -1915,6 +1985,7 @@ def api_precios_rt(archivo):
             a['activo'] for a in portafolio_completo.get('aportes', [])
         ))
         monitoreo = portafolio_completo.get('monitoreo', {}).get('activos', {})
+        activos_fuera_meta = portafolio_completo.get('activos_fuera_meta', {})
 
         return jsonify({
             'ok':              True,
@@ -1927,6 +1998,7 @@ def api_precios_rt(archivo):
             'composicion':          composicion,
             'tickers_con_posicion': tickers_con_posicion,
             'monitoreo':            monitoreo,
+            'activos_fuera_meta':   activos_fuera_meta,
         })
 
     except Exception as e:
@@ -2529,12 +2601,21 @@ def api_config(archivo):
     )
 
 
-def _armar_aporte_desde_form(data, composicion):
+def _armar_aporte_desde_form(data, composicion, activos_fuera_meta=None):
     """Parsea, valida y calcula un aporte desde el body del form de seguimiento.
     Usa SIEMPRE la TRM oficial para el cálculo (trm_real es solo trazabilidad).
-    Devuelve (aporte, None) si todo bien, o (None, (respuesta_error, status))."""
+    Devuelve (aporte, None) si todo bien, o (None, (respuesta_error, status)).
+
+    Valida contra composicion UNION activos_fuera_meta -- un ticker que salio
+    de la meta pero el usuario sigue sosteniendo (aceptado via
+    api_aplicar_propuesta) debe poder seguir recibiendo compras nuevas
+    (promediar/aumentar posicion). Antes de este fix, comprar mas de un
+    activo que ya no estaba en la meta vigente fallaba con "Ese activo no
+    pertenece a este portafolio" aunque el propio formulario lo ofreciera
+    como opcion ("agregar más")."""
     activo = data.get("activo", "").upper()
-    if activo not in {c.upper() for c in composicion}:
+    universo_valido = {c.upper() for c in composicion} | {t.upper() for t in (activos_fuera_meta or {})}
+    if activo not in universo_valido:
         return None, (jsonify({"error": "Ese activo no pertenece a este portafolio"}), 400)
     fecha = data.get("fecha", datetime.now().strftime("%Y-%m-%d"))
     monto_usd = float(str(data.get("monto_usd", "0")).replace(",", "."))
@@ -2602,7 +2683,9 @@ def api_seguimiento(archivo):
     if request.method == "POST":
         data = request.get_json(silent=True) or {}
         try:
-            aporte, err = _armar_aporte_desde_form(data, composicion)
+            aporte, err = _armar_aporte_desde_form(
+                data, composicion, portafolio.get("activos_fuera_meta", {})
+            )
             if err:
                 return err
             guardar_aporte(archivo, aporte)
@@ -2640,47 +2723,67 @@ def api_seguimiento(archivo):
     por_activo = calcular_metricas_reales_por_activo(portafolio, tiempo_real)
     desviacion = calcular_desviacion_composicion(portafolio, tiempo_real)
 
+    # --- Proyeccion CONGELADA: snapshot fijo del momento en que se aplico la
+    # composicion vigente (guardado_al_aplicar). Sirve para auditar que tan
+    # bien predijo el modelo -- nunca se recalcula. ---
     proyeccion_guardada = portafolio.get("proyeccion_al_aplicar") or {}
-    if proyeccion_guardada.get("metricas"):
-        proyectado = {
-            **proyeccion_guardada["metricas"],
-            "fuente": "guardado_al_aplicar",
-            "fecha": proyeccion_guardada.get("fecha"),
-        }
-    elif composicion:
-        # Ningun snapshot guardado todavia para este portafolio (no se ha
-        # aplicado nada desde que existe esta funcion) -- se recalcula al
-        # vuelo sobre la composicion meta vigente, marcado como tal para que
-        # el frontend sea honesto sobre que esta mostrando.
-        proyectado_calc = _calcular_proyeccion_para_guardar(
-            composicion, portafolio.get("perfil", "moderado"),
-            portafolio.get("inversion_inicial", 1000000),
-            portafolio.get("aporte_dca", 0),
-            portafolio.get("frecuencia_meses", 1),
-            portafolio.get("horizonte", 10),
-        )
-        proyectado = (
-            {**proyectado_calc["metricas"], "fuente": "recalculado_hoy"}
-            if proyectado_calc and proyectado_calc.get("metricas") else None
-        )
-    else:
-        proyectado = None
+    proyeccion_congelada = (
+        {**proyeccion_guardada["metricas"], "fecha": proyeccion_guardada.get("fecha")}
+        if proyeccion_guardada.get("metricas") else None
+    )
 
-    real_portafolio = None
-    if pesos_reales and tiempo_real:
-        from adaptador_analista import metricas_reales_portafolio
-        fecha_min = min((p["fecha_inicio"] for p in tiempo_real["posiciones"]), default=None)
-        if fecha_min:
-            real_portafolio = metricas_reales_portafolio(
-                pesos_reales, fecha_min, historial=portafolio.get("historial", [])
-            )
+    perfil_p = portafolio.get("perfil", "moderado")
+    inv_p = portafolio.get("inversion_inicial", 1000000)
+    aporte_p = portafolio.get("aporte_dca", 0)
+    freq_p = portafolio.get("frecuencia_meses", 1)
+    horizonte_p = portafolio.get("horizonte", 10)
+
+    def _viva(pesos):
+        """Proyeccion VIVA: mismo motor, siempre recalculada bajo demanda
+        (nunca se cachea) sobre los pesos que se le pasen -- ver plan de
+        Seguimiento 2026-08-14."""
+        if not pesos:
+            return None
+        r = _calcular_proyeccion_para_guardar(pesos, perfil_p, inv_p, aporte_p, freq_p, horizonte_p)
+        return r["metricas"] if r and r.get("metricas") else None
+
+    from adaptador_analista import metricas_reales_portafolio
+
+    def _real(pesos, tickers_permitidos=None):
+        """Metricas reales agregadas sobre un subconjunto de posiciones
+        (tickers_permitidos=None -> todas). Renormaliza los pesos al
+        subconjunto antes de pasarlos al motor."""
+        if not pesos or not tiempo_real:
+            return None
+        sub = ({t: w for t, w in pesos.items() if t in tickers_permitidos}
+               if tickers_permitidos is not None else dict(pesos))
+        suma = sum(sub.values())
+        if suma <= 0:
+            return None
+        sub = {t: w / suma for t, w in sub.items()}
+        posiciones_sub = [p for p in tiempo_real["posiciones"] if p["activo"] in sub]
+        fecha_min = min((p["fecha_inicio"] for p in posiciones_sub), default=None)
+        if not fecha_min:
+            return None
+        return metricas_reales_portafolio(sub, fecha_min, historial=portafolio.get("historial", []))
 
     comparacion = {
         "composicion_meta": composicion,
         "composicion_real": pesos_reales,
         "por_activo": por_activo,
-        "portafolio": {"proyectado": proyectado, "real": real_portafolio},
         "desviacion_composicion": desviacion,
+        # Panel "Portafolio objetivo": solo activos EN META vigente.
+        "objetivo": {
+            "proyeccion_congelada": proyeccion_congelada,
+            "proyeccion_viva": _viva(composicion),
+            "real": _real(pesos_reales, set(composicion)),
+        },
+        # Panel "Portafolio real": TODO lo que el usuario sostiene hoy,
+        # incluidos los activos fuera de meta con posicion activa.
+        "actual": {
+            "proyeccion_viva": _viva(pesos_reales),
+            "real": _real(pesos_reales),
+        },
     }
 
     return jsonify(
@@ -2713,8 +2816,11 @@ def api_seguimiento_aporte(archivo, aporte_id):
     # PUT — editar: recalcula con la TRM oficial, igual que un registro.
     data = request.get_json(silent=True) or {}
     try:
-        composicion = leer_portafolio(archivo).get("composicion", {})
-        campos, err = _armar_aporte_desde_form(data, composicion)
+        p_actual = leer_portafolio(archivo)
+        composicion = p_actual.get("composicion", {})
+        campos, err = _armar_aporte_desde_form(
+            data, composicion, p_actual.get("activos_fuera_meta", {})
+        )
         if err:
             return err
         if not editar_aporte(archivo, aporte_id, campos):
@@ -2782,11 +2888,19 @@ def api_depositos_uno(archivo, deposito_id):
         return jsonify({"error": f"Error: {str(e)}"}), 400
 
 
-def _armar_venta_desde_form(data, portafolio):
-    """Parsea/valida/computa una venta. Costo promedio (Σ compras.monto_cop /
-    Σ compras.fracciones del ticker); TRM oficial del día; producto neto de
-    comisión → caja; ganancia realizada = producto_COP (antes de comisión) −
-    costo base. Devuelve (venta, None) o (None, (err, status))."""
+def _armar_venta_desde_form(data, portafolio, excluir_venta_id=None):
+    """Parsea/valida/computa una venta. Costo promedio calculado sobre el POOL
+    VIVO del ticker (_pool_posicion_viva: aportes menos ventas previas ya
+    registradas, en orden cronologico, no la suma de TODOS los aportes
+    historicos sin importar cuanto ya se vendio -- ese era el bug que diluia
+    el costo base al vender todo y volver a comprar). TRM oficial del día;
+    producto neto de comisión → caja; ganancia realizada = producto_COP
+    (antes de comisión) − costo base.
+
+    excluir_venta_id: al EDITAR una venta ya existente, esa misma venta sigue
+    en portafolio["ventas"] -- se excluye del pool para no restarla dos veces
+    (una vez como "ya vendida" y otra como la operacion que se esta armando).
+    Devuelve (venta, None) o (None, (err, status))."""
     activo = data.get("activo", "").upper()
     fecha = data.get("fecha", datetime.now().strftime("%Y-%m-%d"))
     fracciones = float(str(data.get("fracciones", "0")).replace(",", "."))
@@ -2804,13 +2918,13 @@ def _armar_venta_desde_form(data, portafolio):
     else:
         comision = 0.0 if frac_entera else round(monto_usd * 0.01, 2)
 
-    aportes = [a for a in portafolio.get("aportes", []) if a.get("activo") == activo]
-    frac_compradas = sum(float(a.get("fracciones", 0)) for a in aportes)
-    cop_comprado = sum(float(a.get("monto_cop", 0)) for a in aportes)
-    comm_comprado_cop = sum(float(a.get("comision", 0)) * float(a.get("trm_dia", 0)) for a in aportes)
-    if frac_compradas <= 0:
+    ventas_previas = [
+        v for v in portafolio.get("ventas", []) if v.get("id") != excluir_venta_id
+    ]
+    pool = _pool_posicion_viva(portafolio.get("aportes", []), ventas_previas, activo)
+    if pool["frac"] <= 1e-9:
         return None, (jsonify({"error": f"No tienes posición en {activo}"}), 400)
-    costo_base_cop = round(((cop_comprado + comm_comprado_cop) / frac_compradas) * fracciones, 0)
+    costo_base_cop = round(((pool["cop"] + pool["comision_cop"]) / pool["frac"]) * fracciones, 0)
 
     try:
         trm_df = pd.read_parquet("datos/macro/trm.parquet")
@@ -2865,7 +2979,7 @@ def api_ventas_una(archivo, venta_id):
             return jsonify({"ok": True})
         # PUT
         data = request.get_json(silent=True) or {}
-        venta, err = _armar_venta_desde_form(data, leer_portafolio(archivo))
+        venta, err = _armar_venta_desde_form(data, leer_portafolio(archivo), excluir_venta_id=venta_id)
         if err:
             return err
         if not editar_venta(archivo, venta_id, venta):
@@ -3010,10 +3124,15 @@ def api_monitor_toggle(archivo):
     if not portafolio:
         return jsonify({'error': 'No encontrado'}), 404
     composicion = portafolio.get('composicion', {})
+    activos_fuera_meta = portafolio.get('activos_fuera_meta', {})
     tickers_con_posicion = set(a['activo'] for a in portafolio.get('aportes', []))
 
     if ambito == 'activo':
-        if not activo or activo not in composicion:
+        # Tambien se acepta un ticker "fuera de meta con posicion" (salio de
+        # la composicion vigente pero el usuario lo sigue teniendo, ver
+        # api_aplicar_propuesta) -- antes solo se podia togglear compra/venta
+        # de tickers en la meta actual.
+        if not activo or (activo not in composicion and activo not in activos_fuera_meta):
             return jsonify({'error': 'Ese activo no es parte de la composición'}), 404
         if tipo == 'venta' and valor and activo not in tickers_con_posicion:
             return jsonify({'error': 'No se puede monitorear venta de un activo sin posición'}), 400
