@@ -21,6 +21,7 @@ from gestor_portafolio import (
     _leer_logs,
     _leer_usuarios,
     listar_portafolios_de_usuario,
+    username_por_telegram_chat_id,
     crear_portafolio_para_usuario,
     guardar_composicion,
     guardar_aporte,
@@ -717,6 +718,168 @@ def _ejecutar_tool(nombre, input_):
     if nombre == "simular_propuesta":
         return _tool_simular_propuesta(input_)
     return {"error": f"Tool desconocida: {nombre}"}
+
+
+# ── Tools de Atom (chat libre /api/bot) — Fase 4 del plan de asistente
+# inmersivo: darle capacidad de ACTUAR (consultar datos puntuales, navegar),
+# no solo describir lo que ya tiene en el contexto inicial del prompt. ──
+
+CONSULTAR_POSICION_TOOL = {
+    "name": "consultar_posicion",
+    "description": (
+        "Consulta el detalle exacto de la posición actual del usuario en un "
+        "ticker específico (fracciones, precio de hoy, valor, ganancia, "
+        "rentabilidad, fecha de inicio de la posición). Úsala cuando el "
+        "usuario pregunte por un activo puntual en vez de repetir de memoria "
+        "el resumen general que ya tienes en el contexto."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "ticker": {"type": "string", "description": "Símbolo bursátil, ej. 'NVDA'."},
+        },
+        "required": ["ticker"],
+    },
+}
+
+CONSULTAR_SENAL_MONITOR_TOOL = {
+    "name": "consultar_senal_monitor",
+    "description": (
+        "Consulta la señal técnica actual de Monitor para un ticker (ENTRAR/"
+        "VIGILAR/NEUTRAL de compra, o si hay señal de venta activa, con RSI). "
+        "Úsala cuando el usuario pregunte si es buen momento para comprar o "
+        "vender algo puntual."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "ticker": {"type": "string", "description": "Símbolo bursátil, ej. 'NVDA'."},
+        },
+        "required": ["ticker"],
+    },
+}
+
+NAVEGAR_DESTINOS = {
+    "dashboard":    "",
+    "analista":     "/analista",
+    "seguimiento":  "/seguimiento",
+    "monitor":      "/monitor",
+    "config":       "/config",
+}
+
+NAVEGAR_TOOL = {
+    "name": "navegar",
+    "description": (
+        "Lleva al usuario directamente a otra pantalla de la app, en vez de "
+        "solo decirle a dónde ir. Úsala cuando el usuario pida explícitamente "
+        "ir a algún lado (ej. 'llévame a Monitor', 'quiero ver Seguimiento') "
+        "o cuando resuelva de forma natural lo que está pidiendo (ej. si pide "
+        "cambiar su composición, navégalo al Analista después de explicarle "
+        "por qué)."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "destino": {
+                "type": "string",
+                "enum": list(NAVEGAR_DESTINOS.keys()),
+                "description": "Pantalla destino dentro del portafolio actual.",
+            },
+        },
+        "required": ["destino"],
+    },
+}
+
+BOT_TOOLS = [CONSULTAR_POSICION_TOOL, CONSULTAR_SENAL_MONITOR_TOOL, NAVEGAR_TOOL]
+
+
+def _tool_consultar_posicion(portafolio, input_):
+    ticker = (input_.get("ticker") or "").strip().upper()
+    tr = calcular_tiempo_real(portafolio)
+    if not tr or not tr.get("posiciones"):
+        return {"error": "Este portafolio todavía no tiene inversiones registradas."}
+    for pos in tr["posiciones"]:
+        if pos["activo"].upper() == ticker:
+            return {
+                "activo":         pos["activo"],
+                "fracciones":     pos["fracciones"],
+                "precio_hoy":     pos["precio_hoy"],
+                "valor_hoy":      pos["valor_hoy"],
+                "ganancia":       pos["ganancia"],
+                "rentabilidad":   pos["rentabilidad"],
+                "fecha_inicio":   pos.get("fecha_inicio"),
+            }
+    return {"error": f"El usuario no tiene una posición abierta en '{ticker}'."}
+
+
+def _tool_consultar_senal_monitor(archivo, input_):
+    """Lee los mismos archivos de estado que ya usa /api/precios-rt
+    (datos/portafolios/monitor_<archivo> para señal en vivo, rangos_<archivo>
+    como fallback precalculado del día si el mercado está cerrado) — no hay
+    llamada nueva a Finnhub, es lectura del cache que el monitor ya escribe."""
+    ticker = (input_.get("ticker") or "").strip().upper()
+    ruta_monitor = os.path.join(DATOS_DIR, "portafolios", f"monitor_{archivo}")
+    if os.path.exists(ruta_monitor):
+        try:
+            with open(ruta_monitor, "r", encoding="utf-8") as f:
+                estado = json.load(f)
+            r = estado.get("resultados_rt", {}).get(ticker)
+            if r:
+                return {
+                    "fuente":         "en_vivo",
+                    "senal_compra":   r.get("senal", "NEUTRAL"),
+                    "senal_venta":    r.get("senal_venta", "NEUTRAL"),
+                    "rsi":            r.get("rsi"),
+                    "puede_entrar":   r.get("puede_entrar", False),
+                    "puede_vender":   r.get("puede_vender", False),
+                }
+        except Exception:
+            pass
+    ruta_rangos = os.path.join(DATOS_DIR, "portafolios", f"rangos_{archivo}")
+    if os.path.exists(ruta_rangos):
+        try:
+            with open(ruta_rangos, "r", encoding="utf-8") as f:
+                rangos_data = json.load(f)
+            r = rangos_data.get("rangos", {}).get(ticker)
+            if r:
+                return {
+                    "fuente":        "rango_precalculado_del_dia",
+                    "fecha":         rangos_data.get("fecha"),
+                    "rsi":           r.get("rsi"),
+                    "puede_entrar":  r.get("puede_entrar", False),
+                    "puede_vigilar": r.get("puede_vigilar", False),
+                    "puede_vender":  r.get("puede_vender", False),
+                }
+        except Exception:
+            pass
+    return {"error": f"Todavía no hay datos de Monitor para '{ticker}' (puede que no esté siendo vigilado)."}
+
+
+def _tool_navegar(input_):
+    destino = (input_.get("destino") or "").strip().lower()
+    if destino not in NAVEGAR_DESTINOS:
+        return {"error": f"Destino desconocido: '{destino}'. Usa uno de: {', '.join(NAVEGAR_DESTINOS)}."}
+    return {"ok": True, "destino": destino}
+
+
+def _ejecutar_tool_bot(portafolio, archivo, accion_capturada):
+    """Dispatch de tools para /api/bot. `accion_capturada` es un dict mutable
+    que el caller (api_bot) inspecciona DESPUES de que anthropic_chat termine
+    su loop -- es el unico canal para que una tool (navegar) le diga algo
+    estructurado al frontend, ya que anthropic_chat solo devuelve texto."""
+    def ejecutar(nombre, input_):
+        if nombre == "consultar_posicion":
+            return _tool_consultar_posicion(portafolio, input_)
+        if nombre == "consultar_senal_monitor":
+            return _tool_consultar_senal_monitor(archivo, input_)
+        if nombre == "navegar":
+            resultado = _tool_navegar(input_)
+            if resultado.get("ok"):
+                accion_capturada["tipo"] = "navegar"
+                accion_capturada["destino"] = resultado["destino"]
+            return resultado
+        return {"error": f"Tool desconocida: {nombre}"}
+    return ejecutar
 
 
 def _sistema_analista(portafolio, composicion, tiene_inv, motivo=None):
@@ -1466,6 +1629,103 @@ def api_aplicar_propuesta(archivo):
         return jsonify({"ok": False, "error": str(e)})
 
 
+def _construir_contexto_atom(p, incluir_navegar=True):
+    """System prompt de Atom -- unico punto de verdad, usado tanto por
+    /api/bot (chat web) como por el webhook de Telegram, para que ambos
+    canales sean la MISMA mente y no dos prompts que se desincronizan con
+    el tiempo. `incluir_navegar` se apaga en Telegram: no hay pantalla a la
+    que navegar dentro de un chat."""
+    macro = cargar_macro()
+    mt = (
+        f'TRM: ${macro["trm"]:,.0f}\nInflación: {macro["inf_col"]}%\nBanrep: {macro["banrep"]}%'
+        if macro
+        else ""
+    )
+    tr = calcular_tiempo_real(p)
+    resumen_tr = ""
+    if tr:
+        resumen_tr = (
+            f"ESTADO ACTUAL DEL PORTAFOLIO:\n"
+            f'- Valor total hoy: ${tr["total_valor"]:,.0f} COP\n'
+            f'- Invertido (real, deflactado): ${tr["total_invertido"]:,.0f} COP\n'
+            f'- Ganancia real vs inflación: ${tr["ganancia_total"]:,.0f} COP ({tr["rentabilidad_total"]:+.2f}%)\n'
+            f"- Posiciones:\n"
+        )
+        for pos in tr["posiciones"]:
+            resumen_tr += (
+                f'  · {pos["activo"]}: ${pos["precio_hoy"]:,.2f} USD | '
+                f'Valor: ${pos["valor_hoy"]:,.0f} COP | '
+                f'Ganancia: ${pos["ganancia"]:,.0f} ({pos["rentabilidad"]:+.1f}%)\n'
+            )
+    else:
+        composicion = p.get("composicion", {})
+        if composicion:
+            resumen_tr = (
+                f"COMPOSICIÓN OBJETIVO DEL PORTAFOLIO (sin inversiones registradas aún):\n"
+                f'- Inversión inicial planificada: ${p.get("inversion_inicial",0):,.0f} COP\n'
+                f"- Activos y pesos:\n"
+            )
+            for activo, peso in composicion.items():
+                precio = precio_actual_usd(activo)
+                precio_str = (
+                    f"${precio:,.2f} USD" if precio else "precio no disponible"
+                )
+                monto_cop = p.get("inversion_inicial", 0) * peso
+                resumen_tr += f"  · {activo}: {peso*100:.1f}% — {precio_str} — asignación: ${monto_cop:,.0f} COP\n"
+        else:
+            resumen_tr = "Este portafolio aún no tiene composición ni inversiones registradas.\n"
+    noticias_mercado = ""
+    try:
+        tickers = list(p.get("composicion", {}).keys())[:3]
+        for tk in tickers:
+            r = requests.get(
+                f"https://news.google.com/rss/search?q={_url_quote(tk)}+stock&hl=es&gl=US&ceid=US:es",
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=5,
+            )
+            items = ET.fromstring(r.content).findall(".//item")[:1]
+            for item in items:
+                t = item.find("title")
+                if t is not None:
+                    noticias_mercado += f"- {tk}: {t.text[:80]}\n"
+    except Exception as e:
+        print(f"News fetch failed for {tk}: {e}")
+    noticias_txt = (
+        f"\nNOTICIAS RECIENTES DE TUS ACTIVOS:\n{noticias_mercado}"
+        if noticias_mercado
+        else ""
+    )
+    herramientas_txt = (
+        f"- consultar_posicion / consultar_senal_monitor: úsalas para responder sobre un "
+        f"activo puntual con datos exactos en vez de estimar de memoria el resumen de arriba.\n"
+    )
+    if incluir_navegar:
+        herramientas_txt += (
+            f"- navegar: úsala cuando el usuario pida ir a otra pantalla, o cuando sea la acción "
+            f"natural para resolver lo que pide (ej. pide cambiar su composición → navégalo al "
+            f"Analista después de explicarle por qué). No la uses si solo está preguntando algo "
+            f"informativo sin pedir moverse."
+        )
+    return (
+        f'Eres el asesor de inversiones personal de {p["propietario"]}, '
+        f"con acceso completo a su portafolio en tiempo real. "
+        f"Tu trabajo es dar análisis honestos, con criterio propio, sin rodeos.\n\n"
+        f"PERFIL:\n"
+        f'- Riesgo: {p["perfil"]} ({"largo plazo 10 años, acepta volatilidad" if p["perfil"] == "agresivo" else "mediano plazo 5 años, prioriza estabilidad"})\n'
+        f'- Capital inicial: ${p.get("inversion_inicial", 0):,.0f} COP\n'
+        f'- DCA: ${p.get("aporte_dca", 0):,.0f} COP cada {p.get("frecuencia_meses", 1)} mes(es)\n\n'
+        f"PORTAFOLIO HOY:\n{resumen_tr}\n\n"
+        f"MACRO:\n{mt}\n{noticias_txt}\n\n"
+        f"INSTRUCCIONES:\n"
+        f"- Usa los números reales. Nunca inventes cifras.\n"
+        f"- Si gana: explica qué lo impulsa. Si pierde: sé honesto y pon en contexto largo plazo.\n"
+        f'- Cuando pregunten "¿qué hago?": da una recomendación concreta, no "depende".\n'
+        f"- Siempre compara contra inflación colombiana — eso es lo que realmente importa.\n"
+        f"- Máximo 4 párrafos. Sin asteriscos. Sin bullets. Español directo.\n\n"
+        f"HERRAMIENTAS:\n{herramientas_txt}"
+    )
+
+
 @app.route("/api/bot/<archivo>", methods=["POST"])
 def api_bot(archivo):
     if verificar_acceso(archivo):
@@ -1475,90 +1735,17 @@ def api_bot(archivo):
         mensaje = data.get("mensaje", "")
         historial = data.get("historial") or [{"role": "user", "content": mensaje}]
         p = leer_portafolio(archivo)
-        macro = cargar_macro()
-        mt = (
-            f'TRM: ${macro["trm"]:,.0f}\nInflación: {macro["inf_col"]}%\nBanrep: {macro["banrep"]}%'
-            if macro
-            else ""
-        )
-        tr = calcular_tiempo_real(p)
-        resumen_tr = ""
-        if tr:
-            resumen_tr = (
-                f"ESTADO ACTUAL DEL PORTAFOLIO:\n"
-                f'- Valor total hoy: ${tr["total_valor"]:,.0f} COP\n'
-                f'- Invertido (real, deflactado): ${tr["total_invertido"]:,.0f} COP\n'
-                f'- Ganancia real vs inflación: ${tr["ganancia_total"]:,.0f} COP ({tr["rentabilidad_total"]:+.2f}%)\n'
-                f"- Posiciones:\n"
-            )
-            for pos in tr["posiciones"]:
-                resumen_tr += (
-                    f'  · {pos["activo"]}: ${pos["precio_hoy"]:,.2f} USD | '
-                    f'Valor: ${pos["valor_hoy"]:,.0f} COP | '
-                    f'Ganancia: ${pos["ganancia"]:,.0f} ({pos["rentabilidad"]:+.1f}%)\n'
-                )
-        else:
-            composicion = p.get("composicion", {})
-            if composicion:
-                resumen_tr = (
-                    f"COMPOSICIÓN OBJETIVO DEL PORTAFOLIO (sin inversiones registradas aún):\n"
-                    f'- Inversión inicial planificada: ${p.get("inversion_inicial",0):,.0f} COP\n'
-                    f"- Activos y pesos:\n"
-                )
-                for activo, peso in composicion.items():
-                    precio = precio_actual_usd(activo)
-                    precio_str = (
-                        f"${precio:,.2f} USD" if precio else "precio no disponible"
-                    )
-                    monto_cop = p.get("inversion_inicial", 0) * peso
-                    resumen_tr += f"  · {activo}: {peso*100:.1f}% — {precio_str} — asignación: ${monto_cop:,.0f} COP\n"
-            else:
-                resumen_tr = "Este portafolio aún no tiene composición ni inversiones registradas.\n"
-        noticias_mercado = ""
-        try:
-            tickers = list(p.get("composicion", {}).keys())[:3]
-            for tk in tickers:
-                r = requests.get(
-                    f"https://news.google.com/rss/search?q={_url_quote(tk)}+stock&hl=es&gl=US&ceid=US:es",
-                    headers={"User-Agent": "Mozilla/5.0"},
-                    timeout=5,
-                )
-                items = ET.fromstring(r.content).findall(".//item")[:1]
-                for item in items:
-                    t = item.find("title")
-                    if t is not None:
-                        noticias_mercado += f"- {tk}: {t.text[:80]}\n"
-        except Exception as e:
-            print(f"News fetch failed for {tk}: {e}")
-        noticias_txt = (
-            f"\nNOTICIAS RECIENTES DE TUS ACTIVOS:\n{noticias_mercado}"
-            if noticias_mercado
-            else ""
-        )
-        ctx = (
-            f'Eres el asesor de inversiones personal de {p["propietario"]}, '
-            f"con acceso completo a su portafolio en tiempo real. "
-            f"Tu trabajo es dar análisis honestos, con criterio propio, sin rodeos.\n\n"
-            f"PERFIL:\n"
-            f'- Riesgo: {p["perfil"]} ({"largo plazo 10 años, acepta volatilidad" if p["perfil"] == "agresivo" else "mediano plazo 5 años, prioriza estabilidad"})\n'
-            f'- Capital inicial: ${p.get("inversion_inicial", 0):,.0f} COP\n'
-            f'- DCA: ${p.get("aporte_dca", 0):,.0f} COP cada {p.get("frecuencia_meses", 1)} mes(es)\n\n'
-            f"PORTAFOLIO HOY:\n{resumen_tr}\n\n"
-            f"MACRO:\n{mt}\n{noticias_txt}\n\n"
-            f"INSTRUCCIONES:\n"
-            f"- Usa los números reales. Nunca inventes cifras.\n"
-            f"- Si gana: explica qué lo impulsa. Si pierde: sé honesto y pon en contexto largo plazo.\n"
-            f'- Cuando pregunten "¿qué hago?": da una recomendación concreta, no "depende".\n'
-            f"- Siempre compara contra inflación colombiana — eso es lo que realmente importa.\n"
-            f"- Máximo 4 párrafos. Sin asteriscos. Sin bullets. Español directo."
-        )
+        ctx = _construir_contexto_atom(p, incluir_navegar=True)
+        accion_capturada = {}
         resp = anthropic_chat(
             historial,
             system=ctx,
             max_tokens=800,
             temperature=0.4,
+            tools=BOT_TOOLS,
+            tool_executor=_ejecutar_tool_bot(p, archivo, accion_capturada),
         )
-        return jsonify({"respuesta": resp})
+        return jsonify({"respuesta": resp, "accion": accion_capturada or None})
     except Exception as e:
         print(f"❌ api_bot error: {e}")
         return jsonify({"respuesta": "Ocurrió un error al procesar la solicitud."})
@@ -2022,6 +2209,59 @@ def api_ultima_actualizacion():
 # ============================================================
 
 
+def _responder_atom_telegram(chat_id, texto_usuario):
+    """Rama de texto libre del webhook de Telegram -- antes cualquier mensaje
+    que no fuera '/start' se ignoraba en silencio (ver el comentario viejo
+    "Mensaje de texto (comandos futuros)"). Resuelve chat_id -> usuario ->
+    portafolio activo y responde con la MISMA mente de Atom que ya usa
+    /api/bot (_construir_contexto_atom) -- Telegram es un canal mas, no un
+    asistente aparte.
+
+    Simplificaciones deliberadas de este primer corte (alcance de Fase 4,
+    documentadas en BITACORA.md):
+    - Sin memoria entre mensajes de Telegram -- cada mensaje es una
+      conversación de un solo turno (a diferencia del chat web, que sí
+      arrastra historial vía useAtomChat).
+    - Si el usuario tiene más de un portafolio activo, se usa el primero y
+      se aclara cuál en la respuesta, en vez de preguntarle cuál por
+      Telegram antes de responder (evita mantener estado de conversación
+      entre mensajes, que habría sido una feature bastante más grande).
+    - Sin la tool 'navegar' (no aplica -- no hay pantalla a la que navegar
+      dentro de un chat de Telegram).
+    """
+    from monitor import telegram
+
+    try:
+        username = username_por_telegram_chat_id(chat_id)
+        if not username:
+            telegram(chat_id, "No encuentro tu cuenta conectada. Entra a tu perfil en la app y confirma tu Chat ID primero.")
+            return
+        portafolios = [pf for pf in listar_portafolios_de_usuario(username) if pf.get("activo")]
+        if not portafolios:
+            telegram(chat_id, "Todavía no tienes portafolios activos conectados.")
+            return
+
+        archivo = portafolios[0]["archivo"]
+        prefijo = (
+            f"(Sobre tu portafolio '{portafolios[0]['nombre']}' — tienes más de uno activo)\n\n"
+            if len(portafolios) > 1 else ""
+        )
+        p = leer_portafolio(archivo)
+        ctx = _construir_contexto_atom(p, incluir_navegar=False)
+        resp = anthropic_chat(
+            [{"role": "user", "content": texto_usuario}],
+            system=ctx,
+            max_tokens=600,
+            temperature=0.4,
+            tools=[CONSULTAR_POSICION_TOOL, CONSULTAR_SENAL_MONITOR_TOOL],
+            tool_executor=_ejecutar_tool_bot(p, archivo, {}),
+        )
+        telegram(chat_id, prefijo + resp)
+    except Exception as e:
+        print(f"❌ Error respondiendo a Atom por Telegram: {e}")
+        telegram(chat_id, "Tuve un problema respondiendo tu pregunta, intenta de nuevo.")
+
+
 @app.route("/telegram-webhook", methods=["POST"])
 def telegram_webhook():
     """
@@ -2056,11 +2296,12 @@ def telegram_webhook():
             procesar_callback_telegram(cb_data, chat_id)
             return jsonify({"ok": True})
 
-        # ── Mensaje de texto (comandos futuros) ────────────────
+        # ── Mensaje de texto ────────────────────────────────────
         if "message" in data:
             msg = data["message"]
             chat_id = str(msg["chat"]["id"])
-            texto = msg.get("text", "").strip().lower()
+            texto_original = msg.get("text", "").strip()
+            texto = texto_original.lower()
 
             # Comando /start — respuesta básica
             if texto == "/start":
@@ -2073,6 +2314,9 @@ def telegram_webhook():
                     },
                     timeout=5,
                 )
+            elif texto_original:
+                # Cualquier otro texto se trata como pregunta libre a Atom.
+                _responder_atom_telegram(chat_id, texto_original)
 
         return jsonify({"ok": True})
 

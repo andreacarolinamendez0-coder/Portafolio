@@ -1,5 +1,6 @@
 "use client";
 import { createContext, useContext, useEffect, useState, type ReactNode, type Dispatch, type SetStateAction } from "react";
+import { useRouter } from "next/navigation";
 
 export interface AtomMsg { role: "user" | "bot"; text: string }
 
@@ -48,6 +49,16 @@ export function useAtomChat() {
   return ctx;
 }
 
+// Mismas claves que NAVEGAR_DESTINOS en dashboard.py (_tool_navegar) -- el
+// backend valida y devuelve la clave corta, el frontend la traduce a ruta.
+const RUTAS_NAVEGAR: Record<string, string> = {
+  dashboard: "",
+  analista: "/analista",
+  seguimiento: "/seguimiento",
+  monitor: "/monitor",
+  config: "/config",
+};
+
 // Logica de envio compartida entre la pagina completa (bot/page.tsx) y el
 // launcher flotante (asistente-flotante.tsx) -- ambos leen/escriben el mismo
 // historial via useAtomChat, asi que una conversacion empezada en uno
@@ -55,6 +66,7 @@ export function useAtomChat() {
 export function useAtomSend(archivo: string) {
   const { msgs, setMsgs } = useAtomChat();
   const [loading, setLoading] = useState(false);
+  const router = useRouter();
 
   async function send(texto: string) {
     const userMsg = texto.trim();
@@ -71,6 +83,10 @@ export function useAtomSend(archivo: string) {
       });
       const data = await res.json();
       setMsgs(m => [...m, { role: "bot", text: data.respuesta ?? "Sin respuesta" }]);
+
+      if (data.accion?.tipo === "navegar" && data.accion.destino in RUTAS_NAVEGAR) {
+        router.push(`/portafolio/${archivo}${RUTAS_NAVEGAR[data.accion.destino]}`);
+      }
     } catch {
       setMsgs(m => [...m, { role: "bot", text: "Error de conexión." }]);
     } finally {

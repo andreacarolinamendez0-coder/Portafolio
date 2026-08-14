@@ -1642,3 +1642,128 @@ continuar — esa sí toca backend (`dashboard.py:telegram_webhook`,
 `gestor_portafolio.py`), se reporta el diff exacto cuando se aborde.
 
 ---
+
+## [2026-08-14] Asistente inmersivo — Fase 4: Atom puede actuar + puente con Telegram
+
+**Qué se hizo:** Andrea confirmó que ya subió a GitHub todo lo de Fases 1-3
+y pidió seguir con la Fase 4 — la última del plan de Atom. A diferencia de
+las Fases 2 y 3, esta SÍ toca backend en 3 archivos (`dashboard.py`,
+`gestor_portafolio.py`), avisado y detallado exactamente como pide la
+regla del proyecto.
+
+**1. Atom (`/api/bot`) gana tool-calling real — antes solo tenía
+`api_analista_chat` (modo propuesta).**
+
+- `dashboard.py`: 3 tools nuevas, mismo patrón que ya usaba
+  `SIMULAR_PROPUESTA_TOOL`/`_ejecutar_tool` para el Analista:
+  - `consultar_posicion(ticker)` — lee la posición real del usuario en un
+    ticker puntual (vía `calcular_tiempo_real`, ya existente).
+  - `consultar_senal_monitor(ticker)` — lee la señal técnica actual de
+    Monitor para un ticker, del mismo cache que ya lee
+    `/api/precios-rt` (`datos/portafolios/monitor_<archivo>` en vivo,
+    `rangos_<archivo>` como fallback si el mercado está cerrado) — sin
+    llamada nueva a Finnhub.
+  - `navegar(destino)` — el modelo puede pedir llevar al usuario a otra
+    pantalla (dashboard/analista/seguimiento/monitor/config). Como
+    `anthropic_chat` solo devuelve texto, la tool escribe en un dict mutable
+    (`accion_capturada`) que `api_bot` inspecciona después del loop y agrega
+    a la respuesta JSON: `{"respuesta": "...", "accion": {"tipo": "navegar", "destino": "monitor"}}`.
+  - **Refactor de apoyo:** el bloque de construcción del system prompt de
+    Atom (macro, posiciones, noticias — antes vivía inline dentro de
+    `api_bot`, ~90 líneas) se extrajo a `_construir_contexto_atom(p, incluir_navegar)`,
+    para que `api_bot` y el nuevo puente de Telegram (punto 3) compartan la
+    MISMA lógica de contexto en vez de mantener dos copias sincronizadas a mano.
+  - Verificado con prueba aislada (`test_bot_tools.py`): `consultar_posicion`
+    encuentra la posición real y falla limpio si no existe; `navegar` valida
+    destinos; `api_bot` propaga correctamente la acción capturada en la
+    respuesta JSON.
+
+- **Frontend:** `atom-chat-context.tsx` (`useAtomSend`) ahora lee
+  `data.accion` de la respuesta y hace `router.push` cuando es
+  `{"tipo":"navegar"}` — funciona igual desde la burbuja flotante que desde
+  la página completa (comparten el mismo hook). Verificado con Playwright:
+  pedirle a Atom "llévame a monitor" navega de verdad a `/monitor`.
+
+**2. Command palette (Cmd/Ctrl+K) — sin IA, como pedía el plan explícitamente.**
+
+- Nuevo `components/ui/command-palette.tsx`, montado en
+  `[archivo]/layout.tsx`: acceso directo por teclado a las 6 pantallas del
+  portafolio (Dashboard/Analista/Seguimiento/Atom/Monitor/Config), con
+  búsqueda y navegación por flechas/Enter. Cero llamadas a IA — es
+  navegación instantánea, la mitad de "mano derecha" que no necesita
+  modelo. Verificado con Playwright: Ctrl+K abre el panel, escribir
+  "monitor" + Enter navega ahí sin tocar `/api/bot`.
+
+**3. Puente con Telegram — incluido en el alcance de hoy por pedido
+explícito de Andrea (toca `dashboard.py` y `gestor_portafolio.py`).**
+
+- **`gestor_portafolio.py`: nueva función `username_por_telegram_chat_id(chat_id)`**
+  (agregada después de `listar_portafolios_de_usuario`, línea ~799). Antes
+  no existía ninguna forma de ir de un chat_id de Telegram al usuario dueño
+  — `telegram_chat_id` es un campo del USUARIO (no del portafolio), y el
+  webhook solo lo usaba para el flujo inverso (mostrarle su chat_id al
+  usuario en `/start`). Escanea `_leer_usuarios()` comparando
+  `telegram_chat_id`. Se agregó al import de `gestor_portafolio` en
+  `dashboard.py` (línea 23).
+- **`dashboard.py:telegram_webhook`** (antes: la rama `if "message" in data:`
+  solo manejaba `/start`; el comentario decía literalmente "Mensaje de
+  texto (comandos futuros)" — cualquier otro texto se ignoraba en
+  silencio). **Ahora:** cualquier texto que no sea `/start` cae en el nuevo
+  `elif texto_original:` y llama a la nueva función
+  `_responder_atom_telegram(chat_id, texto_original)`. Nada de
+  `procesar_callback_telegram` ni de los botones de decisión compra/venta
+  se tocó — siguen exactamente igual.
+- **Nueva función `_responder_atom_telegram`** (justo antes de
+  `telegram_webhook`): resuelve chat_id → usuario → portafolio(s)
+  activo(s), arma el contexto con la MISMA `_construir_contexto_atom` que
+  usa `/api/bot` (con `incluir_navegar=False` — no hay pantalla a la que
+  navegar dentro de un chat), y responde por `telegram()` (helper ya
+  existente en `monitor.py:167`, importado localmente dentro de la función
+  igual que ya se hacía en otro punto de este mismo archivo).
+- **3 simplificaciones deliberadas de este primer corte** (documentadas en
+  el código y aquí, para que quede explícito qué NO se implementó):
+  1. Sin memoria entre mensajes de Telegram — cada mensaje es una
+     conversación de un solo turno, a diferencia del chat web que sí
+     arrastra historial. Construir memoria por Telegram requeriría
+     persistir una conversación keyed por chat_id en algún lado, que es más
+     alcance del que pedía "llenar la rama vacía".
+  2. Si el usuario tiene más de un portafolio activo, se usa el primero y
+     se aclara cuál en la respuesta ("Sobre tu portafolio 'X'..."), en vez
+     de preguntarle cuál por Telegram antes de responder como sugería el
+     plan original — implementar esa pregunta habría requerido mantener
+     estado de conversación entre mensajes de Telegram, una feature bastante
+     más grande que el resto de esta fase.
+  3. La tool `navegar` no se ofrece por Telegram (no aplica — no hay
+     pantalla a la que navegar dentro de un chat).
+- Verificado con 2 pruebas aisladas: `test_telegram_bridge.py` (los 4
+  casos — sin cuenta conectada, sin portafolios activos, un portafolio,
+  varios portafolios) y `test_telegram_webhook_route.py` (confirma que el
+  webhook enruta texto libre a `_responder_atom_telegram` y que `/start`
+  sigue su camino original sin disparar la rama nueva). Ninguna prueba
+  llamó a Telegram real ni corrió `monitor.py` como daemon — todo con
+  `monitor.telegram` mockeado.
+
+**Verificación general:** `python -m py_compile` en los 4 archivos backend
+tocados en toda la sesión (`dashboard.py`, `gestor_portafolio.py`,
+`monitor.py`, `adaptador_analista.py`). `tsc --noEmit` limpio. Playwright:
+command palette + tool `navegar` navegando de verdad, sin errores de
+consola.
+
+**Resultado:** Fase 4 cerrada y verificada — última fase del plan de Atom.
+Backend tocado: `dashboard.py` (`_construir_contexto_atom` nuevo + 3 tools +
+`api_bot` extendido + `telegram_webhook` + `_responder_atom_telegram`
+nuevo), `gestor_portafolio.py` (`username_por_telegram_chat_id` nuevo).
+Frontend: `components/providers/atom-chat-context.tsx` (maneja
+`accion.navegar`), `components/ui/command-palette.tsx` (nuevo),
+`app/portafolio/[archivo]/layout.tsx`. Ningún cambio commiteado por mí —
+Andrea ya subió Fases 1-3, esta fase queda pendiente de su revisión antes
+de subir.
+
+**Pendiente / próximos pasos:** Las 3 simplificaciones del puente de
+Telegram (arriba) quedan documentadas como mejoras futuras si Andrea
+decide que valen la pena: memoria de conversación por Telegram, selección
+explícita de portafolio cuando hay varios activos. El plan de Atom
+(`C:\Users\Grupo QAB\.claude\plans\buzzing-discovering-shell.md`) queda
+completo — las 4 fases originales están implementadas.
+
+---

@@ -796,6 +796,21 @@ def listar_portafolios_de_usuario(username):
     return resultado
 
 
+def username_por_telegram_chat_id(chat_id):
+    """Resuelve chat_id de Telegram -> username. telegram_chat_id es un campo
+    del USUARIO (ver actualizar_usuario), no del portafolio -- necesario para
+    que el webhook de Telegram sepa a quien le esta hablando en un mensaje de
+    texto libre. None si ningun usuario tiene ese chat_id conectado."""
+    chat_id = str(chat_id).strip()
+    if not chat_id:
+        return None
+    usuarios = _leer_usuarios()
+    for username, u in usuarios.items():
+        if str(u.get("telegram_chat_id", "")).strip() == chat_id:
+            return username
+    return None
+
+
 def crear_portafolio_para_usuario(
     username,
     nombre,

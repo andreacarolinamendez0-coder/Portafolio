@@ -9,6 +9,7 @@ import { SelectorPortafolios } from "@/components/ui/selector-portafolios";
 import { NuevoPortafolioDialog } from "@/components/portfolio/nuevo-portafolio-dialog";
 import { AtomChatProvider } from "@/components/providers/atom-chat-context";
 import { AsistenteFlotante } from "@/components/ui/asistente-flotante";
+import { CommandPalette } from "@/components/ui/command-palette";
 
 const TABS = [
   { id: "dashboard",   sub: "",             label: "Dashboard" },
@@ -161,6 +162,7 @@ export default function PortafolioLayout({ children }: { children: React.ReactNo
       />
       {crearAbierto && <NuevoPortafolioDialog onClose={() => setCrearAbierto(false)} onCreated={() => { setCrearAbierto(false); router.refresh(); }} />}
       {activa !== "bot" && <AsistenteFlotante archivo={archivo} />}
+      <CommandPalette archivo={archivo} />
     </div>
     </AtomChatProvider>
   );
