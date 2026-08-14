@@ -12,7 +12,7 @@ import { LogoMark } from "@/components/ui/logo";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SectionTitle } from "@/components/ui/card";
-import { authMe, authLogout, triggerRecolector, getUltimaActualizacion, getPreciosRT, type DashboardData, type Posicion } from "@/lib/api";
+import { authMe, authLogout, triggerRecolector, getUltimaActualizacion, getPreciosRT, type DashboardData, type Posicion, type PrecioRT, type RangoTicker, type MonitoreoMap } from "@/lib/api";
 import { getDashboard, getTrmAnalisis, getHistoricoAnalisis } from "@/lib/api";
 import { style } from "framer-motion/client";
 import { PageIntro } from "@/components/ui/page-intro";
@@ -20,6 +20,16 @@ import {getConfig} from "@/lib/api";
 import { mostrarMonto, type Divisa } from "@/lib/divisas";
 import { AnimatedValue } from "@/components/ui/animated-value";
 import { AvisoSeguimiento } from "@/components/ui/aviso-seguimiento";
+import { AvisosHost } from "@/components/ui/aviso-flotante";
+import { AvisoSenalesMonitor } from "@/components/ui/aviso-senales-monitor";
+import { AvisoTrm } from "@/components/ui/aviso-trm";
+
+interface MonitorAmbient {
+  mercadoAbierto: boolean;
+  precios:        Record<string, PrecioRT>;
+  rangos:         Record<string, RangoTicker>;
+  monitoreo:      MonitoreoMap;
+}
 
 // Métricas recalculadas en vivo (polling de /api/precios-rt) que sobrescriben
 // total_valor / ganancia_total / rentabilidad_total mientras hay monitoreo activo.
@@ -45,6 +55,10 @@ export default function DashboardPage() {
   const [username, setUsername]   = useState("");
   const [divisa, setDivisa] = useState<"USD" | "EUR" | "COP">("COP");
   const [liveTR, setLiveTR]       = useState<MetricasVivas | null>(null);
+  // Datos de /api/precios-rt mas alla de liveTR (precios/rangos/monitoreo)
+  // -- solo para que los avisos flotantes de Monitor sepan si hay señales
+  // activas. Misma llamada que pollPrecios ya hacia, no es un fetch nuevo.
+  const [monitorAmbient, setMonitorAmbient] = useState<MonitorAmbient | null>(null);
 
   // Ref con el último `data` cargado — el intervalo de polling lo lee para
   // no quedarse con un closure viejo (no se re-crea el interval en cada render).
@@ -99,7 +113,16 @@ export default function DashboardPage() {
 
     try {
       const res = await getPreciosRT(archivo);
-      if (!res.ok || !res.precios || Object.keys(res.precios).length === 0) return;
+      if (!res.ok) return;
+
+      setMonitorAmbient({
+        mercadoAbierto: res.mercado_abierto,
+        precios: res.precios ?? {},
+        rangos: res.rangos ?? {},
+        monitoreo: res.monitoreo ?? {},
+      });
+
+      if (!res.precios || Object.keys(res.precios).length === 0) return;
 
       for (const [ticker, info] of Object.entries(res.precios)) {
         if (info && typeof info.precio === "number" && info.precio > 0) {
@@ -278,7 +301,19 @@ export default function DashboardPage() {
             {updating ? "Descargando datos..." : "Actualizar datos"}
           </LiquidButton>
         </div>
-        <AvisoSeguimiento archivo={archivo} desviacion={data.desviacion_composicion} />
+        <AvisosHost>
+          <AvisoSeguimiento archivo={archivo} desviacion={data.desviacion_composicion} />
+          {monitorAmbient && (
+            <AvisoSenalesMonitor
+              archivo={archivo}
+              mercadoAbierto={monitorAmbient.mercadoAbierto}
+              precios={monitorAmbient.precios}
+              rangos={monitorAmbient.rangos}
+              monitoreo={monitorAmbient.monitoreo}
+            />
+          )}
+          <AvisoTrm archivo={archivo} trmCambio={macro?.trm_cambio} />
+        </AvisosHost>
       </>
   );
 }

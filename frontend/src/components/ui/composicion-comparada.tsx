@@ -60,8 +60,8 @@ export function ComposicionComparada({ composicionMeta, composicionReal }: Props
 
   return (
     <GlassPanel>
-      <p style={{ color: "var(--text)", fontSize: 14, fontWeight: 600, margin: "0 0 4px" }}>
-        Composición: meta vs real
+      <p style={{ color: "var(--text)", fontSize: 20, fontWeight: 600, margin: "0 0 4px" }}>
+        COMPOSICIÓN DE PORTAFOLIO: META VS REAL
       </p>
       <p style={{ color: "var(--text-3)", fontSize: 12, margin: "0 0 20px" }}>
         Qué te propusiste vs qué tienes hoy realmente, por activo.

@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { authMe, authLogout, getPreciosRT, toggleMonitoreo, ApiError, type PrecioRT, type RangoTicker, type MonitoreoMap, type ActivosFueraMetaMap } from "@/lib/api";
+import { authMe, authLogout, getPreciosRT, toggleMonitoreo, getDashboard, ApiError, type PrecioRT, type RangoTicker, type MonitoreoMap, type ActivosFueraMetaMap, type DesviacionComposicion } from "@/lib/api";
 import { GlassPanel } from "@/components/ui/glass-panel";
 import { LiquidButton } from "@/components/ui/liquid-glass-button";
 import { PageIntro } from "@/components/ui/page-intro";
@@ -11,6 +11,8 @@ import { GlowCard } from "@/components/ui/spotlight-card";
 import { AnimatedValue } from "@/components/ui/animated-value";
 import { Switch } from "@/components/ui/switch";
 import { justificacionActivo, resumenPortafolio } from "@/lib/monitor-texto";
+import { AvisosHost } from "@/components/ui/aviso-flotante";
+import { AvisoSeguimiento } from "@/components/ui/aviso-seguimiento";
 
 const COLOR_COMPRA = "#0071e3";
 const COLOR_VENTA = "#ff9f0a";
@@ -357,6 +359,10 @@ export default function MonitorPage() {
   const [togglingKey, setTogglingKey] = useState<string | null>(null);
   const [toggleError, setToggleError] = useState("");
 
+  // Solo para el aviso flotante de Seguimiento (misma presencia ambient que
+  // ya existe en Dashboard) -- fetch puntual, no se pollea junto al resto.
+  const [desviacion, setDesviacion] = useState<DesviacionComposicion | null>(null);
+
   const prevPrecios = useRef<Record<string, number>>({});
   const flashTimer  = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastLoadRef = useRef<number>(Date.now());
@@ -448,6 +454,10 @@ export default function MonitorPage() {
     const t = setInterval(load, REFRESH_MS);
     return () => { clearInterval(t); if (flashTimer.current) clearTimeout(flashTimer.current); };
   }, [load]);
+
+  useEffect(() => {
+    getDashboard(archivo).then(d => setDesviacion(d.desviacion_composicion)).catch(() => {});
+  }, [archivo]);
 
   // Anillo de "próximo refresh" — se llena a lo largo de REFRESH_MS desde el
   // último dato recibido con éxito. Es honesto con el ciclo real del
@@ -730,6 +740,10 @@ export default function MonitorPage() {
           <LiquidButton className="text-white font-semibold !px-8 !py-2.5">Ir al Dashboard</LiquidButton>
         </Link>
       </div>
+
+      <AvisosHost>
+        <AvisoSeguimiento archivo={archivo} desviacion={desviacion} />
+      </AvisosHost>
     </>
   );
 }

@@ -8,6 +8,12 @@ export interface MagneticTabItem {
   label: string;
 }
 
+export interface MagneticTabItem {
+  value: string;
+  label: string;
+  color?: string; // acento opcional: tiñe el indicador y el texto cuando está activo
+}
+
 interface MagneticTabsProps {
   items: MagneticTabItem[];
   value: string;
@@ -25,6 +31,8 @@ export function MagneticTabs({ items, value, onChange }: MagneticTabsProps) {
   const spring = { stiffness: 300, damping: 25 };
   const springX = useSpring(x, spring);
   const springW = useSpring(w, spring);
+  const activeItem = items.find(i => i.value === (hovered ?? value));
+  const accent = activeItem?.color;
 
   const moveTo = React.useCallback((val: string) => {
     const idx = items.findIndex(i => i.value === val);
@@ -71,8 +79,10 @@ export function MagneticTabs({ items, value, onChange }: MagneticTabsProps) {
           width: springW,
           top: 4,
           bottom: 4,
-          background: "rgba(255,255,255,0.10)",
-          border: "1px solid var(--glass-border)",
+         background: accent? `color-mix(in srgb, ${accent} 16%, transparent)`
+        : "rgba(255,255,255,0.10)",
+          border: accent? `1px solid color-mix(in srgb, ${accent} 45%, transparent)`
+        : "1px solid var(--glass-border)",
           borderRadius: 8,
           backdropFilter: "blur(8px)",
           WebkitBackdropFilter: "blur(8px)",
@@ -94,7 +104,7 @@ export function MagneticTabs({ items, value, onChange }: MagneticTabsProps) {
             cursor: "pointer",
             fontSize: "0.875rem",
             fontWeight: value === item.value ? 500 : 400,
-            color: value === item.value ? "var(--text)" : "var(--text-3)",
+            color: value === item.value ? (item.color ?? "var(--text)") : "var(--text-3)",
             background: "transparent",
             border: "none",
             fontFamily: "inherit",

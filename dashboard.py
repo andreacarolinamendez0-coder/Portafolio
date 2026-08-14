@@ -1473,6 +1473,7 @@ def api_bot(archivo):
     try:
         data = request.get_json()
         mensaje = data.get("mensaje", "")
+        historial = data.get("historial") or [{"role": "user", "content": mensaje}]
         p = leer_portafolio(archivo)
         macro = cargar_macro()
         mt = (
@@ -1552,7 +1553,7 @@ def api_bot(archivo):
             f"- Máximo 4 párrafos. Sin asteriscos. Sin bullets. Español directo."
         )
         resp = anthropic_chat(
-            [{"role": "user", "content": mensaje}],
+            historial,
             system=ctx,
             max_tokens=800,
             temperature=0.4,

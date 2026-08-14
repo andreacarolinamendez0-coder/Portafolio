@@ -1425,3 +1425,220 @@ commiteado por mí.
   sin tocarse (ajena a esta tarea, documentada desde el 2026-08-13).
 
 ---
+
+## [2026-08-14] Auditoría del asistente (Atom) + plan de asistente inmersivo + Fase 1 implementada
+
+**Qué se hizo:**
+- Andrea pidió una auditoría a fondo del asistente con un foco específico:
+  llevarlo a ser inmersivo en toda la app, en un rol real de mano derecha —
+  aclarando explícitamente que no todo necesita motor de IA. Se hizo la
+  auditoría leyendo el código directamente (no se asumió nada) y se presentó
+  un plan de 4 fases en Plan Mode, aprobado por Andrea con un ajuste: incluir
+  el puente con Telegram (parte de Fase 4) en el alcance de hoy en vez de
+  dejarlo para una fase futura, por pedido explícito suyo.
+- Plan completo guardado en
+  `C:\Users\Grupo QAB\.claude\plans\buzzing-discovering-shell.md`.
+
+**Diagnóstico (verificado leyendo código, no supuesto):**
+1. Atom son en realidad DOS asistentes sin relación: `/bot` ("Atom", chat
+   libre) y `/analista` ("Analista IA", flujo de propuestas con tool-calling
+   real) — branding distinto, historiales separados, sin continuidad.
+2. Atom (`/bot`) no tenía memoria real pese a aparentarla: el frontend
+   armaba `historial` completo (`bot/page.tsx`) pero
+   `dashboard.py:api_bot` (línea 1474) solo leía `data.get("mensaje")` — el
+   historial se descartaba en cada llamada.
+3. Es 100% un destino: solo se llega por la pestaña "Asistente" del nav, sin
+   ningún widget flotante ni acceso rápido desde otras pantallas; el estado
+   del chat vivía en `useState` local y se perdía al cambiar de pestaña.
+4. Ya existe un patrón de presencia ambient que funciona bien pero está
+   aislado: `AvisoSeguimiento` (aviso flotante que enlaza a
+   `/analista?motivo=rebalanceo`) — no hay nada parecido en Dashboard ni
+   Monitor pese a que ambos ya calculan señales que lo justificarían.
+5. Ya hay narración con IA en Dashboard (`generar_analisis_trm`,
+   `generar_analisis_historico`) sin atribuir a Atom — se muestra como texto
+   plano.
+
+**Plan aprobado — 4 fases:**
+1. Unificar identidad (todo se presenta como "Atom", sin fusionar los
+   endpoints `api_bot`/`api_analista_chat` — decisión explícita de Andrea:
+   solo identidad y memoria compartida esta ronda) + darle memoria real a
+   Atom + persistir el chat entre pestañas.
+2. Launcher flotante persistente en el layout del portafolio (presencia en
+   las 6 pestañas, sin navegar) — el cambio de mayor impacto en
+   "inmersión", puramente estructural, sin IA nueva.
+3. Generalizar el patrón de `AvisoSeguimiento` a Dashboard y Monitor
+   (avisos proactivos basados en señales ya calculadas, sin llamar al
+   modelo salvo que el usuario abra la conversación).
+4. Tool-calling ampliado para que Atom pueda actuar (no solo describir) +
+   command palette no-IA + puente con Telegram (llenar la rama de texto
+   libre, hoy vacía, del webhook existente).
+
+**Fase 1 — implementada y verificada hoy:**
+
+- **`dashboard.py:api_bot`** (backend, cambio exacto):
+  - **Antes:** `mensaje = data.get("mensaje", "")` ... `anthropic_chat([{"role": "user", "content": mensaje}], ...)` — cada llamada era una conversación de un solo turno, sin memoria, sin importar cuánto historial mandara el frontend.
+  - **Ahora:** se agrega `historial = data.get("historial") or [{"role": "user", "content": mensaje}]` y se llama `anthropic_chat(historial, ...)` — usa la conversación completa que el frontend ya armaba (y descartaba antes). Mismo patrón que ya usaba `api_analista_chat` (línea 1046) para su propio historial.
+  - Verificado con una prueba aislada (`test_bot_memoria.py`, contra `andrea.json` real solo en lectura, con `threading.Thread` neutralizado y `calcular_tiempo_real`/`precio_actual_usd`/`requests.get` stubbeados para no depender de red en vivo dentro del test): se confirmó que el array de mensajes que llega al modelo es exactamente el historial completo enviado por el cliente, no solo el último mensaje.
+- **Frontend — identidad unificada:** `analista/page.tsx` cambia el header
+  del chat de "● Analista IA" (punto verde) a `LogoMark + "Atom · modo
+  propuesta"`, y el saludo inicial pasa de "Soy tu analista" a "Soy Atom".
+  `api_analista_chat` y `_sistema_analista` no se tocaron — es solo la capa
+  de presentación, tal como decidió Andrea (memoria/identidad compartida,
+  no fusión de endpoints).
+- **Frontend — memoria persistente:** nuevo
+  `components/providers/atom-chat-context.tsx` (`AtomChatProvider` +
+  `useAtomChat`), que guarda los mensajes de Atom en `localStorage` por
+  archivo de portafolio (`atom-chat-<archivo>`). Se monta en
+  `[archivo]/layout.tsx` envolviendo todo el contenido de la pestaña, y
+  `bot/page.tsx` pasa de `useState` local a consumir ese contexto. Antes,
+  cambiar de pestaña (o refrescar) borraba la conversación; ahora
+  sobrevive a ambas cosas.
+- **Verificación:** `tsc --noEmit` limpio. Playwright headless: se manda un
+  mensaje en Atom, se navega a Dashboard y de vuelta a Atom (con reload
+  completo de página, no solo navegación client-side) — el mensaje sigue
+  visible, confirmando que la persistencia por `localStorage` funciona, no
+  solo la memoria en React. Se confirmó también que "Analista IA" ya no
+  aparece en ningún lado y "Atom" aparece consistentemente en el header y
+  el saludo.
+
+**Resultado:** Fase 1 cerrada y verificada. Archivos tocados — backend:
+`dashboard.py` (`api_bot`, único cambio backend de esta fase). Frontend:
+`components/providers/atom-chat-context.tsx` (nuevo),
+`app/portafolio/[archivo]/layout.tsx`, `app/portafolio/[archivo]/bot/page.tsx`,
+`app/portafolio/[archivo]/analista/page.tsx`. Ningún cambio commiteado por mí.
+
+**Pendiente / próximos pasos:**
+- Fases 2, 3 y 4 del plan (launcher flotante global, avisos proactivos en
+  Dashboard/Monitor, tools ampliadas + command palette + puente Telegram)
+  quedan pendientes de que Andrea dé la orden de continuar.
+- El puente con Telegram (dentro de Fase 4) toca `telegram_webhook` en
+  `dashboard.py` y necesita un helper nuevo en `gestor_portafolio.py`
+  (chat_id → portafolio) — cuando se aborde, se reporta el diff exacto
+  antes/después como manda la regla del proyecto, igual que se hizo hoy con
+  `api_bot`.
+
+---
+
+## [2026-08-14] Asistente inmersivo — Fase 2: presencia global (launcher flotante)
+
+**Qué se hizo:** Andrea pidió continuar con la Fase 2 del plan de Atom
+(`C:\Users\Grupo QAB\.claude\plans\buzzing-discovering-shell.md`) — el cambio
+de mayor impacto en "inmersión": que Atom esté presente en cualquier
+pestaña del portafolio sin tener que navegar a `/bot`. Sin cambios de
+backend en esta fase.
+
+- **Hook compartido `useAtomSend`** agregado a
+  `components/providers/atom-chat-context.tsx`: extrae la lógica de envío
+  (armar historial, llamar `/api/bot/<archivo>`, actualizar mensajes) que
+  antes vivía solo dentro de `bot/page.tsx`, para que la burbuja flotante y
+  la página completa usen exactamente la misma función — no hay dos copias
+  de la llamada a la API que puedan desincronizarse. `bot/page.tsx` se
+  refactorizó para consumir este hook en vez de su implementación propia
+  (mismo comportamiento, sin cambios visibles).
+- **Nuevo componente `components/ui/asistente-flotante.tsx`:** burbuja fija
+  (esquina inferior derecha, ícono `LogoMark` con glow) que abre un panel de
+  chat compacto superpuesto (`GlassPanel`, 360px) sin abandonar la pantalla
+  actual. Como comparte el mismo `AtomChatProvider` que `bot/page.tsx`, es
+  literalmente la misma conversación vista desde dos lugares — un mensaje
+  mandado desde la burbuja en Dashboard aparece igual si luego se abre
+  `/bot` en pantalla completa, y viceversa.
+- **Montado en `[archivo]/layout.tsx`**, visible en las 6 pestañas, EXCEPTO
+  en `/bot` (`activa !== "bot"`) — ahí ya está la conversación en pantalla
+  completa, mostrar la burbuja encima sería redundante.
+- **Colisión detectada y corregida durante la verificación:** la burbuja se
+  puso primero en la esquina inferior izquierda, pero ahí vive el indicador
+  de dev tools de Next.js (visible solo en desarrollo, pero bloqueaba los
+  clics en las pruebas de Playwright). Se movió a la esquina inferior
+  derecha, la misma que ya usa `AvisoSeguimiento` — para que no se
+  superpongan, `AvisoSeguimiento` (`components/ui/aviso-seguimiento.tsx`)
+  se ajustó de `bottom: 20` a `bottom: 90` para apilarse arriba de la
+  burbuja de Atom, que ahora vive en `bottom: 20` con z-index más alto (60
+  vs 50) para quedar siempre encima.
+
+**Verificación:** `tsc --noEmit` limpio. Playwright headless: burbuja
+visible en Dashboard y Monitor, oculta en `/bot`; se abre el panel, se
+manda un mensaje, la respuesta aparece en el panel; al navegar después a
+`/bot` en pantalla completa (reload real de página) el mismo mensaje sigue
+ahí — confirma que la burbuja y la página completa comparten
+verdaderamente la misma conversación vía `localStorage`, no dos historiales
+separados. Sin errores de consola.
+
+**Resultado:** Fase 2 cerrada y verificada. Solo frontend — sin cambios de
+backend en esta fase. Archivos tocados:
+`components/providers/atom-chat-context.tsx` (nuevo hook `useAtomSend`),
+`components/ui/asistente-flotante.tsx` (nuevo),
+`components/ui/aviso-seguimiento.tsx` (reposición para no superponerse),
+`app/portafolio/[archivo]/layout.tsx`, `app/portafolio/[archivo]/bot/page.tsx`
+(refactor a usar el hook compartido). Ningún cambio commiteado por mí.
+
+**Pendiente / próximos pasos:** Fases 3 (avisos proactivos en
+Dashboard/Monitor) y 4 (tools ampliadas + command palette + puente
+Telegram) quedan pendientes de que Andrea dé la orden de continuar.
+
+---
+
+## [2026-08-14] Asistente inmersivo — Fase 3: avisos proactivos ("Atom nota algo y avisa")
+
+**Qué se hizo:** Andrea pidió continuar con la Fase 3 del plan de Atom.
+Objetivo: generalizar el patrón ya probado de `AvisoSeguimiento` (el único
+punto de la app donde el asistente notaba algo y avisaba sin que el usuario
+tuviera que ir a buscarlo) a Dashboard y Monitor, usando señales que el
+backend YA calcula — sin llamar al modelo de IA salvo que el usuario abra
+la conversación. **Sin cambios de backend en esta fase**, tal como
+anticipaba el plan.
+
+- **Componente genérico extraído:** `components/ui/aviso-flotante.tsx`,
+  con dos piezas: `AvisoFlotante` (la tarjeta — mismo look que el
+  `AvisoSeguimiento` original: acento de color, header con punto+label,
+  botón cerrar, CTA opcional) y `AvisosHost` (contenedor de posición fija
+  que apila varios avisos con `flexDirection: column-reverse` y `gap`, sin
+  coordenadas fijas por aviso — así conviven varios sin pisarse aunque
+  tengan alturas distintas). Vive en la misma esquina que la burbuja de
+  Atom (Fase 2): `bottom: 90, right: 20, zIndex: 50`, siempre por debajo de
+  la burbuja (`zIndex: 60`).
+- **`aviso-seguimiento.tsx` refactorizado** para renderizar sobre ese shell
+  en vez de tener su propio `position: fixed` — mismo comportamiento y
+  copy exactos, cero cambio visible para el usuario.
+- **Nuevo `components/ui/aviso-senales-monitor.tsx`:** cuenta tickers con
+  señal ENTRAR/VENDER activa Y con el toggle de monitoreo prendido para
+  ese ticker+tipo (lectura pura de lo que ya expone `/api/precios-rt` —
+  `precios`/`rangos` según mercado abierto/cerrado + `monitoreo`, mismo
+  criterio que ya usa `monitor/page.tsx`). Si hay al menos una, muestra
+  "Atom está vigilando tus activos: tienes N señales activas" con CTA
+  directo a Monitor.
+- **Nuevo `components/ui/aviso-trm.tsx`:** usa `macro.trm_cambio` (ya
+  calculado en `dashboard.py:cargar_macro`, cambio del dólar en el último
+  mes) con un umbral fijo de 1.5 puntos porcentuales; CTA "Preguntarle a
+  Atom" lleva a `/bot`.
+- **`app/portafolio/[archivo]/page.tsx` (Dashboard):** ahora envuelve los 3
+  avisos (Seguimiento + Monitor + TRM) en `<AvisosHost>`. Para el aviso de
+  Monitor se reusa el fetch que `pollPrecios` ya hacía cada 10s a
+  `/api/precios-rt` (no es una llamada nueva) — se extendió para también
+  guardar `mercado_abierto`/`rangos`/`monitoreo` en un estado nuevo
+  (`monitorAmbient`), que antes se descartaban y solo se usaba `precios`.
+- **`app/portafolio/[archivo]/monitor/page.tsx`:** ahora también muestra el
+  aviso de Seguimiento (antes solo vivía en Dashboard) — agrega un fetch
+  puntual (no polleado) a `getDashboard(archivo)` solo para leer
+  `desviacion_composicion`.
+
+**Verificación:** `tsc --noEmit` limpio. Playwright headless con datos
+simulados forzando los 3 avisos a la vez en Dashboard: los 3 aparecen,
+apilados correctamente sin superponerse (confirmado visualmente por
+captura — el chequeo automático de bounding-boxes dio un falso positivo
+por un selector XPath fragil, descartado a favor de la captura real).
+Confirmado también que el aviso de Seguimiento aparece igual en Monitor.
+Sin errores de consola.
+
+**Resultado:** Fase 3 cerrada y verificada. Solo frontend. Archivos
+tocados: `components/ui/aviso-flotante.tsx` (nuevo),
+`components/ui/aviso-senales-monitor.tsx` (nuevo),
+`components/ui/aviso-trm.tsx` (nuevo), `components/ui/aviso-seguimiento.tsx`
+(refactor sobre el shell), `app/portafolio/[archivo]/page.tsx`,
+`app/portafolio/[archivo]/monitor/page.tsx`. Ningún cambio commiteado por mí.
+
+**Pendiente / próximos pasos:** Fase 4 (tools ampliadas + command palette +
+puente con Telegram) queda pendiente de que Andrea dé la orden de
+continuar — esa sí toca backend (`dashboard.py:telegram_webhook`,
+`gestor_portafolio.py`), se reporta el diff exacto cuando se aborde.
+
+---

@@ -123,8 +123,8 @@ export function TablaFinancieraActivos({ porActivo, objetivo, actual }: Props) {
 
   return (
     <GlassPanel>
-      <p style={{ color: "var(--text)", fontSize: 14, fontWeight: 600, margin: "0 0 4px" }}>
-        Rendimiento: proyectado vs real
+      <p style={{ color: "var(--text)", fontSize: 20, fontWeight: 600, margin: "0 0 4px" }}>
+        RENDIMIENTO: PROYECTADO VS. REAL
       </p>
       <p style={{ color: "var(--text-3)", fontSize: 12, margin: "0 0 20px" }}>
         A nivel de portafolio completo, y por activo abajo.
@@ -200,7 +200,7 @@ export function TablaFinancieraActivos({ porActivo, objetivo, actual }: Props) {
       ) : (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
-            <GroupCard tinte={AZUL} dotColor={AZUL} titulo="Proyección viva" sub="Recalculada con tus posiciones reales, incl. fuera de meta"
+            <GroupCard tinte={AMBAR} dotColor={AMBAR} titulo="Proyección viva" sub="Recalculada con tus posiciones reales, incl. fuera de meta"
               m={actual.proyeccion_viva} />
             <GroupCard tinte={AZUL} dotColor={AZUL} titulo="Real" sub="Con lo que realmente tienes hoy, todo incluido" m={actual.real} />
           </div>

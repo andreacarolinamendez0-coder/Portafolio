@@ -7,6 +7,8 @@ import { LogoMark } from "@/components/ui/logo";
 import { getConfig, authLogout, authMe } from "@/lib/api";
 import { SelectorPortafolios } from "@/components/ui/selector-portafolios";
 import { NuevoPortafolioDialog } from "@/components/portfolio/nuevo-portafolio-dialog";
+import { AtomChatProvider } from "@/components/providers/atom-chat-context";
+import { AsistenteFlotante } from "@/components/ui/asistente-flotante";
 
 const TABS = [
   { id: "dashboard",   sub: "",             label: "Dashboard" },
@@ -76,6 +78,7 @@ export default function PortafolioLayout({ children }: { children: React.ReactNo
   }, [hovered, activa, info, x, y, w, h]);
 
   return (
+    <AtomChatProvider archivo={archivo}>
     <div style={{ minHeight: "100vh", background: "var(--bg)", color: "var(--text)" }}>
       {/* Glows de fondo */}
       <div style={{ position: "fixed", inset: 0, pointerEvents: "none", zIndex: 0 }}>
@@ -157,6 +160,8 @@ export default function PortafolioLayout({ children }: { children: React.ReactNo
         onCrear={() => setCrearAbierto(true)}
       />
       {crearAbierto && <NuevoPortafolioDialog onClose={() => setCrearAbierto(false)} onCreated={() => { setCrearAbierto(false); router.refresh(); }} />}
+      {activa !== "bot" && <AsistenteFlotante archivo={archivo} />}
     </div>
+    </AtomChatProvider>
   );
 }

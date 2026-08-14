@@ -16,10 +16,17 @@ type Mov =
   | (SeguimientoData["aportes"][number] & { _tipo: "compra" })
   | (SeguimientoData["ventas"][number] & { _tipo: "venta" });
 
+export interface MagneticTabItem {
+  value: string;
+  label: string;
+  color?: string; // acento opcional: tiñe el indicador y el texto cuando está activo
+}
+
 export default function SeguimientoPage() {
   const params  = useParams();
   const router  = useRouter();
   const archivo = params.archivo as string;
+  
 
   const [data, setData]       = useState<SeguimientoData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -57,6 +64,7 @@ export default function SeguimientoPage() {
   const [editTipo, setEditTipo] = useState<"compra" | "venta">("compra");
 
   const sEdit: React.CSSProperties = { width: "100%", background: "var(--bg-2)", border: "1px solid rgba(0,113,227,0.4)", borderRadius: 6, color: "var(--text)", fontSize: 12, padding: "4px 6px", fontFamily: "inherit", outline: "none", boxSizing: "border-box" };
+  
 
   useEffect(() => {
     getSeguimiento(archivo)
@@ -248,15 +256,15 @@ export default function SeguimientoPage() {
             {/* Pendientes */}
             {data.pendientes.length > 0 && (
               <GlassPanel>
-                <h3 style={{ fontSize: "1rem", marginBottom: 12 }}>Pendientes por entrar</h3>
+                <h3 style={{ fontSize: 20, fontWeight: 600, marginBottom: 12 }}>PENDIENTES POR ENTRAR</h3>
                 {data.pendientes.map(p => (
                   <div key={p.activo} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                     <div>
                       <strong>{p.activo}</strong>
-                      <span style={{ color: "#6e6e73", fontSize: "0.8rem", marginLeft: 8 }}>{(p.peso * 100).toFixed(1)}% del portafolio</span>
+                      <span style={{ color: "#8f8f9a", fontSize: "0.8rem", marginLeft: 8 }}>{(p.peso * 100).toFixed(1)}% del portafolio</span>
                     </div>
                     <div style={{ textAlign: "right" }}>
-                      <div style={{ fontSize: "0.85rem", color: "#a1a1a6" }}>{p.precio_usd ? `$${p.precio_usd.toFixed(2)} USD` : "—"}</div>
+                      <div style={{ fontSize: "0.85rem", color: "#cecedd" }}>{p.precio_usd ? `$${p.precio_usd.toFixed(2)} USD` : "—"}</div>
                       <span style={{ fontSize: 11, color: "#e6b800" }}>PENDIENTE</span>
                     </div>
                   </div>
@@ -267,7 +275,7 @@ export default function SeguimientoPage() {
             {/* Saldo y depósitos */}
             <GlassPanel>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
-                <h3 style={{ fontSize: "1rem", margin: 0 }}>Saldo y depósitos</h3>
+                <h3 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>SALDOS Y DEPÓSITOS</h3>
                 <span style={{ fontSize: "0.85rem", color: "#a1a1a6" }}>
                   Disponible: <strong style={{ color: data.saldo_usd < 0 ? "#ff453a" : "#30d158", fontSize: "1.05rem" }}>US${data.saldo_usd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
                 </span>
@@ -291,7 +299,7 @@ export default function SeguimientoPage() {
 
               {data.depositos.length > 0 && (
                 <div style={{ overflowX: "auto", marginTop: 14 }}>
-                  <h3 style={{ fontSize: "1rem", marginBottom: 12 , paddingTop: 20 }}>Historial de depósitos</h3>
+                  <h3 style={{ fontSize: 20, fontWeight: 600, marginBottom: 12 , paddingTop: 20 }}>HISTORIAL DE DEPÓSITOS</h3>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                     <thead>
                       <tr style={{ color: "#6e6e73", textAlign: "left" }}>
@@ -339,14 +347,14 @@ export default function SeguimientoPage() {
 
             {/* Registrar movimiento */}
             <GlassPanel>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
-                <h3 style={{ fontSize: "1rem", margin: 0 }}>Registrar movimiento</h3>
+              <div style={{ display: "flex", alignItems: "center", gap: 25, marginBottom: 12, flexWrap: "wrap" }}>
+                <h3 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>REGISTRAR MOVIMIENTO</h3>
                 <div style={{ display: "inline-flex", background: "var(--bg-2)", borderRadius: 980, padding: 3 }}>
                   {(["compra", "venta"] as const).map(mo => (
                     <button key={mo} onClick={() => setModo(mo)} style={{
                       border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 600,
                       padding: "5px 16px", borderRadius: 980, textTransform: "capitalize",
-                      background: modo === mo ? (mo === "venta" ? "#ff453a" : "#0071e3") : "transparent",
+                      background: modo === mo ? (mo === "venta" ? "#ff453a" : "#077a16") : "transparent",
                       color: modo === mo ? "#fff" : "var(--text-3)",
                     }}>{mo}</button>
                   ))}
@@ -400,7 +408,7 @@ export default function SeguimientoPage() {
               {/* Historial de movimientos (compras + ventas) */}
               {movimientos.length > 0 && (
                 <div style={{ marginTop: 20 }}>
-                  <h3 style={{ fontSize: "1rem", marginBottom: 12, paddingTop: 20 }}>Historial de movimientos</h3>
+                  <h3 style={{ fontSize: 20, fontWeight: 600, marginBottom: 12, paddingTop: 20 }}>HISTORIAL DE MOVIMIENTOS</h3>
                   <div style={{ overflowX: "auto" }}>
                     <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                       <thead>
@@ -443,7 +451,7 @@ export default function SeguimientoPage() {
                             ) : (
                               <>
                                 <td style={s.td}>{m.fecha}</td>
-                                <td style={s.td}><span style={{ fontSize: 11, fontWeight: 600, color: esVenta ? "#ff453a" : "#4da3ff" }}>{esVenta ? "VENTA" : "COMPRA"}</span></td>
+                                <td style={s.td}><span style={{ fontSize: 11, fontWeight: 600, color: esVenta ? "#ff453a" : "#39c03b" }}>{esVenta ? "VENTA" : "COMPRA"}</span></td>
                                 <td style={s.td}><strong>{m.activo}</strong></td>
                                 <td style={s.td}>{m.fracciones.toFixed(6)}</td>
                                 <td style={s.td}>${(m._tipo === "venta" ? m.precio_venta_usd : m.precio_usd).toFixed(2)}</td>

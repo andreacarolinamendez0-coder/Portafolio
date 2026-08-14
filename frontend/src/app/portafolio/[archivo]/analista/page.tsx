@@ -9,6 +9,7 @@ import { GlowPanel } from "@/components/ui/glow-panel";
 import { LiquidButton } from "@/components/ui/liquid-glass-button";
 import { PropuestaEditor, type Propuesta } from "@/components/ui/propuesta-editor";
 import { PageIntro } from "@/components/ui/page-intro";
+import { LogoMark } from "@/components/ui/logo";
 
 interface Msg { role: "user" | "assistant"; content: string }
 
@@ -44,7 +45,7 @@ export default function AnalistaPage() {
           setMsgs([primero]);
           enviarHistorial([primero]);
         } else {
-          setMsgs([{ role: "assistant", content: `Hola ${d.portafolio?.nombre ? "" : ""}👋 Soy tu analista. Te ayudo a construir una propuesta de inversión personalizada o a ajustar tu portafolio. Para empezar, cuéntame: ¿qué te gustaría lograr con esta inversión?` }]);
+          setMsgs([{ role: "assistant", content: `Hola 👋 Soy Atom. Te ayudo a construir una propuesta de inversión personalizada o a ajustar tu portafolio. Para empezar, cuéntame: ¿qué te gustaría lograr con esta inversión?` }]);
         }
       })
       .catch(() => router.push("/login"))
@@ -163,8 +164,9 @@ export default function AnalistaPage() {
         {/* Chat */}
         <GlassPanel style={{ padding: 0, overflow: "hidden" }}>
           <div style={{ padding: "14px 20px", borderBottom: "1px solid var(--glass-border)", display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#30d158" }} />
-            <span style={{ fontSize: 13, fontWeight: 600 }}>Analista IA</span>
+            <LogoMark size={22} />
+            <span style={{ fontSize: 13, fontWeight: 600 }}>Atom</span>
+            <span style={{ fontSize: 11, color: "var(--text-3)" }}>· modo propuesta</span>
           </div>
 
           <div style={{ height: 420, overflowY: "auto", padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>

@@ -6,17 +6,15 @@ import { LogoMark } from "@/components/ui/logo";
 import { authMe } from "@/lib/api";
 import { LiquidButton } from "@/components/ui/liquid-glass-button";
 import { PageIntro } from "@/components/ui/page-intro";
-
-interface Msg { role: "user" | "bot"; text: string }
+import { useAtomSend } from "@/components/providers/atom-chat-context";
 
 export default function BotPage() {
   const router  = useRouter();
   const params  = useParams();
   const archivo = params.archivo as string;
 
-  const [msgs, setMsgs]       = useState<Msg[]>([]);
+  const { msgs, loading, send: enviar } = useAtomSend(archivo);
   const [input, setInput]     = useState("");
-  const [loading, setLoading] = useState(false);
   const [ready, setReady]     = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -29,27 +27,11 @@ export default function BotPage() {
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, loading]);
 
-  async function send() {
+  function send() {
     if (!input.trim() || loading) return;
-    const userMsg = input.trim();
+    const texto = input;
     setInput("");
-    setMsgs(m => [...m, { role: "user", text: userMsg }]);
-    setLoading(true);
-    try {
-      const historial = msgs.map(m => ({ role: m.role === "user" ? "user" : "assistant", content: m.text }));
-      historial.push({ role: "user", content: userMsg });
-      const res = await fetch(`/api/bot/${archivo}`, {
-        method: "POST", credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mensaje: userMsg, historial }),
-      });
-      const data = await res.json();
-      setMsgs(m => [...m, { role: "bot", text: data.respuesta ?? "Sin respuesta" }]);
-    } catch {
-      setMsgs(m => [...m, { role: "bot", text: "Error de conexión." }]);
-    } finally {
-      setLoading(false);
-    }
+    enviar(texto);
   }
 
   if (!ready) return <div className="min-h-screen flex items-center justify-center" style={{ background: "var(--bg)", color: "var(--text-3)", fontSize: 14 }}>Cargando...</div>;

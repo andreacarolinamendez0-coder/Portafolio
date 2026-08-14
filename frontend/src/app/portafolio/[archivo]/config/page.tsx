@@ -111,7 +111,7 @@ export default function ConfigPage() {
                      /> 
         {/* Nombre */}
         <GlowPanel>
-          <h3 style={{ fontSize: "1rem", marginBottom: 6 }}>Nombre del portafolio</h3>
+          <h3 style={{ fontSize: 20, fontWeight: 600, marginBottom: 6 }}>NOMBRE DEL PORTAFOLIO</h3>
           <p style={{ color: "var(--text-3)", fontSize: 12, marginBottom: 16 }}>
             Como se muestra en tu lista de portafolios.
           </p>
@@ -133,7 +133,7 @@ export default function ConfigPage() {
         
         {/* Divisa */}
         <GlowPanel>
-          <h3 style={{ fontSize: "1rem", marginBottom: 6 }}>Divisa de visualización</h3>
+          <h3 style={{ fontSize: 20, fontWeight: 600, marginBottom: 6 }}>DIVISA DE VISUALIZACIÓN</h3>
           <p style={{ color: "var(--text-3)", fontSize: 12, marginBottom: 16 }}>
             Elige en qué moneda quieres ver los montos de este portafolio.
           </p>
@@ -159,7 +159,7 @@ export default function ConfigPage() {
 
         {/* Estado / activar */}
         <GlowPanel>
-          <h3 style={{ fontSize: "1rem", marginBottom: 12 }}>Estado</h3>
+          <h3 style={{ fontSize: 20, fontWeight: 600, marginBottom: 6 }}>ESTADO</h3>
           <p style={{ color: "var(--text-3)", fontSize: 13, marginBottom: 12 }}>
             Estado actual: {activo
               ? <span style={{ color: "#30d158" }}>● ACTIVO para monitoreo</span>
