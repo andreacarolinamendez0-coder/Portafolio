@@ -188,31 +188,38 @@ def telegram(chat_id, texto, reply_markup=None):
         return False
 
 
-def teclado_decision(ticker):
-    """Botones inline para que el usuario responda a una alerta."""
+def teclado_decision(ticker, venta=False):
+    """Botones inline para responder una alerta. venta=True usa semántica de
+    venta (vendido/no_vendo) y namespacea el callback como 'venta_<ticker>'
+    para que decision_usuario lo lea en el path de venta (ver vigilar_precios)."""
+    pre  = "venta_" if venta else ""
+    si   = "✅ Ya vendí" if venta else "✅ Ya entré"
+    no   = "❌ No voy a vender" if venta else "❌ No voy a entrar"
+    v_si = "vendido" if venta else "entro"
+    v_no = "no_vendo" if venta else "no_entro"
     return {
         "inline_keyboard": [
             [
-                {"text": "✅ Ya entré", "callback_data": f"entro:{ticker}"},
-                {"text": "❌ No voy a entrar", "callback_data": f"no_entro:{ticker}"},
-                {"text": "📊 Sigue informando", "callback_data": f"sigue:{ticker}"},
+                {"text": si, "callback_data": f"{v_si}:{pre}{ticker}"},
+                {"text": no, "callback_data": f"{v_no}:{pre}{ticker}"},
+                {"text": "📊 Sigue informando", "callback_data": f"sigue:{pre}{ticker}"},
             ]
         ]
     }
 
 
-def teclado_decision_multiple(tickers):
-    """Mismo teclado que teclado_decision, pero para un mensaje agrupado con
-    varios tickers (ver Cambio 1 — agrupación de alertas ENTRAR simultáneas).
-    Una fila de botones por ticker, cada botón sigue codificando su propio
-    ticker en el callback_data ("decision:ticker") — procesar_callback_telegram
-    no necesita ningún cambio para leer estos botones."""
+def teclado_decision_multiple(tickers, venta=False):
+    """Igual pero una fila de botones por ticker (mensaje agrupado)."""
+    si   = "Ya vendí" if venta else "Ya entré"
+    v_si = "vendido" if venta else "entro"
+    v_no = "no_vendo" if venta else "no_entro"
+    pre  = "venta_" if venta else ""
     return {
         "inline_keyboard": [
             [
-                {"text": f"✅ Ya entré ({t})", "callback_data": f"entro:{t}"},
-                {"text": f"❌ No ({t})", "callback_data": f"no_entro:{t}"},
-                {"text": f"📊 Sigue ({t})", "callback_data": f"sigue:{t}"},
+                {"text": f"✅ {si} ({t})", "callback_data": f"{v_si}:{pre}{t}"},
+                {"text": f"❌ No ({t})", "callback_data": f"{v_no}:{pre}{t}"},
+                {"text": f"📊 Sigue ({t})", "callback_data": f"sigue:{pre}{t}"},
             ]
             for t in tickers
         ]
@@ -291,7 +298,9 @@ def _mensaje_alerta_venta_agrupada(alertas):
         f"{lineas}\n\n"
         f"<i>Son sugerencias informativas según indicadores técnicos — no "
         f"son órdenes de actuar ya. Vende cada uno cuando te parezca el "
-        f"mejor momento.</i>"
+        f"mejor momento.</i>\n\n"
+        f"Responde por cada uno con los botones de abajo:\n"
+        f"✅ Ya vendí · ❌ No voy a vender · 📊 Sigue informando"
     )
 
 
@@ -978,19 +987,17 @@ def vigilar_precios(archivo, portafolio, rangos_del_dia, precios_cache=None):
             print(f"  🔁 Re-pregunta enviada para {ticker_rp} tras {TAMANO_LOTE_ALERTA} avisos")
 
         # ── Despachar alertas de VENTA acumuladas este ciclo ────────
-        # Mismo patrón de agrupación que compra. Sin teclado de decisión
-        # todavía (aceptar/posponer venta) -- fuera de alcance de esta
-        # iteración, ver plan; se envía la alerta igual, solo sin botones.
+        # Mismo patrón de agrupación que compra.
         if alertas_venta_pendientes:
             if len(alertas_venta_pendientes) == 1:
                 a = alertas_venta_pendientes[0]
                 msg = _mensaje_alerta_venta_individual(a)
-                telegram(chat_id, msg)
+                telegram(chat_id, msg, reply_markup=teclado_decision(a["ticker"], venta=True))
                 print(f"  🔴 ALERTA VENTA: {a['ticker']} @ ${a['precio']} ganancia {a['ganancia_pct']}%")
             else:
                 tickers_txt_v = ", ".join(a["ticker"] for a in alertas_venta_pendientes)
                 msg = _mensaje_alerta_venta_agrupada(alertas_venta_pendientes)
-                telegram(chat_id, msg)
+                telegram(chat_id, msg, reply_markup=teclado_decision_multiple([a["ticker"] for a in alertas_venta_pendientes], venta=True),)
                 print(f"  🔴 ALERTA VENTA AGRUPADA ({len(alertas_venta_pendientes)}): {tickers_txt_v}")
 
         for ticker_rp in reprompts_venta_pendientes:
@@ -998,6 +1005,7 @@ def vigilar_precios(archivo, portafolio, rangos_del_dia, precios_cache=None):
                 chat_id,
                 f"🔁 <b>{ticker_rp}</b> sigue en rango de venta — van "
                 f"{TAMANO_LOTE_ALERTA} avisos.\n¿Sigo informando?",
+                reply_markup=teclado_decision(ticker_rp, venta=True),
             )
             print(f"  🔁 Re-pregunta de venta enviada para {ticker_rp}")
 
@@ -1076,7 +1084,10 @@ def registrar_decision(archivo, ticker, decision):
         if decision == "sigue":
             # Reabre un lote NUEVO de alertas para este ticker, espaciado
             # por INTERVALO_LOTE_SIGUE_MIN en vez del intervalo original.
-            lote = estado.setdefault("lotes_alerta", {}).setdefault(ticker, {})
+            if ticker.startswith("venta_"):
+                lote = estado.setdefault("lotes_alerta_venta", {}).setdefault(ticker[len("venta_"):], {})
+            else:
+                lote = estado.setdefault("lotes_alerta", {}).setdefault(ticker, {})
             lote["enviadas"] = 0
             lote["ultima_alerta_ts"] = None
             lote["origen"] = "sigue"
@@ -1409,14 +1420,21 @@ def procesar_callback_telegram(callback_data, chat_id):
                     p = json.load(f)
                 if chat_id_de(p) == str(chat_id):
                     registrar_decision(fn, ticker, decision)
-                    mensajes = {
-                        "entro": f"✅ Registrado: entraste a <b>{ticker}</b>. No te molesto más hoy.",
-                        "no_entro": f"❌ Ok, no te aviso más de <b>{ticker}</b> hoy.",
-                        "sigue": f"📊 Perfecto, te aviso si el precio de <b>{ticker}</b> mejora.",
-                    }
-                    telegram(
-                        str(chat_id), mensajes.get(decision, "Decisión registrada.")
-                    )
+                    es_venta = ticker.startswith("venta_")
+                    tk = ticker[len("venta_"):] if es_venta else ticker
+                    if es_venta:
+                        mensajes = {
+                            "vendido":  f"✅ Registrado: vendiste <b>{tk}</b>. No te molesto más hoy.",
+                            "no_vendo": f"❌ Ok, no te aviso más de <b>{tk}</b> hoy.",
+                            "sigue":    f"📊 Perfecto, te aviso si <b>{tk}</b> sigue en rango de venta.",
+                        }
+                    else:
+                        mensajes = {
+                            "entro":    f"✅ Registrado: entraste a <b>{tk}</b>. No te molesto más hoy.",
+                            "no_entro": f"❌ Ok, no te aviso más de <b>{tk}</b> hoy.",
+                            "sigue":    f"📊 Perfecto, te aviso si el precio de <b>{tk}</b> mejora.",
+                        }
+                    telegram(str(chat_id), mensajes.get(decision, "Decisión registrada."))
                     print(f"  📲 Decisión '{decision}' para {ticker} — chat {chat_id}")
                     break
             except:
