@@ -514,7 +514,6 @@ export default function MonitorPage() {
               Mercado cerrado
             </span>}
         {ultimoUpdate && <span style={{ fontSize: 12, color: "#6e6e73" }}>Actualizado: {ultimoUpdate}</span>}
-        <button onClick={async () => { await authLogout(); router.push("/login"); }} style={{ marginLeft: "auto", background: "none", border: "none", color: "#6e6e73", fontSize: 12, cursor: "pointer" }}>Salir</button>
       </div>
 
       {/* Panel maestro — activar/desactivar compra y venta para todo el portafolio de un golpe */}
@@ -736,10 +735,9 @@ export default function MonitorPage() {
       )}
 
       <div style={{ marginTop: 24, display: "flex", gap: 10 }}>
-        <LiquidButton onClick={load} className="text-white font-semibold !px-8 !py-2.5">Actualizar ahora</LiquidButton>
-        <Link href={`/portafolio/${archivo}`}>
-          <LiquidButton className="text-white font-semibold !px-8 !py-2.5">Ir al Dashboard</LiquidButton>
-        </Link>
+        {mercadoAbierto && (
+          <LiquidButton onClick={load} className="text-white font-semibold !px-8 !py-2.5">Actualizar ahora</LiquidButton>
+        )}
       </div>
 
       <AvisosHost>
