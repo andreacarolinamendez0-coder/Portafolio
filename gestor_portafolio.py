@@ -603,6 +603,24 @@ def guardar_registro_diario(nombre_archivo, registro):
         return True
 
 
+def guardar_estado_rebalanceo(nombre_archivo, dias_fuera_de_rango, motivo, fecha):
+    """Persiste el contador de hysteresis de la Capa 2 (rebalanceo por
+    metricas reales vs. proyeccion_congelada -- ver dashboard.py
+    _dia_fuera_de_rango_metricas / evaluar_disparo_rebalanceo). Lo actualiza
+    scheduler.py una vez al dia, junto con el snapshot de historial -- se
+    resetea a 0 en cuanto un dia vuelve a estar dentro de rango, para que
+    "3-5 dias consecutivos fuera de rango" sea literal, no acumulativo."""
+    ruta = f"{CARPETA_PORTAFOLIOS}/{nombre_archivo}"
+    with _LOCK:
+        data = _leer(ruta)
+        data["rebalanceo_metricas"] = {
+            "dias_fuera_de_rango": dias_fuera_de_rango,
+            "motivo": motivo,
+            "fecha": fecha,
+        }
+        _escribir(ruta, data)
+
+
 def guardar_analisis_historico(nombre_archivo, texto, fecha):
     """Cachea el analisis de Atom sobre el historico DENTRO del portafolio
     (a diferencia del analisis de TRM, que es global a la app, este es

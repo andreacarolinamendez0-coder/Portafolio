@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { authMe, authLogout, getPreciosRT, toggleMonitoreo, getDashboard, ApiError, type PrecioRT, type RangoTicker, type MonitoreoMap, type ActivosFueraMetaMap, type DesviacionComposicion } from "@/lib/api";
+import { authMe, authLogout, getPreciosRT, toggleMonitoreo, getDashboard, ApiError, type PrecioRT, type RangoTicker, type MonitoreoMap, type ActivosFueraMetaMap, type DesviacionComposicion, type DisparoRebalanceo } from "@/lib/api";
 import { GlassPanel } from "@/components/ui/glass-panel";
 import { LiquidButton } from "@/components/ui/liquid-glass-button";
 import { PageIntro } from "@/components/ui/page-intro";
@@ -362,6 +362,7 @@ export default function MonitorPage() {
   // Solo para el aviso flotante de Seguimiento (misma presencia ambient que
   // ya existe en Dashboard) -- fetch puntual, no se pollea junto al resto.
   const [desviacion, setDesviacion] = useState<DesviacionComposicion | null>(null);
+  const [disparoRebalanceo, setDisparoRebalanceo] = useState<DisparoRebalanceo | null>(null);
 
   const prevPrecios = useRef<Record<string, number>>({});
   const flashTimer  = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -461,7 +462,7 @@ export default function MonitorPage() {
   }, [load, mercadoAbierto]);
 
   useEffect(() => {
-    getDashboard(archivo).then(d => setDesviacion(d.desviacion_composicion)).catch(() => {});
+    getDashboard(archivo).then(d => { setDesviacion(d.desviacion_composicion); setDisparoRebalanceo(d.disparo_rebalanceo); }).catch(() => {});
   }, [archivo]);
 
   // Anillo de "próximo refresh" — se llena a lo largo de REFRESH_MS desde el
@@ -748,7 +749,7 @@ export default function MonitorPage() {
       </div>
 
       <AvisosHost>
-        <AvisoSeguimiento archivo={archivo} desviacion={desviacion} />
+        <AvisoSeguimiento archivo={archivo} desviacion={desviacion} disparo={disparoRebalanceo} />
       </AvisosHost>
     </>
   );

@@ -139,12 +139,24 @@ export interface HistoricoEntry {
   resumen: { total_valor: number; total_invertido: number; ganancia_total: number; rentabilidad_total: number };
 }
 
+// Desviacion de PESOS unicamente (Capa 1 -- el widget informativo/alerta de
+// Composicion). Ya NO decide si hay que ir al Analista -- ver
+// DisparoRebalanceo para esa señal, que usa metricas reales, no pesos.
 export interface DesviacionComposicion {
   aplica:              boolean;
   progreso_pct:        number;
-  necesita_rebalanceo?: boolean;
   desviacion_total_pp?: number;
   activos_desviados?:  Record<string, number>;
+}
+
+// Capa 2: unica señal automatica legitima para sugerir ir al Analista --
+// dias consecutivos con metricas reales (volatilidad/drawdown) fuera de lo
+// que proyeccion_congelada esperaba. Contador persistido, actualizado una
+// vez al dia por scheduler.py (ver dashboard.py:evaluar_disparo_rebalanceo).
+export interface DisparoRebalanceo {
+  disparar:           boolean;
+  motivo:             "volatilidad" | "drawdown" | null;
+  dias_fuera_de_rango: number;
 }
 
 export interface DashboardData {
@@ -155,6 +167,7 @@ export interface DashboardData {
   historico:   HistoricoEntry[];
   macro:       Macro | null;
   desviacion_composicion: DesviacionComposicion | null;
+  disparo_rebalanceo: DisparoRebalanceo | null;
 }
 
 export const getDashboard = (archivo: string) =>
@@ -362,6 +375,13 @@ export interface MetricaActivo {
   drawdown_real:                number | null;
   sortino_historico_motor:      number | null;
   volatilidad_historica_motor:  number | null;
+  // Sugerencia de correccion en USD (Capa 1 del spec de rebalanceo) -- solo
+  // para activos con peso meta (en_meta); null en fuera_meta_con_posicion.
+  accion_sugerida:              "comprar" | "vender" | null;
+  monto_sugerido_usd:           number | null;
+  fracciones_sugeridas:         number | null;
+  banda_pp:                     number | null;
+  dentro_de_banda:              boolean | null;
 }
 
 // Un panel de comparación proyectado-vs-real, para un universo de activos
@@ -377,6 +397,7 @@ export interface ComparacionSeguimiento {
   composicion_real: Record<string, number>;
   por_activo:        MetricaActivo[];
   desviacion_composicion: DesviacionComposicion | null;
+  disparo_rebalanceo: DisparoRebalanceo | null;
   objetivo: PanelComparacion;  // panel "Portafolio objetivo" -- solo en meta
   actual:   PanelComparacion;  // panel "Portafolio real" -- todo lo sostenido
 }

@@ -1,9 +1,47 @@
 "use client";
 import { GlassPanel } from "@/components/ui/glass-panel";
+import type { MetricaActivo } from "@/lib/api";
 
 interface Props {
   composicionMeta: Record<string, number>;
   composicionReal: Record<string, number>;
+  porActivo?: MetricaActivo[];
+}
+
+function fmtUsd(v: number) {
+  return `$${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+// Widget "idea de corrección" (spec de rebalanceo 2026-08-14): por cada
+// activo con peso meta, una sugerencia concreta en USD de hoy que reduciría
+// la desviación -- SIEMPRE informativo, nunca fuerza ni redirige.
+// Umbral único (2026-08-14): cualquier desviación no-cero (misma vara que
+// el pill de "+X pp" de la leyenda, no la banda 5/25) dispara el mensaje.
+// La banda de tolerancia (`banda_pp`/`dentro_de_banda`) ya NO decide el tono
+// aquí -- por si sola no dice nada sobre si el portafolio se aleja de lo
+// esperado; eso solo lo determina si la desviación real de volatilidad/
+// drawdown dispara la Capa 2 (evaluar_disparo_rebalanceo), que es
+// completamente independiente del peso.
+function SugerenciaCorreccion({ fila }: { fila: MetricaActivo }) {
+  if (fila.peso_meta == null) return null; // fuera de meta, no hay con que comparar
+
+  if (!fila.accion_sugerida || fila.monto_sugerido_usd == null) {
+    return (
+      <p style={{ fontSize: 11, color: "var(--text-3)", margin: "4px 0 0" }}>
+        Ya estás exactamente en tu peso objetivo.
+      </p>
+    );
+  }
+
+  const verbo = fila.accion_sugerida === "comprar" ? "comprar" : "vender";
+  const texto = `Para acercar ${fila.activo} a su peso objetivo, podrías ${verbo} ${fmtUsd(fila.monto_sugerido_usd)} hoy` +
+    (fila.fracciones_sugeridas != null ? ` (~${fila.fracciones_sugeridas} fracciones a precio actual).` : ".");
+
+  return (
+    <p style={{ fontSize: 11, margin: "4px 0 0", lineHeight: 1.5, color: "var(--text-2)" }}>
+      {texto}
+    </p>
+  );
 }
 
 // Paleta categórica fija (orden estable por ticker, nunca ciclada dentro de
@@ -46,7 +84,8 @@ function Donut({ segmentos, centroN, centroL }: {
   );
 }
 
-export function ComposicionComparada({ composicionMeta, composicionReal }: Props) {
+export function ComposicionComparada({ composicionMeta, composicionReal, porActivo }: Props) {
+  const filaPorActivo = new Map((porActivo ?? []).map(f => [f.activo, f]));
   const tickers = Array.from(new Set([...Object.keys(composicionMeta), ...Object.keys(composicionReal)]))
     .sort((a, b) => ((composicionMeta[b] ?? 0) + (composicionReal[b] ?? 0)) - ((composicionMeta[a] ?? 0) + (composicionReal[a] ?? 0)));
 
@@ -88,24 +127,28 @@ export function ComposicionComparada({ composicionMeta, composicionReal }: Props
             // ambar, quedar por debajo de la meta (bajar) es verde.
             const subiendo = delta > 0.05;
             const bajando = delta < -0.05;
+            const fila = filaPorActivo.get(t);
             return (
-              <div key={t} style={{ display: "flex", alignItems: "center", gap: 12, padding: "9px 12px", borderRadius: 10, background: "var(--bg-2)", border: "1px solid var(--glass-border)" }}>
-                <span style={{ width: 9, height: 9, borderRadius: 3, background: color(t), flexShrink: 0 }} />
-                <span style={{ fontSize: 12.5, fontWeight: 700, width: 50, flexShrink: 0 }}>{t}</span>
-                <span style={{ flex: 1, fontSize: 12, color: "var(--text-3)" }}>
-                  Meta <b style={{ color: "var(--text)" }}>{metaPct.toFixed(1)}%</b>
-                  <span style={{ margin: "0 6px" }}>→</span>
-                  Real <b style={{ color: "var(--text)" }}>{realPct.toFixed(1)}%</b>
-                </span>
-                {(subiendo || bajando) && (
-                  <span style={{
-                    fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 980, marginLeft: "auto",
-                    background: subiendo ? "rgba(251,146,60,0.14)" : "rgba(52,209,124,0.14)",
-                    color: subiendo ? "#fb923c" : "#34d17c",
-                  }}>
-                    {delta > 0 ? "+" : ""}{delta.toFixed(1)}pp
+              <div key={t} style={{ padding: "9px 12px", borderRadius: 10, background: "var(--bg-2)", border: "1px solid var(--glass-border)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <span style={{ width: 9, height: 9, borderRadius: 3, background: color(t), flexShrink: 0 }} />
+                  <span style={{ fontSize: 12.5, fontWeight: 700, width: 50, flexShrink: 0 }}>{t}</span>
+                  <span style={{ flex: 1, fontSize: 12, color: "var(--text-3)" }}>
+                    Meta <b style={{ color: "var(--text)" }}>{metaPct.toFixed(1)}%</b>
+                    <span style={{ margin: "0 6px" }}>→</span>
+                    Real <b style={{ color: "var(--text)" }}>{realPct.toFixed(1)}%</b>
                   </span>
-                )}
+                  {(subiendo || bajando) && (
+                    <span style={{
+                      fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 980, marginLeft: "auto",
+                      background: subiendo ? "rgba(251,146,60,0.14)" : "rgba(52,209,124,0.14)",
+                      color: subiendo ? "#fb923c" : "#34d17c",
+                    }}>
+                      {delta > 0 ? "+" : ""}{delta.toFixed(1)}pp
+                    </span>
+                  )}
+                </div>
+                {fila && <SugerenciaCorreccion fila={fila} />}
               </div>
             );
           })}

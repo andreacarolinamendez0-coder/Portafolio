@@ -1767,3 +1767,257 @@ explícita de portafolio cuando hay varios activos. El plan de Atom
 completo — las 4 fases originales están implementadas.
 
 ---
+
+## [2026-08-14] Fix urgente: drawdown_real no era position-aware (Seguimiento)
+
+**Qué se hizo:** Andrea pidió con urgencia auditar y corregir posibles bugs
+de unidades (USD nominal vs COP real deflactado) en las stat cards de
+Seguimiento, y ya había diagnosticado ella misma un bug concreto de lógica
+en `drawdown_real` (tabla de rendimientos por activo): a diferencia de
+`rentabilidad_real`, que sí usa el costo promedio ponderado (pool
+cronológico), `drawdown_real` miraba solo el precio de mercado puro desde
+la primera compra — si el usuario compró el mismo ticker en 2+ momentos
+distintos, ese número reflejaba lo que vivió el ACTIVO, no lo que vivió el
+inversionista.
+
+**Auditoría de unidades (USD vs COP real) — sin bug encontrado:**
+Se rastreó la cadena completa: `_ret_mensual_cop_real` (motor/proyección) y
+`metricas_reales_desde_historial` + el camino retroactivo de
+`metricas_reales_portafolio` (real) en `adaptador_analista.py`. Las tres
+convierten de forma consistente USD nominal → COP nominal (multiplicando
+por el cambio de TRM) → COP real (deflactando por inflación COL) antes de
+devolver `retorno_anual`/`volatilidad`/`max_drawdown`. No se encontró
+mezcla de unidades en estas fórmulas — confirmado leyendo el código y
+corriéndolo contra `andrea_real.json` real (sin tocar el archivo, solo
+lectura + copia temporal en el scratchpad). `metricas_reales_portafolio`
+devolvió `None` para ese portafolio de forma esperada (tiene ~3 meses de
+antigüedad, por debajo del piso de 6 meses documentado en el código para
+evitar anualizar con pocos datos) — no un error.
+
+**El bug real — `dashboard.py`:**
+
+- **Nueva función `_trayectoria_rentabilidad_posicion`** (agregada justo
+  después de `_pool_posicion_viva`, antes de `calcular_tiempo_real`):
+  recorre los aportes/ventas de un ticker en orden cronológico (igual que
+  `_pool_posicion_viva`, pero reimplementado de forma aislada para no
+  arriesgar esa función ya en el camino crítico de costo base/ganancias) y
+  arma una serie diaria de `(valor_de_mercado_de_las_fracciones_vivas −
+  costo_base_vivo) / costo_base_vivo` — es decir, la rentabilidad que el
+  inversionista habría visto CADA DÍA con el costo promedio vigente en ese
+  momento, no el precio puro.
+- **`calcular_metricas_reales_por_activo`** (la función que arma la tabla
+  de rendimientos): antes, `drawdown_real` se calculaba con
+  `(precio / precio.cummax() - 1).min()` sobre la serie de precio pura
+  desde `fecha_inicio`. Ahora usa
+  `((1+rentabilidad_posicion) / (1+rentabilidad_posicion).cummax() - 1).min()`
+  sobre la serie que devuelve la función nueva — mismo patrón de cálculo
+  (peak-to-trough), pero sobre la trayectoria de rentabilidad real del
+  inversionista en vez del precio del activo. `volatilidad_real` NO se
+  tocó (Andrea confirmó que drawdown era el único caso de inconsistencia
+  de lógica, no de datos).
+
+**Por qué es matemáticamente correcto (y por qué no rompe nada del caso
+simple):** con UNA sola compra, el costo base es constante en el tiempo,
+así que la nueva serie es literalmente `precio(t) / costo_constante` — un
+múltiplo escalar positivo y constante del precio. El drawdown (una medida
+de caída porcentual pico-a-valle) es invariante ante multiplicar toda una
+serie por la misma constante positiva, así que para cualquier ticker
+comprado una sola vez, el número nuevo da EXACTAMENTE igual que antes. Solo
+cambia cuando hay 2+ compras en momentos distintos, que es justo el caso
+que Andrea señaló como incorrecto.
+
+**Verificación (todo corrido, no solo leído):**
+- Contra `andrea_real.json` real (copia temporal, archivo original nunca
+  tocado): para los 4 tickers con una sola compra (NVDA, LLY, GOOGL,
+  BTC-USD), el drawdown nuevo dio idéntico al viejo hasta la 6ª cifra
+  decimal, confirmando la invarianza esperada. Para los 2 tickers con
+  compras dobles (MSFT, VTI), el cálculo corrió limpio y dio el mismo
+  número que antes — investigado y confirmado que es correcto: en ambos
+  casos el mínimo real de drawdown ocurre en una ventana de tiempo donde
+  el costo promedio todavía no había cambiado (la segunda compra fue muy
+  cerca en el tiempo o el precio no volvió a caer después de ella), así
+  que no había margen para que el número cambiara con estos datos
+  específicos — no es que el fix no funcione.
+- Para demostrar que el fix SÍ cambia el número cuando corresponde, se
+  corrió un escenario sintético diseñado a propósito (compra 1 barata,
+  precio sube y ahí se hace la compra 2 "en el pico", precio cae después):
+  drawdown viejo -46.67% vs. nuevo -55.86% — 9.2 puntos porcentuales de
+  diferencia, confirmando que el costo promedio ponderado sí se refleja
+  cuando el momento de la segunda compra importa.
+- `calcular_metricas_reales_por_activo` corrido end-to-end contra
+  `andrea_real.json` (con el último precio histórico disponible como
+  proxy de "precio de hoy", sin red): las 6 posiciones devuelven
+  rentabilidad/volatilidad/drawdown en rangos numéricamente sensatos, sin
+  excepciones.
+- `python -m py_compile` limpio en `dashboard.py`, `adaptador_analista.py`,
+  `gestor_portafolio.py`.
+
+**Resultado:** cerrado y verificado. Único archivo backend tocado:
+`dashboard.py` (`_trayectoria_rentabilidad_posicion` nueva,
+`calcular_metricas_reales_por_activo` modificada). Ningún cambio en
+`adaptador_analista.py` ni `gestor_portafolio.py` — se leyeron para la
+auditoría de unidades, pero no tenían nada que corregir. Ningún cambio
+commiteado por mí.
+
+---
+
+## [2026-08-14] Notas explicativas en la tarjeta "Rendimiento" de Seguimiento
+
+**Qué se hizo:** Andrea preguntó por qué "objetivo" y "real" difieren en
+proyección aunque sean los mismos activos (misma composición, sin activos
+fuera de meta) — se verificó con números reales de `andrea_real.json`
+(pesos meta vs. pesos reales de mercado, corridos ambos por
+`recalcular_con_pesos`) que la diferencia es matemáticamente esperada: los
+pesos reales se mueven solo con el precio de mercado, sin que el usuario
+compre ni venda nada (ver detalle numérico en el chat, no repetido aquí).
+No era un bug. Confirmado también (recordatorio de una respuesta anterior
+en la misma sesión) que la proyección "real" solo aparece con ≥6 meses de
+historial, por el guardia `MIN_MESES=6` en `adaptador_analista.py`. Andrea
+pidió dejar ambas explicaciones escritas como nota intuitiva, directamente
+en la pantalla de Seguimiento.
+
+**Frontend — `components/ui/tabla-financiera-activos.tsx`:**
+- Nuevo bloque de nota (💡) entre el selector de paneles y las tarjetas de
+  métricas, visible en ambos paneles ("Portafolio objetivo" y "Portafolio
+  real"): explica con la analogía de una receta/batido por qué los pesos
+  reales se corren de la meta con solo el paso del tiempo, y por qué
+  "Real" a veces no muestra números (regla de los 6 meses, con el porqué:
+  anualizar con pocos meses da resultados exagerados).
+- El estado vacío de la tarjeta "Real" (`GroupCard`, cuando `m` es `null`)
+  se actualizó de un texto genérico ("Aún no hay suficiente historial...")
+  a uno que menciona directamente los 6 meses, para reforzar la nota justo
+  donde el usuario la necesita.
+- Se recortó el pie de nota duplicado del panel "Portafolio real" (ya
+  repetía la misma explicación que ahora vive en el bloque compartido de
+  arriba).
+
+**Verificación:** `tsc --noEmit` limpio. Playwright con datos simulados
+forzando una desviación de composición: la nota se ve completa, sin
+desbordar el layout, en ambos paneles. Sin errores de consola.
+
+**Resultado:** cerrado. Solo frontend, un archivo tocado. Ningún cambio
+commiteado por mí.
+
+**Addendum (mismo día):** Andrea pidió esconder la nota detrás de un
+widget de "curiosidad" en vez de dejarla siempre visible. Se reemplazó el
+bloque fijo por `NotaCuriosidad`, un ícono 💡 de 20px junto al título
+"RENDIMIENTO: PROYECTADO VS. REAL" que revela el mismo contenido en un
+popover al pasar el mouse (`onMouseEnter`/`onMouseLeave`, con `onClick`
+adicional para que también funcione con tap en mobile, donde no hay
+hover). Mismo texto de antes, sin cambios de contenido. Verificado con
+Playwright: el texto no está en el DOM visible antes del hover, aparece al
+pasar el mouse sobre el ícono, sin desbordar el layout. `tsc --noEmit`
+limpio.
+
+---
+
+## [2026-08-14] Sugerencias de corrección en Composición + reglas de disparo de rebalanceo
+
+**Qué se hizo:** Andrea dio un spec completo para separar dos cosas que
+antes vivían mezcladas: desviación de PESOS (informativa, nunca dispara
+nada por sí sola) vs. desviación de MÉTRICAS reales (volatilidad/drawdown,
+la única señal automática legítima para sugerir ir al Analista, con
+hysteresis de días consecutivos). Tocó backend en 3 archivos, avisado y
+reportado exacto por archivo/función como manda la regla del proyecto —
+incluye `scheduler.py`, que Andrea confirmó explícitamente que también es
+suyo, no exclusivo de su socia, para esta tarea.
+
+**Corrección de rumbo durante el plan:** la primera versión de este plan
+asumía que no se podía tocar `scheduler.py` y diseñaba una hysteresis
+"sin estado" (recalculando los últimos N días bajo demanda en cada carga
+de página). Andrea aclaró que sí podía tocarlo, así que se rehízo el plan
+con el diseño correcto: un contador persistido que `scheduler.py` actualiza
+una vez al día — más barato y más simple.
+
+**Bug encontrado y corregido ANTES de implementar (verificado con test,
+no solo leído):** el spec de Andrea daba la fórmula `umbral = max(5pp, 25%
+del peso)`, pero sus propios dos ejemplos (BTC-USD y VTI) eran
+inconsistentes entre sí con esa fórmula — uno solo cuadraba con `min()`, el
+otro con `max()`. Se le mostró la contradicción con números concretos;
+confirmó que la fórmula correcta es `min()` (la banda MÁS ESTRICTA gana),
+consistente con la regla Swedroe real y con sus propios bullets de
+≥20%/<20%. Implementado con `min()`.
+
+**Backend — `dashboard.py`:**
+- Nuevas constantes `BANDA_PESO_ABSOLUTA_PP=5.0`, `BANDA_PESO_RELATIVA_FRAC=0.25`,
+  `MULTIPLICADOR_BANDA_POR_PERFIL` (conservador ×0.8, moderado ×1.0, agresivo ×1.3),
+  y `_banda_tolerancia_peso(peso_objetivo_frac, perfil)` = `min(5pp, 25%×peso) × multiplicador`.
+- `calcular_desviacion_composicion`: el umbral plano `UMBRAL_DESVIACION_ACTIVO=5.0`
+  se reemplazó por `_banda_tolerancia_peso` por ticker. **Se retiró el campo
+  `necesita_rebalanceo`** — esta función ahora describe SOLO desviación de
+  pesos, nunca decide si hay que ir al Analista.
+- `calcular_metricas_reales_por_activo`: cada fila gana `accion_sugerida`
+  ("comprar"/"vender"/null), `monto_sugerido_usd`, `fracciones_sugeridas`,
+  `banda_pp`, `dentro_de_banda` — calculados contra el valor total ACTUAL
+  del portafolio (peso objetivo es proporción del capital de hoy). Solo
+  para activos `en_meta` (con peso objetivo); fuera de meta queda en null.
+- Nuevas `_dia_fuera_de_rango_metricas(portafolio, pesos_reales, tiempo_real)`
+  (compara métricas reales de HOY contra `proyeccion_congelada` — nunca
+  contra la viva, para no obligar a `scheduler.py` a correr el motor HRP
+  completo a diario; `None` = no evaluable sin congelada o sin suficiente
+  historial real) y `evaluar_disparo_rebalanceo(portafolio)` (lee el
+  contador persistido, dispara si `dias_fuera_de_rango >= 4`).
+- `api_dashboard` y `api_seguimiento`: ambos devuelven ahora
+  `disparo_rebalanceo` como campo separado de `desviacion_composicion`.
+
+**Backend — `gestor_portafolio.py`:** nueva `guardar_estado_rebalanceo(nombre_archivo,
+dias_fuera_de_rango, motivo, fecha)`, guarda `data["rebalanceo_metricas"]`.
+
+**Backend — `scheduler.py`:** en `_snapshot_portafolio` (el mismo job de 5
+minutos que ya guardaba el snapshot diario de `historial`), justo después
+de guardar ese snapshot: calcula `pesos_reales` y llama
+`_dia_fuera_de_rango_metricas`; si es evaluable, incrementa el contador
+(+1 si sigue fuera de rango, reset a 0 si volvió a estar sano) y lo
+persiste. Es lo único nuevo que corre en ese loop — sigue siendo barato el
+resto del día (mismo guard `ya_registrado` de antes, no se agregó ninguno
+nuevo). No se tocó `procesar_callback_telegram` ni ninguna otra parte de
+`scheduler.py`/`monitor.py`.
+
+**Frontend:**
+- `lib/api.ts`: `DesviacionComposicion` pierde `necesita_rebalanceo`; nuevo
+  tipo `DisparoRebalanceo`; `MetricaActivo` gana los 5 campos de sugerencia.
+- `components/ui/composicion-comparada.tsx`: nuevo prop `porActivo`, cada
+  fila de la leyenda gana una segunda línea con el texto de sugerencia
+  ("Para acercar X a su peso objetivo, podrías comprar/vender $Y hoy
+  (~Z fracciones)") — tono informativo (mudo) dentro de banda, badge
+  "FUERA DE BANDA" + texto más visible si no.
+- `components/ui/aviso-seguimiento.tsx`: rediseñado para separar las dos
+  señales — el CTA "Ir al Analista" ahora sale de `disparo.disparar`
+  (métricas), nunca de la desviación de pesos; si hay pesos desviados pero
+  sin disparo, muestra un aviso informativo (acento azul) que dice
+  explícitamente "no es necesario actuar si no quieres". Actualizados los 3
+  call sites (`page.tsx` Dashboard, `seguimiento/page.tsx`,
+  `monitor/page.tsx` — este último ahora también guarda
+  `disparo_rebalanceo` en estado junto con `desviacion`).
+
+**Verificación:** `python -m py_compile` en los 3 archivos backend.
+Pruebas aisladas (nunca se corrió `iniciar_scheduler()` ni el loop real,
+solo funciones internas con red/precios stubbeados): bandas de tolerancia
+(casos ≥20%/<20%, 3 multiplicadores de perfil); sugerencia USD contra
+`andrea_real.json` real (MSFT sobreponderado → vender, GOOGL
+subponderado → comprar, montos verificados contra la fórmula a mano);
+`_dia_fuera_de_rango_metricas` (4 casos: volatilidad dispara, drawdown
+dispara, sano, no evaluable); contador de hysteresis en `scheduler.py`
+(crece, resetea, y no se toca cuando no es evaluable) probado llamando
+`_snapshot_portafolio` directamente con todo lo de red mockeado. `tsc
+--noEmit` limpio. Playwright con 2 escenarios: pesos desviados sin disparo
+de métricas → sin CTA al Analista, sugerencias visibles con badge correcto;
+disparo de métricas activo → CTA sí aparece.
+
+**Resultado:** cerrado y verificado. Backend tocado: `dashboard.py`,
+`gestor_portafolio.py`, `scheduler.py`. Frontend: `lib/api.ts`,
+`components/ui/composicion-comparada.tsx`,
+`components/ui/aviso-seguimiento.tsx`, y sus 3 call sites. Ningún cambio
+commiteado por mí.
+
+**Pendiente / próximos pasos (documentado como fuera de alcance en el
+plan, no implementado):** el disparo por "rentabilidad ↔ tracking error"
+que pedía el spec necesita ≥6-12 meses de ventana — ningún portafolio real
+tiene esa antigüedad todavía, así que no había forma de verificarlo con
+datos reales. La Capa 2 completa (rebalanceo por métricas) solo se activa
+para portafolios con `proyeccion_al_aplicar` guardada — hoy ninguno de los
+portafolios reales la tiene, así que el contador de hysteresis existe pero
+no se activará hasta la próxima vez que se aplique una propuesta desde el
+Analista.
+
+---
