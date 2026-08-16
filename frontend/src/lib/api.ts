@@ -300,12 +300,12 @@ export const updateConfig = (archivo: string, data: { divisa?: string; nombre?: 
 
 // ── Seguimiento ─────────────────────────────────────────
 export interface Deposito {
-  id:        string;
-  fecha:     string;
-  monto_cop: number;
-  trm_real:  number;
-  monto_usd: number;
-  tipo:      string;   // "deposito" | "apertura"
+  id:         string;
+  fecha:      string;
+  monto_usd:  number;
+  tipo:       string;   // "deposito" | "apertura"
+  monto_cop?: number;   // legacy — ya no se pide
+  trm_real?:  number;   // legacy
 }
 
 export interface Venta {
@@ -383,6 +383,9 @@ export interface ComparacionSeguimiento {
 
 export interface SeguimientoData {
   nombre:      string;
+  divisa:      string;
+  trm:         number;
+  tasa_eur:    number;
   composicion: Record<string, number>;
   progreso:    { entrados: number; total: number; pct: number };
   pendientes:  { activo: string; peso: number; precio_usd: number }[];
@@ -431,8 +434,7 @@ export const eliminarAporte = (archivo: string, id: string) =>
 
 export const crearDeposito = (archivo: string, data: {
   fecha:     string;
-  monto_cop: number;
-  trm_real:  number;
+  monto_usd: number;
 }) =>
   apiFetch<{ ok: boolean }>(`/api/depositos/${archivo}`, {
     method: "POST",
@@ -441,8 +443,7 @@ export const crearDeposito = (archivo: string, data: {
 
 export const editarDeposito = (archivo: string, id: string, data: {
   fecha:     string;
-  monto_cop: number;
-  trm_real:  number;
+  monto_usd: number;
 }) =>
   apiFetch<{ ok: boolean }>(`/api/depositos/${archivo}/${id}`, {
     method: "PUT",

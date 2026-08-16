@@ -3031,9 +3031,13 @@ def api_seguimiento(archivo):
         },
     }
 
+    _macro = cargar_macro() or {}
     return jsonify(
         {
             "nombre": portafolio.get("nombre"),
+            "divisa": portafolio.get("divisa", "USD"),
+            "trm": _macro.get("trm", 0),
+            "tasa_eur": obtener_tasa_usd_eur(),
             "depositos": portafolio.get("depositos", []),
             "saldo_usd": saldo_disponible(portafolio),
             "composicion": composicion,
@@ -3078,20 +3082,13 @@ def api_seguimiento_aporte(archivo, aporte_id):
         return jsonify({"error": "Ocurrió un error al procesar la solicitud."}), 400
 
 def _armar_deposito_desde_form(data):
-    """Parsea/valida un depósito. COP→USD a la TRM REAL a la que el usuario
-    compró los dólares. Devuelve (deposito, None) o (None, (err, status))."""
+    """Depósito en USD (lo que se añadió a la cuenta del broker).
+    Devuelve (deposito, None) o (None, (err, status))."""
     fecha = data.get("fecha", datetime.now().strftime("%Y-%m-%d"))
-    monto_cop = float(str(data.get("monto_cop", "0")).replace(",", "."))
-    trm_real = float(str(data.get("trm_real", "0")).replace(",", "."))
-    if monto_cop <= 0 or trm_real <= 0:
-        return None, (jsonify({"error": "El monto en COP y la TRM deben ser mayores a 0"}), 400)
-    return {
-        "fecha": fecha,
-        "monto_cop": round(monto_cop, 0),
-        "trm_real": trm_real,
-        "monto_usd": round(monto_cop / trm_real, 2),
-        "tipo": "deposito",
-    }, None
+    monto_usd = float(str(data.get("monto_usd", "0")).replace(",", "."))
+    if monto_usd <= 0:
+        return None, (jsonify({"error": "El monto en USD debe ser mayor a 0"}), 400)
+    return {"fecha": fecha, "monto_usd": round(monto_usd, 2), "tipo": "deposito"}, None
 
 
 @app.route("/api/depositos/<archivo>", methods=["POST"])
