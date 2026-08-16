@@ -327,7 +327,7 @@ export default function SeguimientoPage() {
                           ) : (
                             <>
                               <td style={s.td}>{d.fecha}</td>
-                              <td style={s.td}>${d.monto_usd.toLocaleString()}</td>
+                              <td style={s.td}>${d.monto_usd.toLocaleString("en-US")}</td>
                               <td style={s.td}>{d.tipo === "apertura" ? <span style={{ color: "#6e6e73" }}>apertura</span> : "depósito"}</td>
                               <td style={{ ...s.td, whiteSpace: "nowrap" }}>
                                 <button onClick={() => empezarEdicionDep(d)} title="Editar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, padding: "2px 4px", lineHeight: 1, opacity: 0.7 }}>🖊</button>
@@ -461,7 +461,7 @@ export default function SeguimientoPage() {
                                 <td style={s.td}>${montoBruto.toFixed(2)}</td>
                                 <td style={s.td}>{comisionMov > 0 ? `$${comisionMov.toFixed(2)}` : "—"}</td>
                                 <td style={{ ...s.td}}>{esVenta ? `+$${totalMov.toFixed(2)}` : `-$${totalMov.toFixed(2)}`}</td>
-                                <td style={s.td}>${m.trm_dia.toLocaleString()}</td>
+                                <td style={s.td}>${m.trm_dia.toLocaleString("en-US")}</td>
                                 <td style={{ ...s.td, whiteSpace: "nowrap" }}>
                                   <button onClick={() => empezarEdicion(m)} title="Editar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, padding: "2px 4px", lineHeight: 1, opacity: 0.7 }}>🖊</button>
                                   <button onClick={() => eliminarMov(m)} title="Eliminar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, padding: "2px 4px", lineHeight: 1, opacity: 0.7 }}>🗑</button>

@@ -347,7 +347,7 @@ function NavBar({ archivo, active }: { archivo: string; active: string }) {
 
 function MacroSection({ macro }: { macro: NonNullable<DashboardData["macro"]> }) {
   const tiles = [
-    { label: "TRM Actual", value: `$${macro.trm.toLocaleString("es-CO", { maximumFractionDigits: 0 })}`, sub: `${macro.trm_cambio > 0 ? "+" : ""}${macro.trm_cambio}% último mes`, subColor: macro.trm_cambio > 0 ? "#30d158" : "#ff453a" },
+    { label: "TRM Actual", value: `$${macro.trm.toLocaleString("en-US", { maximumFractionDigits: 0 })}`, sub: `${macro.trm_cambio > 0 ? "+" : ""}${macro.trm_cambio}% último mes`, subColor: macro.trm_cambio > 0 ? "#30d158" : "#ff453a" },
     { label: "Inflación Colombia", value: `${macro.inf_col}%`, sub: `USA: ${macro.inf_usa}% · Spread: ${macro.spread}%` },
     { label: "Tasa Banrep", value: `${macro.banrep}%`, sub: `CDT ref: ${macro.cdt}%` },
     { label: "Risk Free USA", value: `${macro.risk_free}%`, sub: "Treasury Bills" },
@@ -519,7 +519,7 @@ function TRMChart({ trm_hist }: { trm_hist: { fechas: string[]; valores: number[
             />
             <YAxis
               domain={[minVal - pad, maxVal + pad]}
-              tickFormatter={(v) => `$${Math.round(v).toLocaleString("es-CO")}`}
+              tickFormatter={(v) => `$${Math.round(v).toLocaleString("en-US")}`}
               tick={{ fontSize: 11, fill: "var(--text-3)" }}
               stroke="rgba(255,255,255,0.1)"
               width={70}
@@ -529,7 +529,7 @@ function TRMChart({ trm_hist }: { trm_hist: { fechas: string[]; valores: number[
               labelStyle={{ color: "var(--text)", marginBottom: 4 }}
               labelFormatter={(f) => fmtFecha(f as string)}
               formatter={(value, name) => [
-                `$${Math.round(Number(value)).toLocaleString("es-CO")} COP`,
+                `$${Math.round(Number(value)).toLocaleString("en-US")} COP`,
                 name === "trm" ? "TRM" : "Media 7d",
               ]}
             />
@@ -623,7 +623,7 @@ function PosicionesSection({ tr, divisa, tasas }: {
 }) {
   const gc = tr.ganancia_total > 0 ? "#30d158" : "#ff453a";
   const fmtCop = (v: number | null, signo = false) =>
-    v == null ? "—" : `${signo && v > 0 ? "+" : ""}$${v.toLocaleString("es-CO", { maximumFractionDigits: 0 })}`;
+    v == null ? "—" : `${signo && v > 0 ? "+" : ""}$${v.toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
   return (
     <>
       <SectionTitle>Portafolio en Tiempo Real</SectionTitle>
@@ -640,7 +640,7 @@ function PosicionesSection({ tr, divisa, tasas }: {
         {divisa === "COP" && (tr.fx_cop_total != null || tr.inflacion_cop_total != null) && (
           <div style={{ marginTop: 6, color: "#6e6e73", fontSize: "0.78rem" }}>
             Dif. cambio: <strong style={{ color: (tr.fx_cop_total ?? 0) >= 0 ? "#30d158" : "#ff453a" }}>{fmtCop(tr.fx_cop_total, true)}</strong>
-            {"  ·  "}Inflación: <strong style={{ color: "#ff9f0a" }}>−${(tr.inflacion_cop_total ?? 0).toLocaleString("es-CO", { maximumFractionDigits: 0 })}</strong>
+            {"  ·  "}Inflación: <strong style={{ color: "#ff9f0a" }}>−${(tr.inflacion_cop_total ?? 0).toLocaleString("en-US", { maximumFractionDigits: 0 })}</strong>
             {"  (COP)"}
           </div>
         )}
@@ -684,7 +684,7 @@ function PosicionesSection({ tr, divisa, tasas }: {
                     {fmtCop(p.fx_cop, true)}
                   </td>
                   <td style={{ padding: "14px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", fontSize: "0.875rem", color: "#ff9f0a" }}>
-                    {p.inflacion_cop == null ? "—" : `−$${p.inflacion_cop.toLocaleString("es-CO", { maximumFractionDigits: 0 })}`}
+                    {p.inflacion_cop == null ? "—" : `−$${p.inflacion_cop.toLocaleString("en-US", { maximumFractionDigits: 0 })}`}
                   </td>
                   </>)}               
                 </tr>
@@ -776,7 +776,7 @@ function HistoricoSection({ historico, archivo, composicion, posiciones, divisa,
               return (
                 <tr key={r.fecha}>
                   <td style={{ padding: "14px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", fontSize: "0.875rem", color: "#a1a1a6" }}>{r.fecha}</td>
-                  <td style={{ padding: "14px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", fontSize: "0.875rem", color: "#a1a1a6" }}>{r.macro ? `$${r.macro.trm.toLocaleString("es-CO", { maximumFractionDigits: 0 })}` : "—"}</td>
+                  <td style={{ padding: "14px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", fontSize: "0.875rem", color: "#a1a1a6" }}>{r.macro ? `$${r.macro.trm.toLocaleString("en-US", { maximumFractionDigits: 0 })}` : "—"}</td>
                   <td style={{ padding: "14px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", fontSize: "0.875rem", color: "#a1a1a6" }}>{mostrarMonto(r.resumen.total_valor, divisa, tasas)}</td>
                   <td style={{ padding: "14px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", fontSize: "0.875rem", color: c, fontWeight: 500 }}>{g > 0 ? "+" : ""}{mostrarMonto(g, divisa, tasas)}</td>
                   <td style={{ padding: "14px 16px", borderBottom: "1px solid rgba(255,255,255,0.04)", fontSize: "0.875rem", color: c, fontWeight: 500 }}>{rv > 0 ? "+" : ""}{rv}%</td>
