@@ -13,6 +13,10 @@ const nextConfig: NextConfig = {
         source: "/telegram-webhook",
         destination: `${FLASK_URL}/telegram-webhook`,
       },
+      {
+        source: "/demo",
+        destination: `${FLASK_URL}/demo`,
+      },
     ];
   },
 };

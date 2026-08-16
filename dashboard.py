@@ -1,7 +1,7 @@
 import dotenv
 
 dotenv.load_dotenv()
-from flask import Flask, request, session, jsonify
+from flask import Flask, request, session, jsonify, redirect
 import pandas as pd
 import json, os, requests, time, threading, re
 import xml.etree.ElementTree as ET
@@ -66,16 +66,41 @@ from gestor_portafolio import (
 # inconsistente entre endpoints).
 PATRON_TICKER = re.compile(r"[A-Z]{1,6}(-USD)?")
 
-# Umbrales de desviacion de composicion (Seguimiento) -- JUICIO editable, no
-# estadistico, mismo estilo que perfilador.TOPES_POR_PLAZO. Un activo
-# individual desviado mas de UMBRAL_DESVIACION_ACTIVO puntos porcentuales de
-# su meta se marca; UMBRAL_DESVIACION_TOTAL es la suma de |desviaciones|/2
-# (metrica estandar de tracking-error). UMBRAL_PROGRESO_MINIMO evita marcar
-# desviacion mientras el portafolio todavia se esta construyendo (pocos
-# tickers meta comprados aun) -- ahi la señal es ruido, no rebalanceo.
-UMBRAL_DESVIACION_ACTIVO = 5.0
-UMBRAL_DESVIACION_TOTAL = 10.0
+# Banda de tolerancia de desviacion de PESOS (Seguimiento/Composicion) --
+# regla 5/25 de Swedroe, estandar de la industria para bandas de rebalanceo:
+# evita castigar por igual a un activo chico (peso meta bajo) y a uno grande
+# con el mismo umbral fijo en puntos porcentuales. Se dispara la banda mas
+# estricta de las dos: absoluta (5pp) o relativa (25% del propio peso meta).
+# Multiplicador por perfil: agresivo tolera mas drift antes de alertar
+# (coherente con dejar correr posiciones ganadoras), conservador corrige mas
+# rapido. JUICIO editable, no estadistico -- mismo estilo que
+# perfilador.TOPES_POR_PLAZO. IMPORTANTE: esta banda es SOLO para la Capa 1
+# (el widget informativo/alerta de Composicion) -- desviacion de pesos por
+# si sola NUNCA dispara la sugerencia de ir al Analista (ver
+# evaluar_disparo_rebalanceo, que usa metricas reales, no pesos).
+BANDA_PESO_ABSOLUTA_PP = 5.0
+BANDA_PESO_RELATIVA_FRAC = 0.25
+MULTIPLICADOR_BANDA_POR_PERFIL = {"conservador": 0.8, "moderado": 1.0, "agresivo": 1.3}
+
+# UMBRAL_PROGRESO_MINIMO evita marcar desviacion mientras el portafolio
+# todavia se esta construyendo (pocos tickers meta comprados aun) -- ahi la
+# señal es ruido, no rebalanceo.
 UMBRAL_PROGRESO_MINIMO = 90
+
+
+def _banda_tolerancia_peso(peso_objetivo_frac, perfil):
+    """Banda de tolerancia en puntos porcentuales para un activo con este
+    peso objetivo (fraccion 0-1) y este perfil de riesgo. Ver comentario de
+    BANDA_PESO_ABSOLUTA_PP arriba para la logica completa.
+
+    Regla Swedroe real: gana la banda MAS ESTRICTA (mas chica) de las dos --
+    para peso >= 20% la relativa (25%*peso) ya es >= 5pp, asi que la
+    absoluta es la que ata primero; para peso < 20% es al reves. min(), no
+    max() -- con max() casi nunca se alertaria en posiciones chicas, que es
+    justo lo opuesto de lo que la regla busca (posiciones chicas deben
+    corregirse con un drift proporcionalmente menor)."""
+    banda_pp = min(BANDA_PESO_ABSOLUTA_PP, BANDA_PESO_RELATIVA_FRAC * (peso_objetivo_frac or 0) * 100)
+    return banda_pp * MULTIPLICADOR_BANDA_POR_PERFIL.get(perfil, 1.0)
 
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 import secrets, hashlib
@@ -461,6 +486,73 @@ def _pool_posicion_viva(aportes, ventas, ticker):
     return {"frac": frac, "usd": usd, "cop": cop, "comision_cop": comision_cop, "fecha_inicio": fecha_inicio}
 
 
+def _trayectoria_rentabilidad_posicion(aportes, ventas, ticker, fecha_inicio, precios_serie):
+    """Serie diaria de rentabilidad de la posicion viva de `ticker` desde
+    `fecha_inicio` (el mismo valor que ya calcula _pool_posicion_viva para el
+    lote actualmente abierto), respetando el COSTO PROMEDIO PONDERADO vigente
+    en cada momento -- no solo el precio de mercado puro desde la primera
+    compra. Corrige la inconsistencia entre drawdown_real (antes: precio puro)
+    y rentabilidad_real (ya usaba el pool cronologico via _pool_posicion_viva):
+    si compraste el mismo ticker en dos momentos distintos, el drawdown que
+    viviste TU como inversionista no es el mismo que vivio el activo en
+    bolsa, porque tu costo base cambio con la segunda compra.
+
+    Reimplementa el recorrido cronologico de eventos de forma AISLADA (no
+    reusa _pool_posicion_viva directamente) para no arriesgar esa funcion, ya
+    en el camino critico de costo base/ganancias -- pero como recibe el mismo
+    `fecha_inicio` que ya calculo ahi, el punto de partida siempre coincide, y
+    por construccion no puede haber otro reseteo de pool dentro de
+    [fecha_inicio, hoy] (si lo hubiera habido, fecha_inicio ya reflejaria ese
+    reseteo mas reciente).
+
+    Con una sola compra en el periodo, esta serie es (precio / costo) - 1, un
+    multiplo escalar POSITIVO y CONSTANTE del precio -- el drawdown de una
+    serie y el de cualquier multiplo escalar positivo de ella son iguales, asi
+    que el caso simple (sin DCA) da EXACTAMENTE el mismo numero que antes. Con
+    2+ compras, el costo promedio SI cambia en cada compra nueva, y ahi es
+    donde este calculo diverge del precio puro (correctamente)."""
+    eventos = sorted(
+        [
+            {"fecha": a["fecha"], "frac": float(a["fracciones"]), "usd": float(a["monto_usd"])}
+            for a in aportes if a.get("activo") == ticker and a["fecha"] >= fecha_inicio
+        ]
+        + [
+            {"fecha": v["fecha"], "frac": -float(v.get("fracciones", 0)), "usd": 0.0}
+            for v in ventas if v.get("activo") == ticker and v["fecha"] >= fecha_inicio
+        ],
+        key=lambda e: e["fecha"],
+    )
+    if not eventos:
+        return None
+
+    frac = usd = 0.0
+    fechas_evt, frac_evt, usd_evt = [], [], []
+    for e in eventos:
+        if e["frac"] >= 0:
+            frac += e["frac"]
+            usd += e["usd"]
+        elif frac > 1e-9:
+            frac_vendida = min(-e["frac"], frac)
+            usd -= usd * (frac_vendida / frac)
+            frac -= frac_vendida
+        fechas_evt.append(e["fecha"])
+        frac_evt.append(frac)
+        usd_evt.append(usd)
+
+    serie_precio = precios_serie.loc[fecha_inicio:].dropna()
+    if serie_precio.empty:
+        return None
+
+    idx_eventos = pd.to_datetime(fechas_evt)
+    frac_en_t = pd.Series(frac_evt, index=idx_eventos).reindex(serie_precio.index, method="ffill")
+    usd_en_t = pd.Series(usd_evt, index=idx_eventos).reindex(serie_precio.index, method="ffill")
+
+    valor_en_t = frac_en_t * serie_precio
+    valido = usd_en_t > 1e-9  # NaN > 1e-9 es False -- excluye fechas antes del primer evento
+    rent_en_t = ((valor_en_t - usd_en_t) / usd_en_t)[valido]
+    return rent_en_t.dropna()
+
+
 def calcular_tiempo_real(portafolio):
     if not portafolio or not portafolio.get("aportes"):
         return None
@@ -548,13 +640,19 @@ def calcular_composicion_real(tiempo_real):
 
 
 def calcular_desviacion_composicion(portafolio, tiempo_real):
-    """Compara composicion real vs meta. Devuelve {"aplica": False} mientras
-    el portafolio todavia se esta construyendo (progreso de entrada por
-    debajo de UMBRAL_PROGRESO_MINIMO) -- comparar peso real vs meta no tiene
-    sentido todavia si la mayoria de los tickers meta ni siquiera se han
-    comprado. Progreso intersectado contra la meta VIGENTE (un ticker
+    """Compara composicion real vs meta -- SOLO desviacion de PESOS (Capa 1,
+    el widget informativo/alerta de Composicion). Devuelve {"aplica": False}
+    mientras el portafolio todavia se esta construyendo (progreso de entrada
+    por debajo de UMBRAL_PROGRESO_MINIMO) -- comparar peso real vs meta no
+    tiene sentido todavia si la mayoria de los tickers meta ni siquiera se
+    han comprado. Progreso intersectado contra la meta VIGENTE (un ticker
     comprado que ya no esta en la meta no cuenta como progreso) -- misma
-    formula que usa /api/seguimiento para su "Progreso de entradas"."""
+    formula que usa /api/seguimiento para su "Progreso de entradas".
+
+    IMPORTANTE: esta funcion ya NO decide si hay que ir al Analista --
+    desviacion de pesos por si sola nunca dispara esa sugerencia (ver
+    evaluar_disparo_rebalanceo, que usa metricas reales persistidas, no
+    esto). El campo "necesita_rebalanceo" que existia aqui se retiro."""
     composicion = portafolio.get("composicion") or {}
     aportes = portafolio.get("aportes") or []
     entrados = set(a["activo"] for a in aportes)
@@ -568,18 +666,21 @@ def calcular_desviacion_composicion(portafolio, tiempo_real):
     if not pesos_reales:
         return {"aplica": False, "progreso_pct": round(progreso_pct, 1)}
 
+    perfil = portafolio.get("perfil", "moderado")
     tickers = set(pesos_reales) | set(composicion)
     desviaciones = {
         t: round((pesos_reales.get(t, 0) - composicion.get(t, 0)) * 100, 1)
         for t in tickers
     }
     desviacion_total = round(sum(abs(v) for v in desviaciones.values()) / 2, 1)
-    activos_desviados = {t: v for t, v in desviaciones.items() if abs(v) >= UMBRAL_DESVIACION_ACTIVO}
+    activos_desviados = {
+        t: v for t, v in desviaciones.items()
+        if abs(v) >= _banda_tolerancia_peso(composicion.get(t, 0), perfil)
+    }
 
     return {
         "aplica": True,
         "progreso_pct": round(progreso_pct, 1),
-        "necesita_rebalanceo": bool(activos_desviados) or desviacion_total >= UMBRAL_DESVIACION_TOTAL,
         "desviacion_total_pp": desviacion_total,
         "activos_desviados": activos_desviados,
     }
@@ -602,6 +703,7 @@ def calcular_metricas_reales_por_activo(portafolio, tiempo_real):
 
     composicion = portafolio.get("composicion") or {}
     total = tiempo_real.get("total_valor") or 0
+    perfil = portafolio.get("perfil", "moderado")
 
     try:
         precios = prep.cargar_precios()
@@ -628,14 +730,43 @@ def calcular_metricas_reales_por_activo(portafolio, tiempo_real):
         if precios is not None and tk in precios.columns:
             try:
                 serie = precios[tk].loc[pos["fecha_inicio"]:].dropna()
-                if len(serie) >= 2:
-                    dd_real = round(float((serie / serie.cummax() - 1).min()) * 100, 2)
                 if len(serie) >= 5:
                     ret = np.log(serie / serie.shift(1)).dropna()
                     if len(ret) >= 2:
                         vol_real = round(float(ret.std() * np.sqrt(252)) * 100, 2)
+
+                # drawdown_real: consciente del costo promedio ponderado (como
+                # rentabilidad_real), no solo el precio puro desde la primera
+                # compra -- ver _trayectoria_rentabilidad_posicion.
+                rent_posicion = _trayectoria_rentabilidad_posicion(
+                    portafolio.get("aportes", []), portafolio.get("ventas", []),
+                    tk, pos["fecha_inicio"], precios[tk],
+                )
+                if rent_posicion is not None and len(rent_posicion) >= 2:
+                    indice = 1 + rent_posicion
+                    dd_real = round(float((indice / indice.cummax() - 1).min()) * 100, 2)
             except Exception as e:
                 print(f"⚠️ No se pudo calcular vol/drawdown real de {tk}: {e}")
+
+        # Sugerencia de correccion en USD (Capa 1 del spec de rebalanceo,
+        # 2026-08-14) -- SOLO para activos con peso meta (en_meta): un
+        # fuera_meta_con_posicion no tiene contra que compararse. Calcula
+        # contra el valor total ACTUAL del portafolio (peso objetivo es una
+        # proporcion del capital de hoy, no del capital cuando se armo la
+        # composicion) -- nunca fuerza nada, es solo informativo.
+        peso_meta = composicion.get(tk)
+        accion_sugerida = monto_sugerido_usd = fracciones_sugeridas = banda_pp = dentro_de_banda = None
+        if peso_meta is not None and total > 0:
+            valor_objetivo = peso_meta * total
+            delta_usd = valor_objetivo - pos["valor_hoy"]
+            delta_pp = abs(pos["valor_hoy"] / total * 100 - peso_meta * 100)
+            banda_pp = round(_banda_tolerancia_peso(peso_meta, perfil), 2)
+            dentro_de_banda = delta_pp <= banda_pp
+            if abs(delta_usd) > 0.01:
+                accion_sugerida = "comprar" if delta_usd > 0 else "vender"
+                monto_sugerido_usd = round(abs(delta_usd), 2)
+                if pos["precio_hoy"]:
+                    fracciones_sugeridas = round(abs(delta_usd) / pos["precio_hoy"], 4)
 
         filas.append({
             "activo": tk,
@@ -647,8 +778,73 @@ def calcular_metricas_reales_por_activo(portafolio, tiempo_real):
             "drawdown_real": dd_real,
             "sortino_historico_motor": motor.get(tk, {}).get("sortino_historico"),
             "volatilidad_historica_motor": motor.get(tk, {}).get("volatilidad_historica"),
+            "accion_sugerida": accion_sugerida,
+            "monto_sugerido_usd": monto_sugerido_usd,
+            "fracciones_sugeridas": fracciones_sugeridas,
+            "banda_pp": banda_pp,
+            "dentro_de_banda": dentro_de_banda,
         })
     return filas
+
+
+# ── Capa 2: disparo de rebalanceo por METRICAS (no por pesos) ──
+# Spec de Andrea 2026-08-14: la unica señal automatica legitima para sugerir
+# ir al Analista es que el desempeño REAL del portafolio (volatilidad,
+# drawdown) se haya desviado de forma persistente de lo que la proyeccion
+# esperaba -- nunca la desviacion de pesos por si sola. "Persistente" se
+# mide con un contador de dias consecutivos fuera de rango, actualizado una
+# vez al dia por scheduler.py (_dia_fuera_de_rango_metricas) y leido aqui
+# (evaluar_disparo_rebalanceo) por los endpoints.
+UMBRAL_VOL_MULTIPLICADOR = 1.4    # punto medio del rango 1.3-1.5x del spec
+DIAS_HABILES_HYSTERESIS = 4       # punto medio de 3-5 dias del spec
+
+
+def _dia_fuera_de_rango_metricas(portafolio, pesos_reales, tiempo_real):
+    """Compara metricas reales de HOY contra proyeccion_congelada (nunca
+    viva -- ver Contexto del plan: correr el motor completo a diario en
+    scheduler.py seria el primer trabajo pesado real de ese loop, y
+    compararse contra un blanco que se mueve solo no captura bien
+    "persistentemente fuera de lo esperado"). Devuelve:
+      - None: no evaluable todavia (sin congelada guardada, o sin suficiente
+        historial real -- MIN_MESES de metricas_reales_portafolio). No es
+        "esta bien", es "no hay con que comparar".
+      - False: evaluado, dentro de rango.
+      - "volatilidad" | "drawdown": evaluado, fuera de rango, y por que."""
+    congelada = (portafolio.get("proyeccion_al_aplicar") or {}).get("metricas")
+    if not congelada:
+        return None
+    if not pesos_reales or not tiempo_real or not tiempo_real.get("posiciones"):
+        return None
+
+    from adaptador_analista import metricas_reales_portafolio, PERDIDA_POR_PERFIL
+
+    fecha_min = min((p["fecha_inicio"] for p in tiempo_real["posiciones"]), default=None)
+    if not fecha_min:
+        return None
+    real = metricas_reales_portafolio(pesos_reales, fecha_min, portafolio.get("historial", []))
+    if not real:
+        return None
+
+    perfil = portafolio.get("perfil", "moderado")
+    if congelada.get("volatilidad") and real["volatilidad"] > congelada["volatilidad"] * UMBRAL_VOL_MULTIPLICADOR:
+        return "volatilidad"
+    if real["max_drawdown"] < -PERDIDA_POR_PERFIL.get(perfil, 0.15) * 100:
+        return "drawdown"
+    return False
+
+
+def evaluar_disparo_rebalanceo(portafolio):
+    """Lee el contador que scheduler.py actualiza una vez al dia y decide si
+    ya corresponde sugerir ir al Analista. O(1), no recalcula nada -- el
+    trabajo pesado (metricas reales) ya lo hizo el scheduler."""
+    estado = portafolio.get("rebalanceo_metricas") or {}
+    dias = estado.get("dias_fuera_de_rango", 0)
+    disparar = dias >= DIAS_HABILES_HYSTERESIS
+    return {
+        "disparar": disparar,
+        "motivo": estado.get("motivo") if disparar else None,
+        "dias_fuera_de_rango": dias,
+    }
 
 
 SIMULAR_PROPUESTA_TOOL = {
@@ -1195,6 +1391,9 @@ def api_analista_chat(archivo):
             return jsonify({"respuesta": "Error: no se recibieron datos"})
 
         portafolio = leer_portafolio(archivo)
+        bloqueo = bloquear_si_demo_portafolio(portafolio)
+        if bloqueo:
+            return bloqueo
         composicion = portafolio.get("composicion", {})
         tiene_inv = len(portafolio.get("aportes", [])) > 0
         motivo = data.get("motivo")
@@ -1244,6 +1443,9 @@ def api_generar_propuesta(archivo):
             horizonte = 10
 
         portafolio = leer_portafolio(archivo)
+        bloqueo = bloquear_si_demo_portafolio(portafolio)
+        if bloqueo:
+            return bloqueo
         tiene_inv = len(portafolio.get("aportes", [])) > 0
 
         # --- Tickers fijos (si el analista IA propuso activos concretos) ---
@@ -1431,6 +1633,10 @@ def api_recalcular_proyecciones(archivo):
     try:
         from adaptador_analista import recalcular_con_pesos
 
+        bloqueo = bloquear_si_demo_portafolio(leer_portafolio(archivo))
+        if bloqueo:
+            return bloqueo
+
         data = request.get_json()
         pesos_raw = data.get("pesos", {})
         perfil = data.get("perfil", "agresivo")
@@ -1507,6 +1713,9 @@ def api_aplicar_propuesta(archivo):
         freq = data.get("frecuencia_meses", 1)
         horizonte = data.get("horizonte", 10)
         p = leer_portafolio(archivo)
+        bloqueo = bloquear_si_demo_portafolio(p)
+        if bloqueo:
+            return bloqueo
         username = session.get("username")
 
         if not isinstance(pesos, dict) or not all(
@@ -1735,6 +1944,9 @@ def api_bot(archivo):
         mensaje = data.get("mensaje", "")
         historial = data.get("historial") or [{"role": "user", "content": mensaje}]
         p = leer_portafolio(archivo)
+        bloqueo = bloquear_si_demo_portafolio(p)
+        if bloqueo:
+            return bloqueo
         ctx = _construir_contexto_atom(p, incluir_navegar=True)
         accion_capturada = {}
         resp = anthropic_chat(
@@ -1796,6 +2008,9 @@ def api_toggle_admin():
 def api_eliminar_cuenta():
     if not session.get("username"):
         return jsonify({"ok": False, "error": "No autorizado"})
+    bloqueo = bloquear_si_demo_cuenta()
+    if bloqueo:
+        return bloqueo
     username = session.get("username")
     # El admin no puede eliminarse a sí mismo
     if session.get("es_admin"):
@@ -1843,8 +2058,21 @@ def api_eliminar_portafolio(archivo):
             p = leer_portafolio(archivo)
             nombre_port = p.get("nombre", archivo) if p else archivo
         except Exception:
+            p = None
             nombre_port = archivo
- 
+
+        # Fail-closed: sin un portafolio valido en mano no se puede verificar
+        # si es la cuenta demo, asi que no se procede a borrar. Esto cubre
+        # tanto el error de lectura (except de arriba) como el caso en que
+        # leer_portafolio no lanza pero igual devuelve falsy -- ningun camino
+        # llega al borrado real sin pasar por bloquear_si_demo_portafolio.
+        if p is None:
+            return jsonify({"error": "No se pudo verificar el portafolio antes de eliminarlo."}), 500
+
+        bloqueo = bloquear_si_demo_portafolio(p)
+        if bloqueo:
+            return bloqueo
+
         ruta = os.path.join(DATOS_DIR, "portafolios", archivo)
         ruta_monitor = os.path.join(DATOS_DIR, "portafolios", f"monitor_{archivo}")
         if os.path.exists(ruta):
@@ -2017,6 +2245,9 @@ def get_profile():
 def update_profile():
     if not session.get("username"):
         return jsonify({"error": "No autorizado"})
+    bloqueo = bloquear_si_demo_cuenta()
+    if bloqueo:
+        return bloqueo
 
     data = request.get_json()
     username = session["username"]
@@ -2508,6 +2739,8 @@ def _aplicar_reset(token, password):
         return "Enlace inválido."
 
     username = payload.get("u", "")
+    if username == "demo":
+        return "Esta es una cuenta de demostración — acción no disponible."
     u = get_usuario(username)
     if not u or huella_password_hash(u["password_hash"]) != payload.get("fp"):
         return "Este enlace ya fue usado. Solicita uno nuevo."
@@ -2574,6 +2807,14 @@ def api_auth_verify_pin():
     session["fp"] = huella_password_hash(u["password_hash"])
     session["es_admin"] = u.get("es_admin", False)
     session.permanent = True
+    session["username"] = username
+    session["fp"] = huella_password_hash(u["password_hash"])
+    session["es_admin"] = u.get("es_admin", False)
+    session.permanent = True
+    resetear_demo_si_aplica(username)          # ← NUEVO
+    ip, dispositivo = _request_meta()
+    registrar_actividad("activacion_ok", username, email=email,
+                        detalle="Cuenta activada por PIN (auto-login)", ip=ip, dispositivo=dispositivo)
     ip, dispositivo = _request_meta()
     registrar_actividad("activacion_ok", username, email=email,
                         detalle="Cuenta activada por PIN (auto-login)", ip=ip, dispositivo=dispositivo)
@@ -2589,6 +2830,76 @@ def api_auth_resend_pin():
         if res is not True:
             return jsonify({"ok": False, "error": res}), 429
     return jsonify({"ok": True})
+
+def bloquear_si_demo_portafolio(portafolio):
+    """403 si el portafolio pertenece a la cuenta demo. Usar en cualquier ruta
+    que reciba <archivo> y modifique/borre algo de ese portafolio."""
+    if portafolio.get("owner") == "demo":
+        return jsonify({"error": "Esta es una cuenta de demostración — no se pueden guardar cambios."}), 403
+    return None
+
+def bloquear_si_demo_cuenta():
+    """403 si la sesión activa es la cuenta demo. Usar en rutas que actúan
+    sobre la cuenta misma, no sobre un portafolio (borrar cuenta, cambiar
+    perfil, crear portafolios nuevos, reset de contraseña)."""
+    if session.get("username") == "demo":
+        return jsonify({"error": "Esta es una cuenta de demostración — acción no disponible."}), 403
+    return None
+
+def resetear_demo_si_aplica(username):
+    """Si el usuario que acaba de loguear es 'demo', restaura su portafolio
+    al estado original — evita que quede desconfigurado por visitantes anteriores."""
+    if username == "demo":
+        import shutil, os
+        origen = "datos/portafolios/demo_template.json"
+        destino = "datos/portafolios/demo.json"
+        if os.path.exists(origen):
+            shutil.copyfile(origen, destino)
+
+def bloquear_si_demo_portafolio(portafolio):
+    """403 si el portafolio pertenece a la cuenta demo. Usar en cualquier ruta
+    que reciba <archivo> y modifique/borre algo de ese portafolio."""
+    if portafolio.get("owner") == "demo":
+        return jsonify({"error": "Esta es una cuenta de demostración — no se pueden guardar cambios."}), 403
+    return None
+
+def bloquear_si_demo_cuenta():
+    """403 si la sesión activa es la cuenta demo. Usar en rutas que actúan
+    sobre la cuenta misma, no sobre un portafolio (borrar cuenta, cambiar
+    perfil, crear portafolios nuevos, reset de contraseña)."""
+    if session.get("username") == "demo":
+        return jsonify({"error": "Esta es una cuenta de demostración — acción no disponible."}), 403
+    return None
+
+@app.route("/demo", methods=["GET"])
+def auto_login_demo():
+    """Auto-login de un clic para la cuenta demo (link de correo, ej. para
+    reclutadores) -- arma la sesion EXACTAMENTE igual que api_auth_login /
+    api_auth_verify_pin (mismas 3 claves), porque _validar_sesion exige que
+    session["fp"] coincida con el hash real del usuario o mata la sesion en
+    el primer request siguiente. GET a proposito: tiene que funcionar con un
+    solo clic desde un correo, sin formulario -- aceptable porque la cuenta
+    demo ya no tiene nada mutable que proteger (ver bloquear_si_demo_*)."""
+    u = get_usuario("demo")
+    if not u:
+        return "Demo no disponible por el momento.", 404
+
+    session["username"] = u["username"]
+    session["fp"] = huella_password_hash(u["password_hash"])
+    session["es_admin"] = u.get("es_admin", False)
+    session.permanent = True
+
+    resetear_demo_si_aplica(u["username"])
+
+    ip, dispositivo = _request_meta()
+    registrar_actividad("login_demo", u["username"], detalle="Auto-login vía /demo", ip=ip, dispositivo=dispositivo)
+
+    # Mismo destino al que el frontend navega tras un login normal exitoso
+    # (frontend/src/app/login/page.tsx:56 -- router.push(`/portafolio/${archivo}`)).
+    # No hay vista Flask que redirigir con url_for: es una ruta de Next.js: se
+    # redirige por path plano, y el rewrite de /demo en next.config.ts hace
+    # que la cookie de sesion quede en el dominio correcto (ver next.config.ts).
+    return redirect("/portafolio/demo.json")
 
 @app.route("/api/auth/login", methods=["POST"])
 def api_auth_login():
@@ -2607,6 +2918,7 @@ def api_auth_login():
         session["fp"] = huella_password_hash(usuario["password_hash"])
         session["es_admin"] = usuario.get("es_admin", False)
         session.permanent = True
+        resetear_demo_si_aplica(usuario["username"])
         registrar_actividad(
             "login_ok",
             usuario["username"],
@@ -2677,6 +2989,10 @@ def api_portafolios():
     if request.method == "GET":
         portafolios = listar_portafolios_de_usuario(username)
         return jsonify({"portafolios": portafolios})
+
+    bloqueo = bloquear_si_demo_cuenta()
+    if bloqueo:
+        return bloqueo
 
     try:
         data = request.get_json(silent=True) or {}
@@ -2750,6 +3066,7 @@ def api_dashboard(archivo):
         'macro':       macro_json,
         'historico': portafolio.get('historial',[]),
         'desviacion_composicion': calcular_desviacion_composicion(portafolio, tiempo_real),
+        'disparo_rebalanceo': evaluar_disparo_rebalanceo(portafolio),
     })
 
 @app.route('/api/auth/logout', methods=['POST'])
@@ -2760,6 +3077,9 @@ def api_auth_logout():
 @app.route("/api/auth/forgot-password", methods=["POST"])
 def api_auth_forgot_password():
     email = ((request.get_json(silent=True) or {}).get("email") or "").strip()
+    username_solicitado, _u = get_usuario_por_email(email)
+    if username_solicitado == "demo":
+        return jsonify({"error": "Esta es una cuenta de demostración — acción no disponible."}), 403
     _solicitar_reset(email)
     # Misma respuesta exista o no el email — no revelar qué correos están registrados
     return jsonify({"ok": True})
@@ -2795,6 +3115,10 @@ def api_config(archivo):
         })
 
     # PUT: guardar divisa y/o nombre
+    bloqueo = bloquear_si_demo_portafolio(portafolio)
+    if bloqueo:
+        return bloqueo
+
     data = request.get_json(silent=True) or {}
 
     ruta = os.path.join(DATOS_DIR, "portafolios", archivo)
@@ -2926,6 +3250,9 @@ def api_seguimiento(archivo):
     composicion = portafolio.get("composicion", {})
 
     if request.method == "POST":
+        bloqueo = bloquear_si_demo_portafolio(portafolio)
+        if bloqueo:
+            return bloqueo
         data = request.get_json(silent=True) or {}
         try:
             aporte, err = _armar_aporte_desde_form(
@@ -3017,6 +3344,7 @@ def api_seguimiento(archivo):
         "composicion_real": pesos_reales,
         "por_activo": por_activo,
         "desviacion_composicion": desviacion,
+        "disparo_rebalanceo": evaluar_disparo_rebalanceo(portafolio),
         # Panel "Portafolio objetivo": solo activos EN META vigente.
         "objetivo": {
             "proyeccion_congelada": proyeccion_congelada,
@@ -3052,6 +3380,10 @@ def api_seguimiento(archivo):
 def api_seguimiento_aporte(archivo, aporte_id):
     if verificar_acceso(archivo):
         return jsonify({"error": "No autorizado"}), 401
+
+    bloqueo = bloquear_si_demo_portafolio(leer_portafolio(archivo))
+    if bloqueo:
+        return bloqueo
 
     if request.method == "DELETE":
         if not eliminar_aporte(archivo, aporte_id):
@@ -3098,6 +3430,9 @@ def _armar_deposito_desde_form(data):
 def api_depositos(archivo):
     if verificar_acceso(archivo):
         return jsonify({"error": "No autorizado"}), 401
+    bloqueo = bloquear_si_demo_portafolio(leer_portafolio(archivo))
+    if bloqueo:
+        return bloqueo
     asegurar_caja_inicial(archivo)
     data = request.get_json(silent=True) or {}
     try:
@@ -3114,6 +3449,9 @@ def api_depositos(archivo):
 def api_depositos_uno(archivo, deposito_id):
     if verificar_acceso(archivo):
         return jsonify({"error": "No autorizado"}), 401
+    bloqueo = bloquear_si_demo_portafolio(leer_portafolio(archivo))
+    if bloqueo:
+        return bloqueo
     try:
         if request.method == "DELETE":
             if not eliminar_deposito(archivo, deposito_id):
@@ -3199,6 +3537,9 @@ def _armar_venta_desde_form(data, portafolio, excluir_venta_id=None):
 def api_ventas(archivo):
     if verificar_acceso(archivo):
         return jsonify({"error": "No autorizado"}), 401
+    bloqueo = bloquear_si_demo_portafolio(leer_portafolio(archivo))
+    if bloqueo:
+        return bloqueo
     asegurar_caja_inicial(archivo)
     data = request.get_json(silent=True) or {}
     try:
@@ -3217,6 +3558,9 @@ def api_ventas(archivo):
 def api_ventas_una(archivo, venta_id):
     if verificar_acceso(archivo):
         return jsonify({"error": "No autorizado"}), 401
+    bloqueo = bloquear_si_demo_portafolio(leer_portafolio(archivo))
+    if bloqueo:
+        return bloqueo
     try:
         if request.method == "DELETE":
             if not eliminar_venta(archivo, venta_id):
@@ -3305,6 +3649,9 @@ def api_activar_portafolio_json(archivo):
         # tiene posición. Sin exclusividad -- varios portafolios pueden
         # estar monitoreados a la vez (decisión de esta ampliación).
         portafolio = leer_portafolio(archivo)
+        bloqueo = bloquear_si_demo_portafolio(portafolio)
+        if bloqueo:
+            return bloqueo
         composicion = portafolio.get('composicion', {})
         tickers_con_posicion = set(a['activo'] for a in portafolio.get('aportes', []))
 
@@ -3340,6 +3687,9 @@ def api_desactivar_portafolio_json(archivo):
         return jsonify({'ok': False, 'error': 'No autorizado'}), 401
     try:
         portafolio = leer_portafolio(archivo)
+        bloqueo = bloquear_si_demo_portafolio(portafolio)
+        if bloqueo:
+            return bloqueo
         composicion = portafolio.get('composicion', {})
         set_monitoreo(archivo, list(composicion.keys()), 'compra', False)
         set_monitoreo(archivo, list(composicion.keys()), 'venta', False)

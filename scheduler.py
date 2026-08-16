@@ -37,7 +37,7 @@ def _snapshot_portafolio(archivo):
     Reutiliza calcular_tiempo_real/cargar_macro (dashboard.py) — mismos
     cálculos que ya usa /api/dashboard, para que el número guardado sea
     idéntico al que vería el usuario si abriera la app en este momento."""
-    from gestor_portafolio import leer_portafolio, guardar_registro_diario
+    from gestor_portafolio import leer_portafolio, guardar_registro_diario, guardar_estado_rebalanceo
 
     portafolio = leer_portafolio(archivo)
     if not portafolio:
@@ -48,7 +48,7 @@ def _snapshot_portafolio(archivo):
     if ya_registrado:
         return  # nada que hacer -- evita llamadas a precios en vivo de más
 
-    from dashboard import calcular_tiempo_real, cargar_macro
+    from dashboard import calcular_tiempo_real, cargar_macro, calcular_composicion_real, _dia_fuera_de_rango_metricas
 
     tiempo_real = calcular_tiempo_real(portafolio)
     if not tiempo_real:
@@ -73,6 +73,23 @@ def _snapshot_portafolio(archivo):
         "macro": {"trm": trm} if trm is not None else None,
     }
     guardar_registro_diario(archivo, registro)
+
+    # Capa 2 del spec de rebalanceo (2026-08-14): contador de hysteresis de
+    # "dias consecutivos con metricas reales fuera de lo proyectado" -- se
+    # actualiza una vez al dia, aqui mismo, para que dashboard.py
+    # (evaluar_disparo_rebalanceo) solo tenga que leer un numero en vez de
+    # recalcular metricas reales en cada carga de pagina. None = todavia no
+    # evaluable (sin proyeccion_congelada guardada, o sin suficiente
+    # historial real) -- en ese caso no se toca el contador.
+    try:
+        pesos_reales = calcular_composicion_real(tiempo_real)
+        resultado = _dia_fuera_de_rango_metricas(portafolio, pesos_reales, tiempo_real)
+        if resultado is not None:
+            anterior = portafolio.get("rebalanceo_metricas", {}).get("dias_fuera_de_rango", 0)
+            nuevo_contador = anterior + 1 if resultado else 0
+            guardar_estado_rebalanceo(archivo, nuevo_contador, resultado or None, hoy)
+    except Exception as e:
+        print(f"⚠️ scheduler: no se pudo evaluar rebalanceo por metricas de {archivo}: {e}")
 
 
 def _snapshot_todos_los_portafolios():

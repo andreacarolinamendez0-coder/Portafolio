@@ -62,7 +62,7 @@ function GroupCard({ tinte, dotColor, titulo, sub, m, congelada }: {
         <div style={{ minHeight: 150, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center", gap: 8 }}>
           <div style={{ width: 34, height: 34, borderRadius: 10, background: "rgba(79,141,253,0.14)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15 }}>⏳</div>
           <p style={{ fontSize: 12, color: "var(--text-2)", margin: 0, lineHeight: 1.5, maxWidth: 220 }}>
-            Aún no hay suficiente historial real para calcular esto de forma confiable.
+            Todavía no llevas 6 meses de historial real — antes de eso el número sale exagerado. Vuelve más adelante.
           </p>
         </div>
       )}
@@ -110,6 +110,60 @@ function FilaComun({ f }: { f: MetricaActivo }) {
   );
 }
 
+// Widget "curiosidad": icono chiquito que al pasar el mouse (o tocar, en
+// mobile) revela la explicacion -- por que "objetivo" y "real" pueden dar
+// distinto aunque sean los mismos activos, y por que a veces "Real" no
+// muestra numeros. Antes vivia como un bloque de texto siempre visible;
+// Andrea pidio esconderlo detras de un hover para no ocupar espacio fijo.
+function NotaCuriosidad() {
+  const [abierta, setAbierta] = useState(false);
+  return (
+    <div
+      style={{ position: "relative", display: "inline-block" }}
+      onMouseEnter={() => setAbierta(true)}
+      onMouseLeave={() => setAbierta(false)}
+    >
+      <button
+        type="button"
+        onClick={() => setAbierta(a => !a)}
+        aria-label="Por qué estos números pueden diferir"
+        style={{
+          width: 20, height: 20, borderRadius: "50%", padding: 0, cursor: "pointer",
+          border: "1px solid rgba(79,141,253,0.4)", background: "rgba(79,141,253,0.12)",
+          color: AZUL, fontSize: 12, lineHeight: 1, display: "inline-flex",
+          alignItems: "center", justifyContent: "center", flexShrink: 0,
+        }}
+      >
+        💡
+      </button>
+      {abierta && (
+        <div style={{
+          position: "absolute", top: "calc(100% + 10px)", left: 0, zIndex: 30,
+          width: 340, maxWidth: "min(340px, calc(100vw - 48px))",
+          background: "var(--bg-2)", border: "1px solid rgba(79,141,253,0.25)",
+          borderRadius: 14, padding: "14px 16px", boxShadow: "0 12px 32px rgba(0,0,0,0.4)",
+          fontSize: 11.5, color: "var(--text-2)", lineHeight: 1.6, cursor: "default",
+        }}>
+          <p style={{ margin: "0 0 8px" }}>
+            <strong style={{ color: "var(--text)" }}>¿Por qué &quot;objetivo&quot; y &quot;real&quot; pueden dar distinto aunque sean los mismos activos?</strong>{" "}
+            La proyección de tu meta usa los pesos con los que armaste el portafolio (fijos, ej. 20% en cada
+            activo). La proyección real usa el peso que cada activo tiene HOY en tu dinero, que se mueve solo con
+            el precio — sin que tú compres ni vendas nada. Es como una receta: si un ingrediente creció un poco más
+            que el resto desde que la armaste, el batido ya no sabe exactamente igual, aunque sigas usando los
+            mismos ingredientes.
+          </p>
+          <p style={{ margin: 0 }}>
+            <strong style={{ color: "var(--text)" }}>¿Por qué a veces &quot;Real&quot; no muestra números?</strong>{" "}
+            Necesitamos al menos 6 meses de historial tuyo para calcular un retorno anual confiable — con menos
+            tiempo, el número sale exagerado y engañoso (2 meses malos podrían mostrar &quot;-60% anual&quot; sin que
+            eso refleje la realidad). Preferimos no mostrarte nada a mostrarte algo que confunda.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const PANELES = [
   { id: "objetivo" as const, label: "Portafolio objetivo", sub: "Meta (proyección viva) vs. real — solo posiciones vigentes" },
   { id: "real" as const, label: "Portafolio real", sub: "Proyección viva vs. real — incluye activos fuera de meta" },
@@ -123,9 +177,12 @@ export function TablaFinancieraActivos({ porActivo, objetivo, actual }: Props) {
 
   return (
     <GlassPanel>
-      <p style={{ color: "var(--text)", fontSize: 20, fontWeight: 600, margin: "0 0 4px" }}>
-        RENDIMIENTO: PROYECTADO VS. REAL
-      </p>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "0 0 4px" }}>
+        <p style={{ color: "var(--text)", fontSize: 20, fontWeight: 600, margin: 0 }}>
+          RENDIMIENTO: PROYECTADO VS. REAL
+        </p>
+        <NotaCuriosidad />
+      </div>
       <p style={{ color: "var(--text-3)", fontSize: 12, margin: "0 0 20px" }}>
         A nivel de portafolio completo, y por activo abajo.
       </p>
@@ -236,8 +293,7 @@ export function TablaFinancieraActivos({ porActivo, objetivo, actual }: Props) {
           </div>
           <p style={{ fontSize: 10.5, color: "var(--text-3)", lineHeight: 1.6, margin: "16px 0 0", paddingTop: 14, borderTop: "1px solid var(--glass-border)" }}>
             Esta vista incluye todos los activos que sostienes hoy, incluyendo los que salieron de la composición
-            objetivo. La proyección viva usa tus pesos reales, no los pesos de la meta — por eso puede diferir del
-            panel &quot;Portafolio objetivo&quot;.
+            objetivo.
           </p>
         </>
       )}

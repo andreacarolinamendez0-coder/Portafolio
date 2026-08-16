@@ -244,6 +244,7 @@ export default function SeguimientoPage() {
                 <ComposicionComparada
                   composicionMeta={data.comparacion.composicion_meta}
                   composicionReal={data.comparacion.composicion_real}
+                  porActivo={data.comparacion.por_activo}
                 />
                 <TablaFinancieraActivos
                   porActivo={data.comparacion.por_activo}
@@ -502,7 +503,7 @@ export default function SeguimientoPage() {
           </>
         )}
         {data && (
-          <AvisoSeguimiento archivo={archivo} desviacion={data.comparacion?.desviacion_composicion} />
+          <AvisoSeguimiento archivo={archivo} desviacion={data.comparacion?.desviacion_composicion} disparo={data.comparacion?.disparo_rebalanceo} />
         )}
     </>
   );

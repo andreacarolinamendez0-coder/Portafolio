@@ -302,7 +302,7 @@ export default function DashboardPage() {
           </LiquidButton>
         </div>
         <AvisosHost>
-          <AvisoSeguimiento archivo={archivo} desviacion={data.desviacion_composicion} />
+          <AvisoSeguimiento archivo={archivo} desviacion={data.desviacion_composicion} disparo={data.disparo_rebalanceo} />
           {monitorAmbient && (
             <AvisoSenalesMonitor
               archivo={archivo}
