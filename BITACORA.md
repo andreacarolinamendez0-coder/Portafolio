@@ -2021,3 +2021,160 @@ no se activará hasta la próxima vez que se aplique una propuesta desde el
 Analista.
 
 ---
+
+## [2026-08-16] Cuenta demo end-to-end: bloqueo de mutaciones, auto-login, banner, fix de Histórico y auditoría final
+
+**Qué se hizo (orden cronológico):**
+
+1. **Composición — mensaje de sugerencia unificado:** `SugerenciaCorreccion`
+   en `frontend/src/components/ui/composicion-comparada.tsx` simplificada
+   para mostrar el texto de sugerencia de compra/venta ante CUALQUIER
+   desviación de peso distinta de cero, eliminando la banda de tolerancia
+   visual (5pp/25%) y el badge "FUERA DE BANDA". `banda_pp`/`dentro_de_banda`
+   siguen calculados en el backend, sin uso visual (no se tocó el backend).
+
+2. **Bloqueo total de mutaciones para la cuenta demo (spec de Andrea, 19
+   rutas):** en `dashboard.py` se agregaron los helpers
+   `bloquear_si_demo_portafolio(portafolio)` y `bloquear_si_demo_cuenta()`
+   (403 si `owner`/`session["username"]` es `"demo"`), aplicados a 19 rutas
+   mutadoras (chat/propuesta del Analista, `/api/bot`,
+   eliminar-portafolio/cuenta, config, seguimiento/aportes/depósitos/ventas,
+   activar/desactivar portafolio, profile, crear portafolio,
+   forgot/reset-password). `/api/eliminar-portafolio` además se hizo
+   fail-closed (500 si falla la lectura antes de verificar owner, en vez de
+   proceder a borrar).
+
+3. **Auto-login `/demo`:** nueva ruta `GET /demo` en `dashboard.py` que arma
+   sesión igual que un login normal y redirige al dashboard. Se detectó y
+   corrigió que faltaba la regla de rewrite en `frontend/next.config.ts`
+   (Next.js solo proxea rutas explícitamente listadas hacia Flask) — sin
+   ella la ruta era invisible desde el navegador pese a existir en backend.
+
+4. **Banner de modo demo + deshabilitado de controles app-wide:** nuevo
+   `frontend/src/lib/useIsDemo.ts` sobre un `AuthProvider`/`useAuthState()`
+   centralizado en `frontend/src/components/providers/auth-context.tsx`
+   (evita repetir el fetch de `/api/auth/me`). Nuevo
+   `frontend/src/components/ui/demo-banner.tsx`, visible en las 6 pestañas.
+   Se deshabilitaron (con tooltip) todos los controles mutadores del
+   frontend cruzando `lib/api.ts` contra sus call sites (movimientos,
+   aportes/ventas/depósitos, Config, chat del Analista, `PropuestaEditor`,
+   chat flotante de Atom, `/bot`, selector/crear/renombrar/eliminar
+   portafolio, `/settings`). El toggle de compra/venta en Monitor se dejó
+   activo a propósito (no requiere protección de datos falsos).
+
+5. **Diagnóstico de divergencia Dashboard vs Seguimiento (sin tocar
+   código):** se confirmó que es diseño intencional pero inconsistente —
+   Dashboard usa polling cliente cada 10s contra `/api/precios-rt`
+   (`monitor_<archivo>.json`, escrito por el daemon `monitor.py` con datos
+   intradía de Finnhub) solo para las stat cards agregadas del tope;
+   Seguimiento entero usa `calcular_tiempo_real()` con yfinance (cierre
+   diario) en cada request. Por separado se confirmó que la aparente
+   contradicción entre -5.5% (Seguimiento) / 13% (Dashboard) / 34%
+   (Histórico) tenía dos causas: -5.5% vs 13% es esperado (miden cosas
+   distintas), pero el 34% de Histórico sí era un bug real.
+
+6. **Fix de contaminación de flujo de caja en Histórico (mejor/peor día,
+   racha, rentabilidad acumulada):** causa raíz — el cálculo comparaba
+   `total_valor` crudo entre fechas, contando un depósito nuevo como si
+   fuera rendimiento. Migrado a `ganancia_total` (P&L puro) en 3 lugares:
+   - `frontend/.../page.tsx`, `calcularHitos()`: mejor/peor día y racha
+     sobre deltas de `ganancia_total`; `rentAcumuladaPct` ahora es
+     `(gananciaFin - gananciaInicio) / invertidoInicio`.
+   - Mismo archivo, `HistoricoSection`: el selector de rango (7D/30D/90D/1A/
+     Todo) pasó de "últimos N registros" a filtrado real por días
+     calendario.
+   - `dashboard.py`, `generar_analisis_historico()`: mismo cambio para
+     `cambio_7d`, `cambio_30d` y los deltas que alimentan el texto de
+     "Análisis de Atom", para que coincida con la UI.
+   **Este fix quedó deliberadamente sin commitear** — Andrea quiere hacer su
+   propia verificación end-to-end antes de comitearlo ella.
+
+7. **Datos sintéticos del demo (solo lectura):** se auditaron, sin
+   modificar, dos scripts sueltos y sin trackear en la raíz del repo,
+   `extender_demo.py` y `reconciliar_historial_demo.py` (el segundo
+   reescrito a mitad de sesión de "rampa sobre datos existentes" a
+   "reconstrucción de una pasada hacia un punto ancla real", resolviendo una
+   costura falsa de -$401.86 en un día). Andrea confirmó explícitamente
+   dejar los datos sintéticos tal cual — solo se tocan las fórmulas que los
+   consumen.
+
+8. **Monitor activo en el demo (sin cambios de código):** se confirmó que
+   `monitoreo_activo: true` ya estaba seteado pero faltaba
+   `datos/portafolios/monitor_demo.json` (solo lo escribe el daemon). Sin
+   riesgo de Telegram real (chat_id vacío) y sin whitelist en `monitor.py`.
+   Andrea eligió dejar que el daemon de producción lo recoja solo, sin
+   intervención de código.
+
+9. **Auditoría final end-to-end del demo:** pipeline auditor→tester con
+   pruebas en vivo reales (Flask `test_client()` con sesión demo,
+   comparación byte-a-byte de archivos antes/después, Playwright). 29/29
+   pruebas de seguridad pasaron. Se encontraron 2 bloqueantes y 1 hallazgo
+   medio nuevo (no estaban en el checklist original):
+   - Bloqueante 1: `demo_template.json` aparecía como un segundo
+     "Portafolio Demo" duplicado y navegable en el selector porque
+     `_es_portafolio_real()` (`gestor_portafolio.py`) no lo excluía.
+   - Bloqueante 2 (ver punto 6): el fix de `ganancia_total` seguía sin
+     commitear/pushear — Railway seguía sirviendo la versión con el bug.
+   - Hallazgo medio nuevo: `GET /api/historico-analisis/<archivo>` no pasaba
+     por ningún bloqueo de demo — cada primer visitante del día a Histórico
+     disparaba una llamada real de pago a Anthropic y reescribía
+     `demo.json` en disco.
+   También se encontraron 4 issues menores: `bloquear_si_demo_portafolio`/
+   `bloquear_si_demo_cuenta` definidas dos veces (idénticas) en
+   `dashboard.py`; bloque duplicado en `api_auth_verify_pin` (doble registro
+   de actividad); `demo.json`/`demo_template.json` desincronizados; import
+   muerto de `eliminarCuenta` en
+   `frontend/.../portafolio/[archivo]/config/page.tsx`.
+   Se verificó por SSH real a Railway (autorizado por Andrea) que
+   `demo.json`, `demo_template.json` y la entrada `demo` de
+   `usuarios.json` en producción existen y coinciden con los datos locales
+   (`web-volume`, servicio `web`, proyecto `precious-success`).
+
+10. **Corrección de los 6 bugs restantes de la auditoría** (autorizado
+    explícitamente por Andrea, excepto el commit que ella maneja aparte):
+    - `gestor_portafolio.py`, `_es_portafolio_real()`: exclusión explícita
+      de `demo_template.json`.
+    - `dashboard.py`, `api_historico_analisis()`: para `owner == "demo"`
+      ahora sirve el texto cacheado tal cual, sin regenerar ni escribir a
+      disco aunque el caché "venció"; sin cambios para cuentas reales.
+    - `dashboard.py`: eliminada la definición duplicada de
+      `bloquear_si_demo_portafolio`/`bloquear_si_demo_cuenta`.
+    - `dashboard.py`, `api_auth_verify_pin()`: eliminado el bloque de
+      sesión+`registrar_actividad` repetido dos veces.
+    - `datos/portafolios/demo_template.json`: re-baseado como copia exacta
+      de `demo.json` (backup en `demo_template.json.bak`), dejando
+      `analisis_historico` disponible en el template tras cada reset.
+    - `frontend/.../config/page.tsx`: removido el import muerto de
+      `eliminarCuenta`.
+    Los 6 fixes fueron verificados de forma independiente por un segundo
+    agente (tester) con pruebas en vivo: cero llamadas reales a Anthropic
+    para demo, `demo.json` byte-idéntico antes/después, Histórico para
+    cuentas NO-demo sigue regenerando normalmente, `/api/config` PUT en
+    demo sigue devolviendo 403 tras la deduplicación, sin regresiones
+    nuevas. De paso se confirmó que `frontend/AGENTS.md` (instruye a leer
+    `node_modules/next/dist/docs/` por ser Next.js 16.2.7) es contenido
+    legítimo empaquetado por Next.js, no una inyección maliciosa.
+
+**Resultado:**
+- Los 19 bloqueos de mutación para demo, el auto-login `/demo`, el banner y
+  el deshabilitado de controles quedaron implementados y verificados.
+- El fix de contaminación de flujo de caja en Histórico (`ganancia_total`)
+  quedó implementado y verificado, pero deliberadamente sin commitear.
+- Los 2 bloqueantes y los 4 issues menores de la auditoría final quedaron
+  todos corregidos y re-verificados por un segundo agente.
+
+**Pendiente de decisión / próximos pasos:**
+- Todo el trabajo de esta sesión sigue sin commitear, a la espera de que
+  Andrea termine su propia verificación end-to-end y decida comitear ella
+  misma. Archivos con cambios relevantes: `dashboard.py`,
+  `gestor_portafolio.py`, `frontend/src/app/portafolio/[archivo]/page.tsx`,
+  `frontend/src/app/portafolio/[archivo]/config/page.tsx`,
+  `frontend/next.config.ts`, más los archivos nuevos del banner/hook de
+  demo (punto 4).
+- Los cambios en `datos/portafolios/demo_template.json` no aparecen en git
+  (carpeta en `.gitignore`) pero sí están reflejados en el volumen local.
+- Quedan sueltos y sin trackear en la raíz del repo dos scripts de scratch,
+  `extender_demo.py` y `reconciliar_historial_demo.py` — Andrea debe decidir
+  si los conserva o los borra.
+
+---

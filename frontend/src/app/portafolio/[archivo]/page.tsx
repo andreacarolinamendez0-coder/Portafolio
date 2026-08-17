@@ -724,8 +724,18 @@ function HistoricoSection({ historico, archivo, composicion, posiciones, divisa,
     </GlassPanel>
   );
 
-  const n = rango === "todo" ? historico.length : Math.min(rango, historico.length);
-  const filtrado = historico.slice(-n);
+  // Filtra por dias CALENDARIO transcurridos desde `fecha`, no por cantidad
+  // de registros -- si el historial tiene huecos (fines de semana sin
+  // guardar, tramos semanales sinteticos, etc.) "ultimos N registros" no es
+  // lo mismo que "ultimos N dias". Si el rango elegido no tiene ningun
+  // registro (historial desactualizado), cae al ultimo registro disponible
+  // en vez de mostrar la seccion vacia.
+  const filtrado = (() => {
+    if (rango === "todo") return historico;
+    const limite = Date.now() - rango * 24 * 60 * 60 * 1000;
+    const enRango = historico.filter(r => new Date(r.fecha).getTime() >= limite);
+    return enRango.length > 0 ? enRango : historico.slice(-1);
+  })();
   const desde = filtrado[0].fecha;
 
   const hitos = calcularHitos(filtrado);
@@ -801,9 +811,13 @@ interface Hitos {
 
 function calcularHitos(filtrado: DashboardData["historico"]): Hitos | null {
   if (filtrado.length < 2) return null;
+  // Igual que rentAcumuladaPct abajo: el delta dia a dia se mide sobre
+  // ganancia_total, no total_valor -- un dia de aporte nuevo (DCA) sube
+  // total_valor sin que sea rendimiento real, y antes de este fix eso podia
+  // ganarse la tarjeta de "Mejor dia" sin haber ganado nada de verdad.
   const deltas = filtrado.slice(1).map((r, i) => ({
     fecha: r.fecha,
-    valorUsd: r.resumen.total_valor - filtrado[i].resumen.total_valor,
+    valorUsd: r.resumen.ganancia_total - filtrado[i].resumen.ganancia_total,
   }));
   const mejor = deltas.reduce((a, b) => (b.valorUsd > a.valorUsd ? b : a));
   const peor  = deltas.reduce((a, b) => (b.valorUsd < a.valorUsd ? b : a));
@@ -811,9 +825,17 @@ function calcularHitos(filtrado: DashboardData["historico"]): Hitos | null {
   for (let i = deltas.length - 1; i >= 0; i--) {
     if (deltas[i].valorUsd > 0) racha++; else break;
   }
-  const primero = filtrado[0].resumen.total_valor;
-  const ultimo  = filtrado[filtrado.length - 1].resumen.total_valor;
-  const rentAcumuladaPct = primero !== 0 ? ((ultimo - primero) / primero) * 100 : 0;
+  // Rentabilidad del rango: se compara ganancia_total (no total_valor) contra
+  // el invertido AL INICIO del rango -- ganancia_total no salta cuando entra
+  // plata nueva (una compra recien hecha arranca con ganancia ~0), asi que su
+  // delta ya viene limpio de aportes. Comparar total_valor en cambio contaba
+  // los depositos DCA hechos dentro del rango como si fueran rendimiento.
+  const invertidoInicio = filtrado[0].resumen.total_invertido;
+  const gananciaInicio  = filtrado[0].resumen.ganancia_total;
+  const gananciaFin     = filtrado[filtrado.length - 1].resumen.ganancia_total;
+  const rentAcumuladaPct = invertidoInicio > 0
+    ? ((gananciaFin - gananciaInicio) / invertidoInicio) * 100
+    : 0;
   return { mejor, peor, racha, rentAcumuladaPct };
 }
 

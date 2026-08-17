@@ -90,7 +90,11 @@ def _escribir(ruta, data):
 
 
 def _es_portafolio_real(fn):
-    return fn.endswith(".json") and not fn.startswith(("monitor_", "rangos_"))
+    return (
+        fn.endswith(".json")
+        and not fn.startswith(("monitor_", "rangos_"))
+        and fn != "demo_template.json"
+    )
 
 
 def _slug(nombre):

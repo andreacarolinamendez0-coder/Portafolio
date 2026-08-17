@@ -4,7 +4,7 @@ import { GlassPanel } from "@/components/ui/glass-panel";
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { getConfig, updateConfig, activarPortafolio, getPortafolios, eliminarCuenta } from "@/lib/api";
+import { getConfig, updateConfig, activarPortafolio, getPortafolios } from "@/lib/api";
 import { LiquidButton } from "@/components/ui/liquid-glass-button";
 import { GlowPanel } from "@/components/ui/glow-panel";
 import { PageIntro } from "@/components/ui/page-intro";

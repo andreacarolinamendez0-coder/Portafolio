@@ -1317,21 +1317,28 @@ def generar_analisis_historico(historial, portafolio):
     try:
         valores    = [r['resumen']['total_valor'] for r in historial]
         invertido  = [r['resumen']['total_invertido'] for r in historial]
+        ganancia   = [r['resumen']['ganancia_total'] for r in historial]
         fechas     = [r['fecha'] for r in historial]
 
         valor_hoy    = valores[-1]
-        valor_inicio = valores[0]
         n7  = min(7, len(valores))
         n30 = min(30, len(valores))
-        valor_7d  = valores[-n7]
-        valor_30d = valores[-n30]
 
-        cambio_7d  = ((valor_hoy - valor_7d) / valor_7d * 100) if valor_7d else 0
-        cambio_30d = ((valor_hoy - valor_30d) / valor_30d * 100) if valor_30d else 0
+        # Igual que el frontend (calcularHitos en page.tsx): el cambio del
+        # rango se mide sobre ganancia_total contra el invertido AL INICIO del
+        # rango, no sobre total_valor -- total_valor sube con cada aporte
+        # nuevo (DCA) aunque no haya rendimiento real, y eso inflaba el
+        # "cambio en los ultimos N registros" que le llega al modelo.
+        ganancia_7d, invertido_7d   = ganancia[-n7], invertido[-n7]
+        ganancia_30d, invertido_30d = ganancia[-n30], invertido[-n30]
+        cambio_7d  = ((ganancia[-1] - ganancia_7d) / invertido_7d * 100) if invertido_7d else 0
+        cambio_30d = ((ganancia[-1] - ganancia_30d) / invertido_30d * 100) if invertido_30d else 0
 
         # Día a día (entre registros consecutivos guardados, puede haber huecos
         # si el scheduler no alcanzó a correr) para mejor/peor día y racha.
-        deltas = [valores[i] - valores[i - 1] for i in range(1, len(valores))]
+        # Sobre ganancia_total, no total_valor -- misma razon que arriba: un
+        # dia de aporte nuevo no es un "mejor dia" de rendimiento real.
+        deltas = [ganancia[i] - ganancia[i - 1] for i in range(1, len(ganancia))]
         mejor_i = max(range(len(deltas)), key=lambda i: deltas[i])
         peor_i  = min(range(len(deltas)), key=lambda i: deltas[i])
         mejor_dia, mejor_valor = fechas[mejor_i + 1], deltas[mejor_i]
@@ -2807,14 +2814,7 @@ def api_auth_verify_pin():
     session["fp"] = huella_password_hash(u["password_hash"])
     session["es_admin"] = u.get("es_admin", False)
     session.permanent = True
-    session["username"] = username
-    session["fp"] = huella_password_hash(u["password_hash"])
-    session["es_admin"] = u.get("es_admin", False)
-    session.permanent = True
     resetear_demo_si_aplica(username)          # ← NUEVO
-    ip, dispositivo = _request_meta()
-    registrar_actividad("activacion_ok", username, email=email,
-                        detalle="Cuenta activada por PIN (auto-login)", ip=ip, dispositivo=dispositivo)
     ip, dispositivo = _request_meta()
     registrar_actividad("activacion_ok", username, email=email,
                         detalle="Cuenta activada por PIN (auto-login)", ip=ip, dispositivo=dispositivo)
@@ -2830,21 +2830,6 @@ def api_auth_resend_pin():
         if res is not True:
             return jsonify({"ok": False, "error": res}), 429
     return jsonify({"ok": True})
-
-def bloquear_si_demo_portafolio(portafolio):
-    """403 si el portafolio pertenece a la cuenta demo. Usar en cualquier ruta
-    que reciba <archivo> y modifique/borre algo de ese portafolio."""
-    if portafolio.get("owner") == "demo":
-        return jsonify({"error": "Esta es una cuenta de demostración — no se pueden guardar cambios."}), 403
-    return None
-
-def bloquear_si_demo_cuenta():
-    """403 si la sesión activa es la cuenta demo. Usar en rutas que actúan
-    sobre la cuenta misma, no sobre un portafolio (borrar cuenta, cambiar
-    perfil, crear portafolios nuevos, reset de contraseña)."""
-    if session.get("username") == "demo":
-        return jsonify({"error": "Esta es una cuenta de demostración — acción no disponible."}), 403
-    return None
 
 def resetear_demo_si_aplica(username):
     """Si el usuario que acaba de loguear es 'demo', restaura su portafolio
@@ -3626,6 +3611,13 @@ def api_historico_analisis(archivo):
 
     hoy = datetime.now().strftime("%Y-%m-%d")
     cache = portafolio.get('analisis_historico') or {}
+
+    # Cuenta demo: nunca regenerar (llamada real y de pago a Anthropic) ni
+    # escribir en disco -- sirve el texto ya cacheado tal cual esté, sin
+    # importar si la fecha del caché es de hoy.
+    if portafolio.get('owner') == 'demo':
+        return jsonify({'analisis': cache.get('texto'), 'fecha': cache.get('fecha'), 'cacheado': True})
+
     if cache.get('fecha') == hoy and cache.get('texto'):
         return jsonify({'analisis': cache['texto'], 'fecha': hoy, 'cacheado': True})
 
