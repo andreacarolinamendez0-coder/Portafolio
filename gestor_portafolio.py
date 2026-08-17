@@ -332,13 +332,25 @@ def fracciones_disponibles(data, activo):
 
 
 def realizado_por_ticker(data):
-    """Ganancia realizada (COP) agregada por ticker + total."""
+    """Ganancia realizada (USD) por ticker + total. USD nativo (consistente con el
+    resto de Seguimiento y el broker): proceeds netos − costo base USD (incluye
+    comisión de compra, simétrico con la venta). Derivado de aportes+ventas, sirve
+    para ventas viejas y nuevas sin campos extra."""
+    comprado_usd, comprado_frac = {}, {}
+    for a in data.get("aportes", []):
+        tk = a.get("activo")
+        comprado_usd[tk] = comprado_usd.get(tk, 0.0) + float(a.get("monto_usd", 0)) + float(a.get("comision", 0))
+        comprado_frac[tk] = comprado_frac.get(tk, 0.0) + float(a.get("fracciones", 0))
+
     por_ticker = {}
     for v in data.get("ventas", []):
         tk = v.get("activo")
-        por_ticker[tk] = por_ticker.get(tk, 0.0) + float(v.get("ganancia_realizada_cop", 0))
-    por_ticker = {tk: round(g, 0) for tk, g in por_ticker.items()}
-    return {"por_ticker": por_ticker, "total": round(sum(por_ticker.values()), 0)}
+        frac = float(v.get("fracciones", 0))
+        avg_usd = (comprado_usd.get(tk, 0.0) / comprado_frac[tk]) if comprado_frac.get(tk) else 0.0
+        ganancia = float(v.get("proceeds_usd", 0)) - avg_usd * frac
+        por_ticker[tk] = por_ticker.get(tk, 0.0) + ganancia
+    por_ticker = {tk: round(g, 2) for tk, g in por_ticker.items()}
+    return {"por_ticker": por_ticker, "total": round(sum(por_ticker.values()), 2)}
 
 
 # ============================================================
@@ -484,7 +496,6 @@ def asegurar_caja_inicial(nombre_archivo):
         aportes = data.get("aportes", [])
         if aportes:
             usd = round(sum(float(a.get("monto_usd", 0)) for a in aportes), 2)
-            cop = round(sum(float(a.get("monto_cop", 0)) for a in aportes), 0)
             fecha_ap = min(
                 (a["fecha"] for a in aportes if a.get("fecha")),
                 default=datetime.now().strftime("%Y-%m-%d"),
@@ -492,8 +503,6 @@ def asegurar_caja_inicial(nombre_archivo):
             data.setdefault("depositos", []).append({
                 "id": secrets.token_hex(6),
                 "fecha": fecha_ap,
-                "monto_cop": cop,
-                "trm_real": round(cop / usd, 2) if usd else 0,
                 "monto_usd": usd,
                 "tipo": "apertura",
             })

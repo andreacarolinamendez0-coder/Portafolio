@@ -28,11 +28,11 @@ export interface DatosReporte {
   proyecciones: Proyeccion[];
 }
 
-const fmt = (n: number) => "$" + Math.round(n).toLocaleString("es-CO");
+const fmt = (n: number) => "$" + Math.round(n).toLocaleString("en-US");
 const fmtM = (n: number) => {
   if (Math.abs(n) >= 1_000_000) return "$" + (n / 1_000_000).toFixed(2) + "M";
   if (Math.abs(n) >= 1_000) return "$" + (n / 1_000).toFixed(0) + "K";
-  return "$" + Math.round(n).toLocaleString("es-CO");
+  return "$" + Math.round(n).toLocaleString("en-US");
 };
 
 export function ReporteTarjetas({ datos, notaNuevos, advertenciaCategoria }: { datos: DatosReporte; notaNuevos?: string; advertenciaCategoria?: string }) {

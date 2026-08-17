@@ -267,8 +267,8 @@ export function PropuestaEditor({ propuesta, tieneInv, onAplicar, aplicando, msg
 
       {/* Resumen + aplicar */}
       <div style={{ marginTop: 16, display: "flex", gap: 16, fontSize: 12, color: "var(--text-3)", flexWrap: "wrap", paddingTop: 12, borderTop: "1px solid var(--glass-border)" }}>
-        <span>Inversión: <strong style={{ color: "var(--text)" }}>${propuesta.inversion.toLocaleString("es-CO")} COP</strong></span>
-        {propuesta.aporte_dca > 0 && <span>DCA: <strong style={{ color: "var(--text)" }}>${propuesta.aporte_dca.toLocaleString("es-CO")} COP</strong></span>}
+        <span>Inversión: <strong style={{ color: "var(--text)" }}>${propuesta.inversion.toLocaleString("en-US")} COP</strong></span>
+        {propuesta.aporte_dca > 0 && <span>DCA: <strong style={{ color: "var(--text)" }}>${propuesta.aporte_dca.toLocaleString("en-US")} COP</strong></span>}
         <span>Horizonte: <strong style={{ color: "var(--text)" }}>{propuesta.horizonte} años</strong></span>
       </div>
 

@@ -28,7 +28,7 @@ export function mostrarMonto(montoUSD: number, divisa: Divisa, tasas: Tasas): st
 
   // USD/EUR con 2 decimales, COP sin decimales
   const decimales = divisa === "COP" ? 0 : 2;
-  const formateado = valor.toLocaleString("es-CO", {
+  const formateado = valor.toLocaleString("en-US", {
     minimumFractionDigits: decimales,
     maximumFractionDigits: decimales,
   });

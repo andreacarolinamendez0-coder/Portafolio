@@ -11,7 +11,10 @@ import { PageIntro } from "@/components/ui/page-intro";
 import { AvisoSeguimiento } from "@/components/ui/aviso-seguimiento";
 import { ComposicionComparada } from "@/components/ui/composicion-comparada";
 import { TablaFinancieraActivos } from "@/components/ui/tabla-financiera-activos";
-import { useIsDemo, MENSAJE_DEMO } from "@/lib/useIsDemo";
+import { mostrarMonto, type Divisa } from "@/lib/divisas";
+
+const COLOR_COMPRA = "#0071e3";
+const COLOR_VENTA  = "#ff9f0a";
 
 type Mov =
   | (SeguimientoData["aportes"][number] & { _tipo: "compra" })
@@ -34,6 +37,9 @@ export default function SeguimientoPage() {
   const [loading, setLoading] = useState(true);
   const [msg, setMsg]         = useState({ text: "", ok: false });
 
+  const divisa = (data?.divisa ?? "USD") as Divisa;
+  const tasas = { trm: data?.trm ?? 0, tasa_eur: data?.tasa_eur ?? 0 };
+
   // Campos del formulario
   const hoy = new Date().toISOString().slice(0, 10);
   const [activo, setActivo]         = useState("");
@@ -48,12 +54,10 @@ export default function SeguimientoPage() {
 
   // Depósitos: form nuevo + edición inline
   const [depFecha, setDepFecha]   = useState(hoy);
-  const [depCop, setDepCop]       = useState("");
-  const [depTrm, setDepTrm]       = useState("");
+  const [depUsd, setDepUsd]       = useState("");
   const [depEditId, setDepEditId] = useState<string | null>(null);
   const [dFecha, setDFecha]       = useState("");
-  const [dCop, setDCop]           = useState("");
-  const [dTrm, setDTrm]           = useState("");
+  const [dUsd, setDUsd]           = useState("");
 
   // Edición inline de una fila del historial
   const [editId, setEditId]   = useState<string | null>(null);
@@ -156,14 +160,14 @@ export default function SeguimientoPage() {
   }
 
   async function crearDep() {
-    if (!depCop || !depTrm) {
-      setMsg({ text: "Completa el monto en COP y la TRM del depósito", ok: false });
+    if (!depUsd) {
+      setMsg({ text: "Ingresa el monto en USD", ok: false });
       return;
     }
     try {
-      await crearDeposito(archivo, { fecha: depFecha, monto_cop: parseFloat(depCop), trm_real: parseFloat(depTrm) });
+      await crearDeposito(archivo, { fecha: depFecha, monto_usd: parseFloat(depUsd) });
       setData(await getSeguimiento(archivo));
-      setDepCop(""); setDepTrm("");
+      setDepUsd("");
       setMsg({ text: "Depósito registrado", ok: true });
     } catch (e: unknown) {
       setMsg({ text: e instanceof Error ? e.message : "Error", ok: false });
@@ -171,13 +175,13 @@ export default function SeguimientoPage() {
   }
 
   function empezarEdicionDep(d: Deposito) {
-    setDepEditId(d.id); setDFecha(d.fecha); setDCop(String(d.monto_cop)); setDTrm(String(d.trm_real));
+    setDepEditId(d.id); setDFecha(d.fecha); setDUsd(String(d.monto_usd));
     setMsg({ text: "", ok: false });
   }
 
   async function guardarEdicionDep(id: string) {
     try {
-      await editarDeposito(archivo, id, { fecha: dFecha, monto_cop: parseFloat(dCop), trm_real: parseFloat(dTrm) });
+      await editarDeposito(archivo, id, { fecha: dFecha, monto_usd: parseFloat(dUsd) });
       setData(await getSeguimiento(archivo));
       setDepEditId(null);
       setMsg({ text: "Depósito actualizado", ok: true });
@@ -280,7 +284,7 @@ export default function SeguimientoPage() {
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
                 <h3 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>SALDOS Y DEPÓSITOS</h3>
                 <span style={{ fontSize: "0.85rem", color: "#a1a1a6" }}>
-                  Disponible: <strong style={{ color: data.saldo_usd < 0 ? "#ff453a" : "#30d158", fontSize: "1.05rem" }}>US${data.saldo_usd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                  Disponible: <strong style={{ color: data.saldo_usd < 0 ? "#ff453a" : "#30d158", fontSize: "1.05rem" }}>{mostrarMonto(data.saldo_usd, divisa, tasas)}</strong>
                 </span>
               </div>
 
@@ -290,12 +294,8 @@ export default function SeguimientoPage() {
                   <input type="date" value={depFecha} onChange={e => setDepFecha(e.target.value)} disabled={isDemo} style={s.input} />
                 </div>
                 <div>
-                  <label style={s.label}>Monto depositado (COP)</label>
-                  <input className="no-spin" type="number" step="1" placeholder="Ej: 4000000" value={depCop} onChange={e => setDepCop(e.target.value)} disabled={isDemo} style={s.input} />
-                </div>
-                <div>
-                  <label style={s.label}>TRM de compra de USD</label>
-                  <input className="no-spin" type="number" step="0.01" placeholder="Ej: 4050" value={depTrm} onChange={e => setDepTrm(e.target.value)} disabled={isDemo} style={s.input} />
+                  <label style={s.label}>Monto depositado (USD)</label>
+                  <input className="no-spin" type="number" step="0.01" placeholder="Ej: 250" value={depUsd} onChange={e => setDepUsd(e.target.value)} style={s.input} />
                 </div>
               </div>
               <LiquidButton onClick={crearDep} disabled={isDemo} title={isDemo ? MENSAJE_DEMO : undefined} className="text-white font-semibold !px-8 !py-2.5 text-sm">Registrar depósito</LiquidButton>
@@ -306,7 +306,7 @@ export default function SeguimientoPage() {
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
                     <thead>
                       <tr style={{ color: "#6e6e73", textAlign: "left" }}>
-                        <th style={s.th}>Fecha</th><th style={s.th}>COP</th><th style={s.th}>TRM</th><th style={s.th}>USD</th><th style={s.th}>Tipo</th><th style={s.th}></th>
+                        <th style={s.th}>Fecha</th><th style={s.th}>USD</th><th style={s.th}>Tipo</th><th style={s.th}></th>
                       </tr>
                     </thead>
                     <tbody>
@@ -317,9 +317,7 @@ export default function SeguimientoPage() {
                           {ed ? (
                             <>
                               <td style={s.td}><input type="date" value={dFecha} onChange={e => setDFecha(e.target.value)} style={sEdit} /></td>
-                              <td style={s.td}><input className="no-spin" type="number" step="1" value={dCop} onChange={e => setDCop(e.target.value)} style={sEdit} /></td>
-                              <td style={s.td}><input className="no-spin" type="number" step="0.01" value={dTrm} onChange={e => setDTrm(e.target.value)} style={sEdit} /></td>
-                              <td style={s.td}>—</td>
+                              <td style={s.td}><input className="no-spin" type="number" step="0.01" value={dUsd} onChange={e => setDUsd(e.target.value)} style={sEdit} /></td>
                               <td style={s.td}>{d.tipo}</td>
                               <td style={s.td}>
                                 <button onClick={() => guardarEdicionDep(d.id)} title="Guardar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 14, padding: "2px 4px", lineHeight: 1, color: "#30d158" }}>✓</button>
@@ -329,9 +327,7 @@ export default function SeguimientoPage() {
                           ) : (
                             <>
                               <td style={s.td}>{d.fecha}</td>
-                              <td style={s.td}>${d.monto_cop.toLocaleString()}</td>
-                              <td style={s.td}>${d.trm_real.toLocaleString()}</td>
-                              <td style={s.td}>${d.monto_usd.toLocaleString()}</td>
+                              <td style={s.td}>${d.monto_usd.toLocaleString("en-US")}</td>
                               <td style={s.td}>{d.tipo === "apertura" ? <span style={{ color: "#6e6e73" }}>apertura</span> : "depósito"}</td>
                               <td style={{ ...s.td, whiteSpace: "nowrap" }}>
                                 <button onClick={() => empezarEdicionDep(d)} disabled={isDemo} title={isDemo ? MENSAJE_DEMO : "Editar"} style={{ background: "none", border: "none", cursor: isDemo ? "default" : "pointer", fontSize: 13, padding: "2px 4px", lineHeight: 1, opacity: isDemo ? 0.3 : 0.7 }}>🖊</button>
@@ -357,7 +353,7 @@ export default function SeguimientoPage() {
                     <button key={mo} onClick={() => !isDemo && setModo(mo)} disabled={isDemo} title={isDemo ? MENSAJE_DEMO : undefined} style={{
                       border: "none", cursor: isDemo ? "default" : "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 600,
                       padding: "5px 16px", borderRadius: 980, textTransform: "capitalize",
-                      background: modo === mo ? (mo === "venta" ? "#ff453a" : "#077a16") : "transparent",
+                      background: modo === mo ? (mo === "venta" ? COLOR_VENTA : COLOR_COMPRA) : "transparent",
                       color: modo === mo ? "#fff" : "var(--text-3)",
                       opacity: isDemo ? 0.5 : 1,
                     }}>{mo}</button>
@@ -457,14 +453,18 @@ export default function SeguimientoPage() {
                             ) : (
                               <>
                                 <td style={s.td}>{m.fecha}</td>
-                                <td style={s.td}><span style={{ fontSize: 11, fontWeight: 600, color: esVenta ? "#ff453a" : "#39c03b" }}>{esVenta ? "VENTA" : "COMPRA"}</span></td>
+                                <td style={s.td}><span style={{
+                                  fontSize: 11, fontWeight: 700, padding: "2px 9px", borderRadius: 980,
+                                  background: esVenta ? "rgba(255,159,10,0.14)" : "rgba(0,113,227,0.14)",
+                                  color: esVenta ? COLOR_VENTA : COLOR_COMPRA,
+                                }}>{esVenta ? "VENTA" : "COMPRA"}</span></td>
                                 <td style={s.td}><strong>{m.activo}</strong></td>
                                 <td style={s.td}>{m.fracciones.toFixed(6)}</td>
                                 <td style={s.td}>${(m._tipo === "venta" ? m.precio_venta_usd : m.precio_usd).toFixed(2)}</td>
                                 <td style={s.td}>${montoBruto.toFixed(2)}</td>
                                 <td style={s.td}>{comisionMov > 0 ? `$${comisionMov.toFixed(2)}` : "—"}</td>
-                                <td style={{ ...s.td, color: esVenta ? "#30d158" : "var(--text)" }}>{esVenta ? `+$${totalMov.toFixed(2)}` : `-$${totalMov.toFixed(2)}`}</td>
-                                <td style={s.td}>${m.trm_dia.toLocaleString()}</td>
+                                <td style={{ ...s.td}}>{esVenta ? `+$${totalMov.toFixed(2)}` : `-$${totalMov.toFixed(2)}`}</td>
+                                <td style={s.td}>${m.trm_dia.toLocaleString("en-US")}</td>
                                 <td style={{ ...s.td, whiteSpace: "nowrap" }}>
                                   <button onClick={() => empezarEdicion(m)} disabled={isDemo} title={isDemo ? MENSAJE_DEMO : "Editar"} style={{ background: "none", border: "none", cursor: isDemo ? "default" : "pointer", fontSize: 13, padding: "2px 4px", lineHeight: 1, opacity: isDemo ? 0.3 : 0.7 }}>🖊</button>
                                   <button onClick={() => eliminarMov(m)} disabled={isDemo} title={isDemo ? MENSAJE_DEMO : "Eliminar"} style={{ background: "none", border: "none", cursor: isDemo ? "default" : "pointer", fontSize: 13, padding: "2px 4px", lineHeight: 1, opacity: isDemo ? 0.3 : 0.7 }}>🗑</button>
@@ -482,26 +482,28 @@ export default function SeguimientoPage() {
             </GlassPanel>
             {Object.keys(data.realizado.por_ticker).length > 0 && (
               <GlassPanel>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
-                  <h3 style={{ fontSize: "1rem", margin: 0 }}>Ganancia realizada</h3>
-                  <span style={{ fontSize: "0.85rem", color: "#a1a1a6" }}>
-                    Total: <strong style={{ color: data.realizado.total >= 0 ? "#30d158" : "#ff453a", fontSize: "1.05rem" }}>{data.realizado.total >= 0 ? "+" : ""}${data.realizado.total.toLocaleString("es-CO", { maximumFractionDigits: 0 })} COP</strong>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
+                  <h3 style={{ fontSize: 20, fontWeight: 600, marginBottom: 12, paddingTop: 20 }}>GANANCIA REALIZADA</h3>
+                  <span style={{ fontSize: "0.85rem", color: "#6e6e73" }}>
+                    Total{" "}
+                    <strong style={{ color: data.realizado.total >= 0 ? "#30d158" : "#ff453a", fontSize: "1.15rem" }}>
+                      {data.realizado.total >= 0 ? "+" : "-"}{mostrarMonto(Math.abs(data.realizado.total), divisa, tasas)}
+                    </strong>
                   </span>
                 </div>
-                <div style={{ overflowX: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                    <thead>
-                      <tr style={{ color: "#6e6e73", textAlign: "left" }}><th style={s.th}>Activo</th><th style={s.th}>Realizada (COP)</th></tr>
-                    </thead>
-                    <tbody>
-                      {Object.entries(data.realizado.por_ticker).map(([tk, g]) => (
-                        <tr key={tk} style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}>
-                          <td style={s.td}><strong>{tk}</strong></td>
-                          <td style={{ ...s.td, color: g >= 0 ? "#30d158" : "#ff453a" }}>{g >= 0 ? "+" : ""}${g.toLocaleString("es-CO", { maximumFractionDigits: 0 })}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  {Object.entries(data.realizado.por_ticker).map(([tk, g]) => (
+                    <div key={tk} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", borderRadius: 8, background: "rgba(255,255,255,0.02)" }}>
+                      <strong style={{ color: "var(--text)", fontSize: 13 }}>{tk}</strong>
+                      <span style={{
+                        fontSize: 12, fontWeight: 700, padding: "2px 9px", borderRadius: 980,
+                        background: g >= 0 ? "rgba(52,209,124,0.14)" : "rgba(251,146,60,0.14)",
+                        color: g >= 0 ? "#34d17c" : "#fb923c",
+                      }}>
+                        {g >= 0 ? "+" : "-"}{mostrarMonto(Math.abs(g), divisa, tasas)}
+                      </span>
+                    </div>
+                  ))}
                 </div>
               </GlassPanel>
             )}

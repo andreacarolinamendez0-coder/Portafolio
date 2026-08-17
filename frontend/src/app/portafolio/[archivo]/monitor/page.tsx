@@ -452,9 +452,14 @@ export default function MonitorPage() {
 
   useEffect(() => {
     load();
-    const t = setInterval(load, REFRESH_MS);
-    return () => { clearInterval(t); if (flashTimer.current) clearTimeout(flashTimer.current); };
+    return () => { if (flashTimer.current) clearTimeout(flashTimer.current); };
   }, [load]);
+
+  useEffect(() => {
+    if (!mercadoAbierto) return;            // mercado cerrado → sin polling
+    const t = setInterval(load, REFRESH_MS);
+    return () => clearInterval(t);
+  }, [load, mercadoAbierto]);
 
   useEffect(() => {
     getDashboard(archivo).then(d => { setDesviacion(d.desviacion_composicion); setDisparoRebalanceo(d.disparo_rebalanceo); }).catch(() => {});
@@ -464,12 +469,13 @@ export default function MonitorPage() {
   // último dato recibido con éxito. Es honesto con el ciclo real del
   // navegador (no simula un ciclo del backend que el frontend no conoce).
   useEffect(() => {
+    if (!mercadoAbierto) { setProgress(0); return; }
     const t = setInterval(() => {
       const transcurrido = Date.now() - lastLoadRef.current;
       setProgress(Math.min(100, (transcurrido / REFRESH_MS) * 100));
     }, 100);
     return () => clearInterval(t);
-  }, []);
+  }, [mercadoAbierto]);
 
   if (loading) return <div className="min-h-screen flex items-center justify-center" style={{ background: "var(--bg)", color: "var(--text-3)", fontSize: 14 }}>Cargando...</div>;
 
@@ -566,16 +572,18 @@ export default function MonitorPage() {
                 </p>
               )}
             </div>
-            <div
-              title="Próximo refresh"
-              style={{
-                width: 30, height: 30, borderRadius: "50%", flexShrink: 0, position: "relative",
-                background: `conic-gradient(#0a84ff ${progress * 3.6}deg, rgba(255,255,255,0.08) 0deg)`,
-                transition: "background 100ms linear",
-              }}
-            >
-              <div style={{ position: "absolute", inset: 3, borderRadius: "50%", background: "var(--bg-elevated, #1c1c1e)" }} />
-            </div>
+            {mercadoAbierto && (
+              <div
+                title="Próximo refresh"
+                style={{
+                  width: 30, height: 30, borderRadius: "50%", flexShrink: 0, position: "relative",
+                  background: `conic-gradient(#0a84ff ${progress * 3.6}deg, rgba(255,255,255,0.08) 0deg)`,
+                  transition: "background 100ms linear",
+                }}
+              >
+                <div style={{ position: "absolute", inset: 3, borderRadius: "50%", background: "var(--bg-elevated, #1c1c1e)" }} />
+              </div>
+            )}
           </div>
         </GlassPanel>
       )}
