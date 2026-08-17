@@ -43,9 +43,13 @@ export default function AnalistaPage() {
       .then(d => {
         setData(d);
         if (motivo === "rebalanceo") {
-          const primero: Msg = { role: "user", content: "Vengo desde Seguimiento: mi portafolio se desvió de la meta." };
-          setMsgs([primero]);
-          enviarHistorial([primero]);
+          if (isDemo) {
+            setMsgs([{ role: "assistant", content: previsualizarRebalanceo(d) }]);
+          } else {
+            const primero: Msg = { role: "user", content: "Vengo desde Seguimiento: mi portafolio se desvió de la meta." };
+            setMsgs([primero]);
+            enviarHistorial([primero]);
+          }
         } else {
           setMsgs([{ role: "assistant", content: `Hola 👋 Soy Atom. Te ayudo a construir una propuesta de inversión personalizada o a ajustar tu portafolio. Para empezar, cuéntame: ¿qué te gustaría lograr con esta inversión?` }]);
         }
@@ -240,6 +244,27 @@ export default function AnalistaPage() {
 
       </>
   );
+}
+
+// Vista previa del análisis de rebalanceo para la cuenta demo. Se compone con
+// datos ya cargados por getDashboard (disparo_rebalanceo, desviacion_composicion)
+// -- nunca llama al modelo, así que no tiene costo ni depende de la API real,
+// y se mantiene correcta sola si los datos del demo cambian.
+function previsualizarRebalanceo(d: DashboardData): string {
+  const disparo = d.disparo_rebalanceo;
+  const motivoTxt = disparo?.motivo === "drawdown" ? "el drawdown" : "la volatilidad";
+
+  const activos = Object.entries(d.desviacion_composicion?.activos_desviados ?? {});
+  const detalleActivos = activos.length
+    ? activos.map(([t, pp]) => `${t} ${pp > 0 ? "+" : ""}${pp.toFixed(1)}pp`).join(", ")
+    : null;
+
+  let texto = disparo?.disparar
+    ? `Revisé tu Seguimiento: ${motivoTxt} real de tu portafolio lleva ${disparo.dias_fuera_de_rango} días seguidos fuera de lo que se esperaba`
+    : "Revisé tu Seguimiento: tu portafolio se desvió de la meta";
+  if (detalleActivos) texto += `, y la composición también se corrió de la meta (${detalleActivos})`;
+  texto += `. En una cuenta real, aquí te preguntaría por tu situación actual y armaría una propuesta de rebalanceo ajustada a tu perfil ${d.portafolio.perfil}.\n\nEste es un adelanto de cómo se vería esa conversación — en modo demo el Analista es de solo lectura, así que no puedo iniciar una nueva de verdad.`;
+  return texto;
 }
 
 // Extrae un objeto JSON de un texto (el analista a veces lo envuelve en texto)
