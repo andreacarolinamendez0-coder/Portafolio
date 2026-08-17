@@ -3223,6 +3223,15 @@ def _armar_aporte_desde_form(data, composicion, activos_fuera_meta=None):
         aporte["trm_real"] = trm_real  # solo trazabilidad, no calcula
     return aporte, None
 
+def _recomputar_historico(archivo):
+    """Auto-recompute: tras editar/eliminar un aporte o venta, reconstruye el
+    histórico desde las transacciones actuales (los puntos guardados son
+    congelados; sin esto quedan viejos). ~100 ms."""
+    try:
+        import backfill_historico
+        backfill_historico.recomputar(archivo)
+    except Exception as e:
+        print(f"⚠️ auto-recompute histórico falló ({archivo}): {e}")
 
 @app.route("/api/seguimiento/<archivo>", methods=["GET", "POST"])
 def api_seguimiento(archivo):
@@ -3246,6 +3255,7 @@ def api_seguimiento(archivo):
             if err:
                 return err
             guardar_aporte(archivo, aporte)
+            _recomputar_historico(archivo)
             portafolio = leer_portafolio(archivo)
         except Exception as e:
             print(f"❌ api_seguimiento error: {e}")
@@ -3377,6 +3387,7 @@ def api_seguimiento_aporte(archivo, aporte_id):
     if request.method == "DELETE":
         if not eliminar_aporte(archivo, aporte_id):
             return jsonify({"error": "Aporte no encontrado"}), 404
+        _recomputar_historico(archivo)
         return jsonify({"ok": True})
 
     # PUT — editar: recalcula con la TRM oficial, igual que un registro.
@@ -3391,6 +3402,7 @@ def api_seguimiento_aporte(archivo, aporte_id):
             return err
         if not editar_aporte(archivo, aporte_id, campos):
             return jsonify({"error": "Aporte no encontrado"}), 404
+        _recomputar_historico(archivo)
         return jsonify({"ok": True})
     except SaldoInsuficiente as e:
         return jsonify({"error": str(e)}), 400
@@ -3529,6 +3541,7 @@ def api_ventas(archivo):
         if err:
             return err
         guardar_venta(archivo, venta)
+        _recomputar_historico(archivo)
         return jsonify({"ok": True})
     except (PosicionInsuficiente, SaldoInsuficiente) as e:
         return jsonify({"error": str(e)}), 400
@@ -3547,6 +3560,7 @@ def api_ventas_una(archivo, venta_id):
         if request.method == "DELETE":
             if not eliminar_venta(archivo, venta_id):
                 return jsonify({"error": "Venta no encontrada"}), 404
+            _recomputar_historico(archivo)
             return jsonify({"ok": True})
         # PUT
         data = request.get_json(silent=True) or {}
@@ -3555,6 +3569,7 @@ def api_ventas_una(archivo, venta_id):
             return err
         if not editar_venta(archivo, venta_id, venta):
             return jsonify({"error": "Venta no encontrada"}), 404
+        _recomputar_historico(archivo)
         return jsonify({"ok": True})
     except (PosicionInsuficiente, SaldoInsuficiente) as e:
         return jsonify({"error": str(e)}), 400
