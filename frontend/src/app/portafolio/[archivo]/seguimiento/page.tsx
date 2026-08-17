@@ -12,6 +12,7 @@ import { AvisoSeguimiento } from "@/components/ui/aviso-seguimiento";
 import { ComposicionComparada } from "@/components/ui/composicion-comparada";
 import { TablaFinancieraActivos } from "@/components/ui/tabla-financiera-activos";
 import { mostrarMonto, type Divisa } from "@/lib/divisas";
+import { useIsDemo, MENSAJE_DEMO } from "@/lib/useIsDemo";
 
 const COLOR_COMPRA = "#0071e3";
 const COLOR_VENTA  = "#ff9f0a";
