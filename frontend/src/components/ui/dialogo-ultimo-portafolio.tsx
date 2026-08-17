@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { LogoMark } from "@/components/ui/logo";
 import { eliminarPortafolio, eliminarCuenta } from "@/lib/api";
+import { useIsDemo, MENSAJE_DEMO } from "@/lib/useIsDemo";
 
 interface Props {
   archivo: string;           // el portafolio a eliminar
@@ -12,6 +13,7 @@ interface Props {
 
 export function DialogoUltimoPortafolio({ archivo, onCancelar }: Props) {
   const router = useRouter();
+  const isDemo = useIsDemo();
   const [ocupado, setOcupado] = useState(false);
 
   async function eliminarPort() {
@@ -50,13 +52,18 @@ export function DialogoUltimoPortafolio({ archivo, onCancelar }: Props) {
         <p style={{ color: "var(--text-2)", fontSize: "0.9rem", lineHeight: 1.6, margin: 0 }}>
           Este es tu <strong style={{ color: "var(--text)" }}>único portafolio</strong>. Si lo eliminas, volverás a empezar el onboarding. Y si eliminas tu cuenta… me pondré triste 🥺
         </p>
+        {isDemo && (
+          <p style={{ color: "#4da3ff", fontSize: 12, margin: "14px 0 0" }}>{MENSAJE_DEMO}</p>
+        )}
         <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 22 }}>
-          <button onClick={eliminarPort} disabled={ocupado}
-            style={{ padding: 12, borderRadius: 12, border: "none", background: "#0071e3", color: "#fff", fontSize: 14, fontWeight: 500, fontFamily: "inherit", cursor: ocupado ? "default" : "pointer", opacity: ocupado ? 0.6 : 1 }}>
+          <button onClick={eliminarPort} disabled={ocupado || isDemo}
+            title={isDemo ? MENSAJE_DEMO : undefined}
+            style={{ padding: 12, borderRadius: 12, border: "none", background: "#0071e3", color: "#fff", fontSize: 14, fontWeight: 500, fontFamily: "inherit", cursor: (ocupado || isDemo) ? "default" : "pointer", opacity: (ocupado || isDemo) ? 0.6 : 1 }}>
             Eliminar el portafolio
           </button>
-          <button onClick={eliminarCta} disabled={ocupado}
-            style={{ padding: 12, borderRadius: 12, background: "none", border: "1px solid rgba(255,69,58,0.35)", color: "#ff6961", fontSize: 14, fontWeight: 500, fontFamily: "inherit", cursor: ocupado ? "default" : "pointer", opacity: ocupado ? 0.6 : 1 }}>
+          <button onClick={eliminarCta} disabled={ocupado || isDemo}
+            title={isDemo ? MENSAJE_DEMO : undefined}
+            style={{ padding: 12, borderRadius: 12, background: "none", border: "1px solid rgba(255,69,58,0.35)", color: "#ff6961", fontSize: 14, fontWeight: 500, fontFamily: "inherit", cursor: (ocupado || isDemo) ? "default" : "pointer", opacity: (ocupado || isDemo) ? 0.6 : 1 }}>
             Eliminar mi cuenta
           </button>
           <button onClick={onCancelar} disabled={ocupado}

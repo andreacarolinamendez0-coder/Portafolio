@@ -4,6 +4,7 @@ import { GlowPanel } from "@/components/ui/glow-panel";
 import { GlassPanel } from "@/components/ui/glass-panel";
 import { LiquidButton } from "@/components/ui/liquid-glass-button";
 import { ReporteTarjetas, type DatosReporte } from "@/components/ui/reporte-tarjetas";
+import { useIsDemo, MENSAJE_DEMO } from "@/lib/useIsDemo";
 
 export interface Propuesta {
   pesos: Record<string, number>;
@@ -40,6 +41,7 @@ interface Props {
 }
 
 export function PropuestaEditor({ propuesta, tieneInv, onAplicar, aplicando, msgEstado }: Props) {
+  const isDemo = useIsDemo();
   const [pesos, setPesos] = useState<Record<string, number>>(
     Object.fromEntries(Object.entries(propuesta.pesos).map(([k, v]) => [k, +(v * 100).toFixed(1)]))
   );
@@ -181,7 +183,7 @@ export function PropuestaEditor({ propuesta, tieneInv, onAplicar, aplicando, msg
         Propuesta optimizada · {propuesta.perfil.toUpperCase()}
       </p>
       <p style={{ color: "var(--text-3)", fontSize: 12, margin: "0 0 16px" }}>
-        Edita los pesos, quita o agrega activos, y recalcula las proyecciones antes de aplicar.
+        {isDemo ? MENSAJE_DEMO + " — el Analista es de solo lectura en esta cuenta." : "Edita los pesos, quita o agrega activos, y recalcula las proyecciones antes de aplicar."}
       </p>
 
       <p style={{ color: "#ff9f0a", fontSize: 11.5, lineHeight: 1.5, margin: "0 0 16px", padding: "9px 12px", background: "rgba(255,159,10,0.08)", border: "1px solid rgba(255,159,10,0.2)", borderRadius: 8 }}>
@@ -205,10 +207,11 @@ export function PropuestaEditor({ propuesta, tieneInv, onAplicar, aplicando, msg
             <input
               type="number" value={peso} min={0} max={100} step={0.1}
               onChange={e => cambiarPeso(ticker, e.target.value)}
+              disabled={isDemo}
               style={{ width: 64, background: "var(--bg-2)", border: "1px solid var(--glass-border)", borderRadius: 6, padding: "4px 8px", color: "var(--text)", fontSize: 13, textAlign: "right", fontVariantNumeric: "tabular-nums" }}
             />
             <span style={{ color: "var(--text-3)", fontSize: 12 }}>%</span>
-            <button onClick={() => quitar(ticker)} style={{ background: "rgba(255,69,58,0.1)", border: "1px solid rgba(255,69,58,0.2)", borderRadius: 6, padding: "3px 9px", cursor: "pointer", color: "#ff453a", fontSize: 12 }}>✕</button>
+            <button onClick={() => quitar(ticker)} disabled={isDemo} title={isDemo ? MENSAJE_DEMO : undefined} style={{ background: "rgba(255,69,58,0.1)", border: "1px solid rgba(255,69,58,0.2)", borderRadius: 6, padding: "3px 9px", cursor: isDemo ? "default" : "pointer", color: "#ff453a", fontSize: 12, opacity: isDemo ? 0.5 : 1 }}>✕</button>
           </div>
         );
       })}
@@ -228,14 +231,16 @@ export function PropuestaEditor({ propuesta, tieneInv, onAplicar, aplicando, msg
           <input
             type="text" value={nuevoTicker} placeholder="Ticker (ej: SCHD)"
             onChange={e => setNuevoTicker(e.target.value)}
+            disabled={isDemo}
             style={{ width: 150, background: "var(--bg-2)", border: "1px solid var(--glass-border)", borderRadius: 6, padding: "6px 10px", color: "var(--text)", fontSize: 13 }}
           />
           <input
             type="number" value={nuevoPeso} placeholder="%" min={0} max={100} step={0.1}
             onChange={e => setNuevoPeso(e.target.value)}
+            disabled={isDemo}
             style={{ width: 70, background: "var(--bg-2)", border: "1px solid var(--glass-border)", borderRadius: 6, padding: "6px 10px", color: "var(--text)", fontSize: 13, textAlign: "right" }}
           />
-          <LiquidButton onClick={agregarActivo} disabled={agregando} className="text-white font-semibold !px-5 !py-2">
+          <LiquidButton onClick={agregarActivo} disabled={agregando || isDemo} title={isDemo ? MENSAJE_DEMO : undefined} className="text-white font-semibold !px-5 !py-2">
             {agregando ? "..." : "Agregar"}
           </LiquidButton>
         </div>
@@ -244,7 +249,7 @@ export function PropuestaEditor({ propuesta, tieneInv, onAplicar, aplicando, msg
 
       {/* Recalcular proyecciones */}
       <div style={{ marginTop: 16 }}>
-        <LiquidButton onClick={recalcular} disabled={recalculando || !sumaOk} className="text-white font-semibold !px-8 !py-2.5">
+        <LiquidButton onClick={recalcular} disabled={recalculando || !sumaOk || isDemo} title={isDemo ? MENSAJE_DEMO : undefined} className="text-white font-semibold !px-8 !py-2.5">
           {recalculando ? "Calculando..." : "↻ Recalcular proyecciones"}
         </LiquidButton>
       </div>
@@ -269,11 +274,11 @@ export function PropuestaEditor({ propuesta, tieneInv, onAplicar, aplicando, msg
 
       <div style={{ marginTop: 16, display: "flex", gap: 10, flexWrap: "wrap" }}>
         {!tieneInv && (
-          <LiquidButton onClick={() => aplicar("reemplazar")} disabled={aplicando || !sumaOk} className="text-white font-semibold !px-8 !py-3">
+          <LiquidButton onClick={() => aplicar("reemplazar")} disabled={aplicando || !sumaOk || isDemo} title={isDemo ? MENSAJE_DEMO : undefined} className="text-white font-semibold !px-8 !py-3">
             {aplicando ? "Aplicando..." : "Aplicar a este portafolio"}
           </LiquidButton>
         )}
-        <LiquidButton onClick={() => aplicar("nuevo")} disabled={aplicando || !sumaOk} className="text-white font-semibold !px-8 !py-3">
+        <LiquidButton onClick={() => aplicar("nuevo")} disabled={aplicando || !sumaOk || isDemo} title={isDemo ? MENSAJE_DEMO : undefined} className="text-white font-semibold !px-8 !py-3">
           {aplicando ? "Aplicando..." : "Crear portafolio adicional"}
         </LiquidButton>
       </div>

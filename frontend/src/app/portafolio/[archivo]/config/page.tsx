@@ -11,6 +11,7 @@ import { PageIntro } from "@/components/ui/page-intro";
 import { desactivarPortafolio } from "@/lib/api";
 import { eliminarPortafolio } from "@/lib/api";
 import { DialogoUltimoPortafolio } from "@/components/ui/dialogo-ultimo-portafolio";
+import { useIsDemo, MENSAJE_DEMO } from "@/lib/useIsDemo";
 
 
 
@@ -24,6 +25,7 @@ export default function ConfigPage() {
   const params  = useParams();
   const router  = useRouter();
   const archivo = params.archivo as string;
+  const isDemo  = useIsDemo();
 
   const [nombre, setNombre]   = useState("");
   const [activo, setActivo]   = useState(false);
@@ -120,11 +122,14 @@ export default function ConfigPage() {
               value={nombre}
               onChange={e => setNombre(e.target.value)}
               maxLength={60}
+              disabled={isDemo}
                             style={{ flex: 1, minWidth: 0, boxSizing: "border-box", background: "var(--bg-2)", border: "1px solid var(--glass-border)", borderRadius: 10, color: "var(--text)", fontSize: 14, padding: "11px 14px", fontFamily: "inherit", outline: "none" }}
             />
             <button
               onClick={guardarNombre}
-              style={{ padding: "11px 20px", borderRadius: 10, border: "none", background: "#0071e3", color: "#fff", fontSize: 14, fontWeight: 500, fontFamily: "inherit", cursor: "pointer" }}
+              disabled={isDemo}
+              title={isDemo ? MENSAJE_DEMO : undefined}
+              style={{ padding: "11px 20px", borderRadius: 10, border: "none", background: "#0071e3", color: "#fff", fontSize: 14, fontWeight: 500, fontFamily: "inherit", cursor: isDemo ? "default" : "pointer", opacity: isDemo ? 0.45 : 1 }}
             >
               Guardar
             </button>
@@ -141,13 +146,16 @@ export default function ConfigPage() {
             {DIVISAS.map(d => (
               <button
                 key={d.code}
-                onClick={() => guardarDivisa(d.code)}
+                onClick={() => !isDemo && guardarDivisa(d.code)}
+                disabled={isDemo}
+                title={isDemo ? MENSAJE_DEMO : undefined}
                 style={{
                   display: "flex", alignItems: "center", justifyContent: "space-between",
-                  padding: "12px 16px", borderRadius: 10, cursor: "pointer", fontSize: 14,
+                  padding: "12px 16px", borderRadius: 10, cursor: isDemo ? "default" : "pointer", fontSize: 14,
                   background: divisa === d.code ? "rgba(0,113,227,0.12)" : "transparent",
                   border: divisa === d.code ? "1px solid rgba(0,113,227,0.4)" : "1px solid rgba(255,255,255,0.08)",
                   color: "#f5f5f7", textAlign: "left",
+                  opacity: isDemo ? 0.5 : 1,
                 }}
               >
                 <span><strong>{d.symbol}</strong> &nbsp; {d.label}</span>
@@ -176,12 +184,14 @@ export default function ConfigPage() {
         setMsg({ text: e instanceof Error ? e.message : "Error", ok: false });
       }
     }}
+    disabled={isDemo}
+    title={isDemo ? MENSAJE_DEMO : undefined}
     className="text-white font-semibold !px-12 !py-3.5 text-base"
   >
     Detener monitoreo
   </LiquidButton>
 ) : (
-  <LiquidButton onClick={activar} className="text-white font-semibold !px-12 !py-3.5 text-base">
+  <LiquidButton onClick={activar} disabled={isDemo} title={isDemo ? MENSAJE_DEMO : undefined} className="text-white font-semibold !px-12 !py-3.5 text-base">
     Activar para monitoreo
   </LiquidButton>
 )}
@@ -195,13 +205,14 @@ export default function ConfigPage() {
           </p>
           <button
             onClick={eliminar}
-            disabled={borrando}
+            disabled={borrando || isDemo}
+            title={isDemo ? MENSAJE_DEMO : undefined}
             style={{
-              padding: "11px 24px", borderRadius: 12, cursor: borrando ? "default" : "pointer",
+              padding: "11px 24px", borderRadius: 12, cursor: (borrando || isDemo) ? "default" : "pointer",
               fontFamily: "inherit", fontSize: 14, fontWeight: 500,
               background: "rgba(255,69,58,0.1)", color: "#ff453a",
               border: "1px solid rgba(255,69,58,0.3)",
-              opacity: borrando ? 0.5 : 1,
+              opacity: (borrando || isDemo) ? 0.5 : 1,
             }}
           >
             {borrando ? "Eliminando..." : "Eliminar este portafolio"}

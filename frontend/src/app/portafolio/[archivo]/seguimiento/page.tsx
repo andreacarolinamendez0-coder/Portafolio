@@ -11,6 +11,7 @@ import { PageIntro } from "@/components/ui/page-intro";
 import { AvisoSeguimiento } from "@/components/ui/aviso-seguimiento";
 import { ComposicionComparada } from "@/components/ui/composicion-comparada";
 import { TablaFinancieraActivos } from "@/components/ui/tabla-financiera-activos";
+import { useIsDemo, MENSAJE_DEMO } from "@/lib/useIsDemo";
 
 type Mov =
   | (SeguimientoData["aportes"][number] & { _tipo: "compra" })
@@ -26,7 +27,8 @@ export default function SeguimientoPage() {
   const params  = useParams();
   const router  = useRouter();
   const archivo = params.archivo as string;
-  
+  const isDemo  = useIsDemo();
+
 
   const [data, setData]       = useState<SeguimientoData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -285,18 +287,18 @@ export default function SeguimientoPage() {
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12, marginBottom: 12 }}>
                 <div>
                   <label style={s.label}>Fecha</label>
-                  <input type="date" value={depFecha} onChange={e => setDepFecha(e.target.value)} style={s.input} />
+                  <input type="date" value={depFecha} onChange={e => setDepFecha(e.target.value)} disabled={isDemo} style={s.input} />
                 </div>
                 <div>
                   <label style={s.label}>Monto depositado (COP)</label>
-                  <input className="no-spin" type="number" step="1" placeholder="Ej: 4000000" value={depCop} onChange={e => setDepCop(e.target.value)} style={s.input} />
+                  <input className="no-spin" type="number" step="1" placeholder="Ej: 4000000" value={depCop} onChange={e => setDepCop(e.target.value)} disabled={isDemo} style={s.input} />
                 </div>
                 <div>
                   <label style={s.label}>TRM de compra de USD</label>
-                  <input className="no-spin" type="number" step="0.01" placeholder="Ej: 4050" value={depTrm} onChange={e => setDepTrm(e.target.value)} style={s.input} />
+                  <input className="no-spin" type="number" step="0.01" placeholder="Ej: 4050" value={depTrm} onChange={e => setDepTrm(e.target.value)} disabled={isDemo} style={s.input} />
                 </div>
               </div>
-              <LiquidButton onClick={crearDep} className="text-white font-semibold !px-8 !py-2.5 text-sm">Registrar depósito</LiquidButton>
+              <LiquidButton onClick={crearDep} disabled={isDemo} title={isDemo ? MENSAJE_DEMO : undefined} className="text-white font-semibold !px-8 !py-2.5 text-sm">Registrar depósito</LiquidButton>
 
               {data.depositos.length > 0 && (
                 <div style={{ overflowX: "auto", marginTop: 14 }}>
@@ -332,8 +334,8 @@ export default function SeguimientoPage() {
                               <td style={s.td}>${d.monto_usd.toLocaleString()}</td>
                               <td style={s.td}>{d.tipo === "apertura" ? <span style={{ color: "#6e6e73" }}>apertura</span> : "depósito"}</td>
                               <td style={{ ...s.td, whiteSpace: "nowrap" }}>
-                                <button onClick={() => empezarEdicionDep(d)} title="Editar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, padding: "2px 4px", lineHeight: 1, opacity: 0.7 }}>🖊</button>
-                                <button onClick={() => eliminarDep(d)} title="Eliminar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, padding: "2px 4px", lineHeight: 1, opacity: 0.7 }}>🗑</button>
+                                <button onClick={() => empezarEdicionDep(d)} disabled={isDemo} title={isDemo ? MENSAJE_DEMO : "Editar"} style={{ background: "none", border: "none", cursor: isDemo ? "default" : "pointer", fontSize: 13, padding: "2px 4px", lineHeight: 1, opacity: isDemo ? 0.3 : 0.7 }}>🖊</button>
+                                <button onClick={() => eliminarDep(d)} disabled={isDemo} title={isDemo ? MENSAJE_DEMO : "Eliminar"} style={{ background: "none", border: "none", cursor: isDemo ? "default" : "pointer", fontSize: 13, padding: "2px 4px", lineHeight: 1, opacity: isDemo ? 0.3 : 0.7 }}>🗑</button>
                               </td>
                             </>
                           )}
@@ -352,11 +354,12 @@ export default function SeguimientoPage() {
                 <h3 style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>REGISTRAR MOVIMIENTO</h3>
                 <div style={{ display: "inline-flex", background: "var(--bg-2)", borderRadius: 980, padding: 3 }}>
                   {(["compra", "venta"] as const).map(mo => (
-                    <button key={mo} onClick={() => setModo(mo)} style={{
-                      border: "none", cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 600,
+                    <button key={mo} onClick={() => !isDemo && setModo(mo)} disabled={isDemo} title={isDemo ? MENSAJE_DEMO : undefined} style={{
+                      border: "none", cursor: isDemo ? "default" : "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 600,
                       padding: "5px 16px", borderRadius: 980, textTransform: "capitalize",
                       background: modo === mo ? (mo === "venta" ? "#ff453a" : "#077a16") : "transparent",
                       color: modo === mo ? "#fff" : "var(--text-3)",
+                      opacity: isDemo ? 0.5 : 1,
                     }}>{mo}</button>
                   ))}
                 </div>
@@ -365,7 +368,7 @@ export default function SeguimientoPage() {
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12, marginBottom: 12 }}>
                 <div>
                   <label style={{ fontSize: "0.85rem", color: "#a1a1a6" }}>Activo</label>
-                  <select value={activo} onChange={e => setActivo(e.target.value)} style={{ background: "var(--bg-2)", border: "1px solid rgba(255,255,255,0.08)", color: "var(--text)", padding: "8px 12px", borderRadius: 8, width: "100%", boxSizing: "border-box" }}>
+                  <select value={activo} onChange={e => setActivo(e.target.value)} disabled={isDemo} style={{ background: "var(--bg-2)", border: "1px solid rgba(255,255,255,0.08)", color: "var(--text)", padding: "8px 12px", borderRadius: 8, width: "100%", boxSizing: "border-box" }}>
                     <option value="">Selecciona...</option>
                     {modo === "compra"
                       ? <>{data.pendientes.map(p => <option key={p.activo} value={p.activo}>{p.activo} — pendiente</option>)}
@@ -375,31 +378,33 @@ export default function SeguimientoPage() {
                 </div>
                 <div>
                   <label style={s.label}>Fecha</label>
-                  <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} style={s.input} />
+                  <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} disabled={isDemo} style={s.input} />
                 </div>
 
                 <div>
                   <label style={s.label}>{modo === "compra" ? "Monto de la compra (USD)" : "Monto de la venta (USD)"}</label>
-                  <input className="no-spin" type="number" step="0.01" placeholder="Ej: 54.81" value={montoUsd} onChange={e => setMontoUsd(e.target.value)} style={s.input} />
+                  <input className="no-spin" type="number" step="0.01" placeholder="Ej: 54.81" value={montoUsd} onChange={e => setMontoUsd(e.target.value)} disabled={isDemo} style={s.input} />
                 </div>
-                
+
                 <div>
                   <label style={s.label}>{modo === "compra" ? "Fracciones compradas" : "Fracciones a vender"}</label>
-                  <input className="no-spin" type="number" step="0.0001" placeholder="Ej: 0.2523" value={fracciones} onChange={e => setFracciones(e.target.value)} style={s.input} />
+                  <input className="no-spin" type="number" step="0.0001" placeholder="Ej: 0.2523" value={fracciones} onChange={e => setFracciones(e.target.value)} disabled={isDemo} style={s.input} />
                 </div>
                 <div>
                   <label style={s.label}>Comisión (USD, op.)</label>
-                  <input className="no-spin" type="number" step="0.01" placeholder="Vacío = 1%" value={comision} onChange={e => setComision(e.target.value)} style={s.input} />
+                  <input className="no-spin" type="number" step="0.01" placeholder="Vacío = 1%" value={comision} onChange={e => setComision(e.target.value)} disabled={isDemo} style={s.input} />
                 </div>
               </div>
               <div style={{ padding: "10px 14px", background: "rgba(0,113,227,0.06)", border: "1px solid rgba(0,113,227,0.15)", borderRadius: 10, marginBottom: 14 }}>
                 <p style={{ color: "#4da3ff", fontSize: 12, margin: 0 }}>
-                  {modo === "compra"
+                  {isDemo
+                    ? MENSAJE_DEMO
+                    : modo === "compra"
                     ? "El precio por acción y el COP se calculan con la TRM oficial del día. La TRM real de tus dólares va en cada depósito."
                     : "El producto de la venta entra a tu caja. La ganancia realizada se calcula contra tu costo promedio, con la TRM oficial del día."}
                 </p>
               </div>
-              <LiquidButton onClick={registrar} className="text-white font-semibold !px-10 !py-3">{modo === "compra" ? "Registrar compra" : "Registrar venta"}</LiquidButton>
+              <LiquidButton onClick={registrar} disabled={isDemo} title={isDemo ? MENSAJE_DEMO : undefined} className="text-white font-semibold !px-10 !py-3">{modo === "compra" ? "Registrar compra" : "Registrar venta"}</LiquidButton>
               <style>{`
                 .no-spin::-webkit-inner-spin-button,
                 .no-spin::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
@@ -461,8 +466,8 @@ export default function SeguimientoPage() {
                                 <td style={{ ...s.td, color: esVenta ? "#30d158" : "var(--text)" }}>{esVenta ? `+$${totalMov.toFixed(2)}` : `-$${totalMov.toFixed(2)}`}</td>
                                 <td style={s.td}>${m.trm_dia.toLocaleString()}</td>
                                 <td style={{ ...s.td, whiteSpace: "nowrap" }}>
-                                  <button onClick={() => empezarEdicion(m)} title="Editar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, padding: "2px 4px", lineHeight: 1, opacity: 0.7 }}>🖊</button>
-                                  <button onClick={() => eliminarMov(m)} title="Eliminar" style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, padding: "2px 4px", lineHeight: 1, opacity: 0.7 }}>🗑</button>
+                                  <button onClick={() => empezarEdicion(m)} disabled={isDemo} title={isDemo ? MENSAJE_DEMO : "Editar"} style={{ background: "none", border: "none", cursor: isDemo ? "default" : "pointer", fontSize: 13, padding: "2px 4px", lineHeight: 1, opacity: isDemo ? 0.3 : 0.7 }}>🖊</button>
+                                  <button onClick={() => eliminarMov(m)} disabled={isDemo} title={isDemo ? MENSAJE_DEMO : "Eliminar"} style={{ background: "none", border: "none", cursor: isDemo ? "default" : "pointer", fontSize: 13, padding: "2px 4px", lineHeight: 1, opacity: isDemo ? 0.3 : 0.7 }}>🗑</button>
                                 </td>
                               </>
                             )}

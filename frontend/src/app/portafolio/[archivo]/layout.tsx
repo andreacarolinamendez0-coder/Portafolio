@@ -4,12 +4,14 @@ import { useParams, usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion, useMotionValue, useSpring } from "framer-motion";
 import { LogoMark } from "@/components/ui/logo";
-import { getConfig, authLogout, authMe } from "@/lib/api";
+import { getConfig, authLogout } from "@/lib/api";
 import { SelectorPortafolios } from "@/components/ui/selector-portafolios";
 import { NuevoPortafolioDialog } from "@/components/portfolio/nuevo-portafolio-dialog";
 import { AtomChatProvider } from "@/components/providers/atom-chat-context";
+import { AuthProvider, useAuthState } from "@/components/providers/auth-context";
 import { AsistenteFlotante } from "@/components/ui/asistente-flotante";
 import { CommandPalette } from "@/components/ui/command-palette";
+import { DemoBanner } from "@/components/ui/demo-banner";
 
 const TABS = [
   { id: "dashboard",   sub: "",             label: "Dashboard" },
@@ -21,22 +23,29 @@ const TABS = [
 ];
 
 export default function PortafolioLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <AuthProvider>
+      <PortafolioLayoutInner>{children}</PortafolioLayoutInner>
+    </AuthProvider>
+  );
+}
+
+function PortafolioLayoutInner({ children }: { children: React.ReactNode }) {
   const params   = useParams();
   const pathname = usePathname();
   const router   = useRouter();
   const archivo  = params.archivo as string;
+  const { esAdmin } = useAuthState();
 
   const [info, setInfo] = useState<{ nombre: string; perfil: string; propietario: string; fecha_inicio: string } | null>(null);
   const [selectorAbierto, setSelectorAbierto] = useState(false);
   const [crearAbierto, setCrearAbierto] = useState(false);
-  const [esAdmin, setEsAdmin] = useState(false);
 
   useEffect(() => {
     if (typeof window !== "undefined" && archivo) {
       localStorage.setItem("ultimoPortafolio", archivo);
     }
     getConfig(archivo).then(d => setInfo({ nombre: d.nombre, perfil: d.perfil, propietario: d.propietario, fecha_inicio: d.fecha_inicio })).catch(() => {});
-    authMe().then(me => setEsAdmin(me.es_admin)).catch(() => {});
   }, [archivo]);
 
     useEffect(() => {
@@ -149,6 +158,8 @@ export default function PortafolioLayout({ children }: { children: React.ReactNo
           </div>
         <style>{`@media (max-width: 560px) { .nav-tabs { justify-content: center; } }`}</style>
       </header>
+
+      <DemoBanner />
 
       {/* Contenido de la pestaña */}
       <main style={{ position: "relative", zIndex: 1, maxWidth: 1100, margin: "0 auto", padding: "24px" }}>

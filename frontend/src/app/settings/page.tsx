@@ -12,6 +12,7 @@ import { GlassBackground } from "@/components/ui/glass-background";
 import { GlassPanel } from "@/components/ui/glass-panel";
 import { LiquidButton } from "@/components/ui/liquid-glass-button";
 import { GlowPanel } from "@/components/ui/glow-panel";
+import { MENSAJE_DEMO } from "@/lib/useIsDemo";
 
 export default function SettingsPage() {
   const router = useRouter();
@@ -21,6 +22,11 @@ export default function SettingsPage() {
   const [msgProfile, setMsgProfile] = useState({ text: "", ok: false });
   const [msgPw, setMsgPw]       = useState({ text: "", ok: false });
   const [loading, setLoading]   = useState(true);
+  // Esta pagina vive fuera de /portafolio/[archivo], asi que no tiene el
+  // AuthProvider del layout de portafolio -- se deriva isDemo del mismo
+  // fetch de authMe()/getProfile() que la pagina ya hacia, sin duplicar
+  // logica de sesion.
+  const isDemo = profile.username === "demo";
 
   useEffect(() => {
     authMe().then(async me => {
@@ -82,11 +88,11 @@ export default function SettingsPage() {
             </div>
             <div className="flex flex-col gap-2">
               <Label style={{ color: "#6e6e73", fontSize: "0.75rem" }}>Email</Label>
-              <Input type="email" value={profile.email} onChange={e => setProfile(p => ({ ...p, email: e.target.value }))} placeholder="tu@email.com" style={inputStyle} />
+              <Input type="email" value={profile.email} onChange={e => setProfile(p => ({ ...p, email: e.target.value }))} placeholder="tu@email.com" disabled={isDemo} style={inputStyle} />
             </div>
             <div className="flex flex-col gap-2">
               <Label style={{ color: "#6e6e73", fontSize: "0.75rem" }}>Telegram Chat ID</Label>
-              <Input value={profile.telegram_chat_id} onChange={e => setProfile(p => ({ ...p, telegram_chat_id: e.target.value }))} placeholder="ej: 3002443898" style={inputStyle} />
+              <Input value={profile.telegram_chat_id} onChange={e => setProfile(p => ({ ...p, telegram_chat_id: e.target.value }))} placeholder="ej: 3002443898" disabled={isDemo} style={inputStyle} />
               <div style={{ marginTop: 8, padding: "12px 14px", background: "rgba(0,113,227,0.06)", border: "1px solid rgba(0,113,227,0.15)", borderRadius: 10 }}>
                 <p style={{ fontSize: 12, color: "#4da3ff", fontWeight: 500, margin: "0 0 6px" }}>📲 Cómo activar las alertas de Telegram</p>
                 {["Abre Telegram y busca @Miportafolio_andrea_bot","Presiona Iniciar / Start","El bot te enviará tu Chat ID automáticamente","Pega ese número aquí arriba y guarda"].map((s, i) => (
@@ -96,10 +102,11 @@ export default function SettingsPage() {
             </div>
           </div>
           <div style={{ marginTop: 20 }}>
-            <LiquidButton onClick={saveProfile} className="text-white font-semibold !px-8 !py-3 w-full">
+            <LiquidButton onClick={saveProfile} disabled={isDemo} title={isDemo ? MENSAJE_DEMO : undefined} className="text-white font-semibold !px-8 !py-3 w-full">
               Guardar cambios
             </LiquidButton>
           </div>
+          {isDemo && <p style={{ marginTop: 10, fontSize: 12, color: "#4da3ff" }}>{MENSAJE_DEMO}</p>}
           {msgProfile.text && (
             <p style={{ marginTop: 10, fontSize: 13, color: msgProfile.ok ? "#30d158" : "#ff453a" }}>
               {msgProfile.ok ? "✅" : "❌"} {msgProfile.text}
@@ -113,18 +120,19 @@ export default function SettingsPage() {
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <div className="flex flex-col gap-2">
               <Label style={{ color: "#6e6e73", fontSize: "0.75rem" }}>Contraseña actual</Label>
-              <Input type="password" value={curPw} onChange={e => setCurPw(e.target.value)} placeholder="••••••••" style={inputStyle} />
+              <Input type="password" value={curPw} onChange={e => setCurPw(e.target.value)} placeholder="••••••••" disabled={isDemo} style={inputStyle} />
             </div>
             <div className="flex flex-col gap-2">
               <Label style={{ color: "#6e6e73", fontSize: "0.75rem" }}>Nueva contraseña</Label>
-              <Input type="password" value={newPw} onChange={e => setNewPw(e.target.value)} placeholder="Mínimo 6 caracteres" style={inputStyle} />
+              <Input type="password" value={newPw} onChange={e => setNewPw(e.target.value)} placeholder="Mínimo 6 caracteres" disabled={isDemo} style={inputStyle} />
             </div>
           </div>
           <div style={{ marginTop: 20 }}>
-            <LiquidButton onClick={changePassword} className="text-white font-semibold !px-8 !py-3 w-full">
+            <LiquidButton onClick={changePassword} disabled={isDemo} title={isDemo ? MENSAJE_DEMO : undefined} className="text-white font-semibold !px-8 !py-3 w-full">
               Cambiar contraseña
             </LiquidButton>
           </div>
+          {isDemo && <p style={{ marginTop: 10, fontSize: 12, color: "#4da3ff" }}>{MENSAJE_DEMO}</p>}
           {msgPw.text && (
             <p style={{ marginTop: 10, fontSize: 13, color: msgPw.ok ? "#30d158" : "#ff453a" }}>
               {msgPw.ok ? "✅" : "❌"} {msgPw.text}

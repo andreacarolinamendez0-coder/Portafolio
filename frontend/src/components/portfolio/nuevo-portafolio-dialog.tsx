@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { crearPortafolio, getPortafolios, authMe } from "@/lib/api";
 import { LiquidButton } from "@/components/ui/liquid-glass-button";
+import { useIsDemo, MENSAJE_DEMO } from "@/lib/useIsDemo";
 
 interface Props {
   onClose:   () => void;
@@ -15,6 +16,7 @@ interface Props {
 
 export function NuevoPortafolioDialog({ onClose, onCreated }: Props) {
   const router = useRouter();
+  const isDemo = useIsDemo();
   const [nombre, setNombre]           = useState("");
   const [propietario, setPropietario] = useState("");
   const [error, setError]             = useState("");
@@ -83,7 +85,7 @@ export function NuevoPortafolioDialog({ onClose, onCreated }: Props) {
             <Button type="button" variant="outline" onClick={onClose} style={{ borderColor: "rgba(255,255,255,0.1)", color: "#a1a1a6", padding: "4px 10px", background: "#1a1a1a" }}>
               Cancelar
             </Button>
-            <LiquidButton type="submit" disabled={loading || !nombre.trim() || !propietario.trim()} style={{padding: "4px 10px", opacity: loading ? 0.7 : 1 }}>
+            <LiquidButton type="submit" disabled={loading || isDemo || !nombre.trim() || !propietario.trim()} title={isDemo ? MENSAJE_DEMO : undefined} style={{padding: "4px 10px", opacity: loading ? 0.7 : 1 }}>
               {loading ? "Creando..." : "Crear portafolio"}
             </LiquidButton>
           </div>

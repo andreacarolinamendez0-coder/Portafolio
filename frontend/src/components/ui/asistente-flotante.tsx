@@ -5,12 +5,14 @@ import { GlassPanel } from "@/components/ui/glass-panel";
 import { LogoMark } from "@/components/ui/logo";
 import { LiquidButton } from "@/components/ui/liquid-glass-button";
 import { useAtomSend } from "@/components/providers/atom-chat-context";
+import { useIsDemo, MENSAJE_DEMO } from "@/lib/useIsDemo";
 
 // Presencia global de Atom: burbuja fija + panel de chat superpuesto, sin
 // navegar fuera de la pantalla actual. Comparte historial con bot/page.tsx
 // via useAtomSend -- es la MISMA conversación, no una copia aparte.
 export function AsistenteFlotante({ archivo }: { archivo: string }) {
   const { msgs, loading, send: enviar } = useAtomSend(archivo);
+  const isDemo = useIsDemo();
   const [abierto, setAbierto] = useState(false);
   const [input, setInput] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -55,7 +57,7 @@ export function AsistenteFlotante({ archivo }: { archivo: string }) {
           <div style={{ flex: 1, overflowY: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 10 }}>
             {msgs.length === 0 && (
               <p style={{ fontSize: 12.5, color: "var(--text-3)", textAlign: "center", margin: "40px 0" }}>
-                Pregúntame sobre tu portafolio, mercados o estrategias de inversión.
+                {isDemo ? "En modo demo, Atom es de solo lectura — no se pueden iniciar conversaciones nuevas." : "Pregúntame sobre tu portafolio, mercados o estrategias de inversión."}
               </p>
             )}
             {msgs.map((m, i) => (
@@ -88,11 +90,11 @@ export function AsistenteFlotante({ archivo }: { archivo: string }) {
                 value={input}
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={e => e.key === "Enter" && !e.shiftKey && send()}
-                placeholder="Escribe tu pregunta..."
-                disabled={loading}
+                placeholder={isDemo ? MENSAJE_DEMO : "Escribe tu pregunta..."}
+                disabled={loading || isDemo}
                 style={{ flex: 1, background: "none", border: "none", outline: "none", color: "var(--text)", fontSize: "0.82rem", fontFamily: "inherit", minWidth: 0 }}
               />
-              <LiquidButton onClick={send} disabled={loading || !input.trim()} className="text-white font-semibold !px-4 !py-1.5 !text-xs">Enviar</LiquidButton>
+              <LiquidButton onClick={send} disabled={loading || isDemo || !input.trim()} title={isDemo ? MENSAJE_DEMO : undefined} className="text-white font-semibold !px-4 !py-1.5 !text-xs">Enviar</LiquidButton>
             </div>
           </div>
         </GlassPanel>

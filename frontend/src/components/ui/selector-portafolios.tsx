@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { getPortafolios, eliminarPortafolio, eliminarCuenta, updateConfig, type PortafolioSummary } from "@/lib/api";
 import { DialogoUltimoPortafolio } from "@/components/ui/dialogo-ultimo-portafolio";
+import { useIsDemo, MENSAJE_DEMO } from "@/lib/useIsDemo";
 
 interface Props {
   abierto: boolean;
@@ -14,6 +15,7 @@ interface Props {
 
 export function SelectorPortafolios({ abierto, onCerrar, archivoActual, onCrear }: Props) {
   const router = useRouter();
+  const isDemo = useIsDemo();
   const [portafolios, setPortafolios] = useState<PortafolioSummary[]>([]);
   const [cargando, setCargando] = useState(true);
   const [borrando, setBorrando] = useState<string | null>(null);
@@ -166,17 +168,19 @@ export function SelectorPortafolios({ abierto, onCerrar, archivoActual, onCrear 
                                 }}>
                                   {p.perfil.toUpperCase()}
                                 </span>
-                                <button onClick={(e) => { e.stopPropagation(); setEditando(p.archivo); setNombreEdit(p.nombre); }} title="Renombrar"
-                                  style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-3)", fontSize: 14, lineHeight: 1, padding: 2, opacity: 0.6 }}
-                                  onMouseEnter={(e) => { e.currentTarget.style.color = "#4da3ff"; e.currentTarget.style.opacity = "1"; }}
-                                  onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-3)"; e.currentTarget.style.opacity = "0.6"; }}>🖊</button>
+                                <button onClick={(e) => { e.stopPropagation(); setEditando(p.archivo); setNombreEdit(p.nombre); }}
+                                  disabled={isDemo}
+                                  title={isDemo ? MENSAJE_DEMO : "Renombrar"}
+                                  style={{ background: "none", border: "none", cursor: isDemo ? "default" : "pointer", color: "var(--text-3)", fontSize: 14, lineHeight: 1, padding: 2, opacity: isDemo ? 0.3 : 0.6 }}
+                                  onMouseEnter={(e) => { if (isDemo) return; e.currentTarget.style.color = "#4da3ff"; e.currentTarget.style.opacity = "1"; }}
+                                  onMouseLeave={(e) => { if (isDemo) return; e.currentTarget.style.color = "var(--text-3)"; e.currentTarget.style.opacity = "0.6"; }}>🖊</button>
                                 <button
                                   onClick={(e) => eliminar(e, p)}
-                                  disabled={seBorra}
-                                  title="Eliminar portafolio"
-                                  style={{ background: "none", border: "none", cursor: seBorra ? "default" : "pointer", color: "var(--text-3)", fontSize: 15, lineHeight: 1, padding: 2, opacity: 0.6, transition: "color 0.15s, opacity 0.15s" }}
-                                  onMouseEnter={(e) => { e.currentTarget.style.color = "#ff453a"; e.currentTarget.style.opacity = "1"; }}
-                                  onMouseLeave={(e) => { e.currentTarget.style.color = "var(--text-3)"; e.currentTarget.style.opacity = "0.6"; }}>🗑</button>
+                                  disabled={seBorra || isDemo}
+                                  title={isDemo ? MENSAJE_DEMO : "Eliminar portafolio"}
+                                  style={{ background: "none", border: "none", cursor: (seBorra || isDemo) ? "default" : "pointer", color: "var(--text-3)", fontSize: 15, lineHeight: 1, padding: 2, opacity: isDemo ? 0.3 : 0.6, transition: "color 0.15s, opacity 0.15s" }}
+                                  onMouseEnter={(e) => { if (isDemo) return; e.currentTarget.style.color = "#ff453a"; e.currentTarget.style.opacity = "1"; }}
+                                  onMouseLeave={(e) => { if (isDemo) return; e.currentTarget.style.color = "var(--text-3)"; e.currentTarget.style.opacity = "0.6"; }}>🗑</button>
                               </>
                             )}
                           </div>
@@ -189,10 +193,13 @@ export function SelectorPortafolios({ abierto, onCerrar, archivoActual, onCrear 
               </div>
 
               <button
-                onClick={() => { onCerrar(); onCrear(); }}
+                onClick={() => { if (!isDemo) { onCerrar(); onCrear(); } }}
+                disabled={isDemo}
+                title={isDemo ? MENSAJE_DEMO : undefined}
                 style={{
-                  marginTop: 16, padding: "12px", borderRadius: 12, cursor: "pointer", fontFamily: "inherit",
+                  marginTop: 16, padding: "12px", borderRadius: 12, cursor: isDemo ? "default" : "pointer", fontFamily: "inherit",
                   background: "#0071e3", color: "#fff", border: "none", fontSize: 14, fontWeight: 500,
+                  opacity: isDemo ? 0.4 : 1,
                 }}
               >
                 + Crear nuevo portafolio

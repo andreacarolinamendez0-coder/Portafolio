@@ -10,6 +10,7 @@ import { LiquidButton } from "@/components/ui/liquid-glass-button";
 import { PropuestaEditor, type Propuesta } from "@/components/ui/propuesta-editor";
 import { PageIntro } from "@/components/ui/page-intro";
 import { LogoMark } from "@/components/ui/logo";
+import { useIsDemo, MENSAJE_DEMO } from "@/lib/useIsDemo";
 
 interface Msg { role: "user" | "assistant"; content: string }
 
@@ -18,6 +19,7 @@ export default function AnalistaPage() {
   const router  = useRouter();
   const searchParams = useSearchParams();
   const archivo = params.archivo as string;
+  const isDemo  = useIsDemo();
 
   const [data, setData]       = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -196,16 +198,21 @@ export default function AnalistaPage() {
 
           {
             <div style={{ padding: 16, borderTop: "1px solid var(--glass-border)" }}>
+              {isDemo && (
+                <p style={{ fontSize: 12, color: "#4da3ff", margin: "0 0 10px" }}>
+                  En modo demo, el Analista es de solo lectura — puedes ver cómo luce una propuesta, pero no iniciar una conversación nueva ni aplicar cambios.
+                </p>
+              )}
               <div style={{ display: "flex", gap: 8, alignItems: "center", background: "var(--bg-2)", border: "1px solid var(--glass-border)", borderRadius: 14, padding: "6px 6px 6px 14px" }}>
                 <input
                   value={input}
                   onChange={e => setInput(e.target.value)}
                   onKeyDown={e => e.key === "Enter" && !e.shiftKey && enviar()}
-                  placeholder="Escribe tu respuesta..."
-                  disabled={enviando}
+                  placeholder={isDemo ? MENSAJE_DEMO : "Escribe tu respuesta..."}
+                  disabled={enviando || isDemo}
                   style={{ flex: 1, background: "none", border: "none", outline: "none", color: "var(--text)", fontSize: "0.9rem", fontFamily: "inherit" }}
                 />
-                <LiquidButton onClick={enviar} disabled={enviando || !input.trim()} className="text-white font-semibold !px-6 !py-2">Enviar</LiquidButton>
+                <LiquidButton onClick={enviar} disabled={enviando || isDemo || !input.trim()} title={isDemo ? MENSAJE_DEMO : undefined} className="text-white font-semibold !px-6 !py-2">Enviar</LiquidButton>
               </div>
             </div>
           }

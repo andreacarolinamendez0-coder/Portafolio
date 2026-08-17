@@ -7,6 +7,7 @@ import { authMe } from "@/lib/api";
 import { LiquidButton } from "@/components/ui/liquid-glass-button";
 import { PageIntro } from "@/components/ui/page-intro";
 import { useAtomSend } from "@/components/providers/atom-chat-context";
+import { useIsDemo, MENSAJE_DEMO } from "@/lib/useIsDemo";
 
 export default function BotPage() {
   const router  = useRouter();
@@ -14,6 +15,7 @@ export default function BotPage() {
   const archivo = params.archivo as string;
 
   const { msgs, loading, send: enviar } = useAtomSend(archivo);
+  const isDemo = useIsDemo();
   const [input, setInput]     = useState("");
   const [ready, setReady]     = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -59,7 +61,9 @@ export default function BotPage() {
               <LogoMark size={52} />
             </div>
             <p style={{ marginTop: 20, fontSize: 15, color: "var(--text-2)" }}>¿En qué te ayudo hoy?</p>
-            <p style={{ marginTop: 6, fontSize: 13 }}>Pregúntame sobre tu portafolio, mercados o estrategias de inversión.</p>
+            <p style={{ marginTop: 6, fontSize: 13 }}>
+              {isDemo ? "En modo demo, Atom es de solo lectura — no se pueden iniciar conversaciones nuevas." : "Pregúntame sobre tu portafolio, mercados o estrategias de inversión."}
+            </p>
           </div>
         )}
         {msgs.map((m, i) => (
@@ -94,11 +98,11 @@ export default function BotPage() {
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => e.key === "Enter" && !e.shiftKey && send()}
-            placeholder="Escribe tu pregunta..."
-            disabled={loading}
+            placeholder={isDemo ? MENSAJE_DEMO : "Escribe tu pregunta..."}
+            disabled={loading || isDemo}
             style={{ flex: 1, background: "none", border: "none", outline: "none", color: "var(--text)", fontSize: "0.9rem", fontFamily: "inherit" }}
           />
-          <LiquidButton onClick={send} disabled={loading || !input.trim()} className="text-white font-semibold !px-6 !py-2.5">Enviar</LiquidButton>
+          <LiquidButton onClick={send} disabled={loading || isDemo || !input.trim()} title={isDemo ? MENSAJE_DEMO : undefined} className="text-white font-semibold !px-6 !py-2.5">Enviar</LiquidButton>
         </div>
       </div>
     </>
