@@ -1640,10 +1640,9 @@ def api_recalcular_proyecciones(archivo):
     try:
         from adaptador_analista import recalcular_con_pesos
 
-        bloqueo = bloquear_si_demo_portafolio(leer_portafolio(archivo))
-        if bloqueo:
-            return bloqueo
-
+        # Recalcular es cómputo puro sin mutación → se permite en demo
+        # para que el Analista demo muestre la propuesta completa. generar-propuesta
+        # y aplicar-propuesta siguen bloqueados. Cachear si el costo del motor molesta.
         data = request.get_json()
         pesos_raw = data.get("pesos", {})
         perfil = data.get("perfil", "agresivo")

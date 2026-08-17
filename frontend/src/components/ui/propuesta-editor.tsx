@@ -72,6 +72,17 @@ export function PropuestaEditor({ propuesta, tieneInv, onAplicar, aplicando, msg
     return () => { if (triviaTimer.current) clearInterval(triviaTimer.current); };
   }, [recalculando]);
 
+  // En demo el botón "Recalcular" está disabled, así que las proyecciones se
+  // calculan solas una vez al montar → la propuesta se ve completa (solo lectura).
+  const yaRecalculado = useRef(false);
+  useEffect(() => {
+    if (isDemo && sumaOk && !yaRecalculado.current) {
+      yaRecalculado.current = true;
+      recalcular();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isDemo, sumaOk]);
+
   function cambiarPeso(ticker: string, valor: string) {
     const num = parseFloat(valor);
     setPesos(p => ({ ...p, [ticker]: isNaN(num) ? 0 : num }));

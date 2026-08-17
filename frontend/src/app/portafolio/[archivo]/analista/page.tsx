@@ -61,6 +61,24 @@ export default function AnalistaPage() {
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, propuesta]);
 
+  // Demo: sembrar una propuesta canned para que el PropuestaEditor (ya
+  // solo-lectura en demo) se muestre como vitrina. Effect propio con deps
+  // [isDemo, data] porque el auth (isDemo) carga async y podría no estar listo
+  // cuando resuelve getDashboard. financials ilustrativos.
+  useEffect(() => {
+    if (isDemo && data && Object.keys(data.composicion ?? {}).length > 0) {
+      setPropuesta({
+        pesos: data.composicion,
+        perfil: data.portafolio.perfil,
+        inversion: 10_000_000,      // financials ilustrativos del demo
+        aporte_dca: 500_000,
+        frecuencia_meses: 1,
+        horizonte: 10,
+        archivo,
+      });
+    }
+  }, [isDemo, data, archivo]);
+
   async function enviarHistorial(nuevos: Msg[]) {
     setEnviando(true);
     try {
